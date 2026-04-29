@@ -3,6 +3,8 @@
   "version": "0.1.0",
   "private": true,
   "description": "A local-first AI memory operating system for coding agents and humans",
+  "author": "Ali Saad",
+  "license": "MIT",
   "type": "module",
   "scripts": {
     "build": "pnpm -r build && pnpm run deploy:mcp",
