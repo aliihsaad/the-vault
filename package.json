@@ -1,0 +1,23 @@
+{
+  "name": "the-vault",
+  "version": "0.1.0",
+  "private": true,
+  "description": "A local-first AI memory operating system for coding agents and humans",
+  "type": "module",
+  "scripts": {
+    "build": "pnpm -r build && pnpm run deploy:mcp",
+    "deploy:mcp": "node scripts/deploy-mcp.js",
+    "dev": "pnpm -r --parallel dev",
+    "dev:desktop": "pnpm -r --parallel --filter @the-vault/core --filter @the-vault/desktop run dev",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "lint": "pnpm -r exec tsc --noEmit"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.0",
+    "vitest": "^3.1.0",
+    "tsup": "^8.4.0",
+    "tsx": "^4.19.0",
+    "@types/node": "^22.12.0"
+  }
+}

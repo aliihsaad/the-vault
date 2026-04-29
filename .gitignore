@@ -1,0 +1,31 @@
+node_modules/
+dist/
+dist-electron/
+*.tsbuildinfo
+.env
+.env.local
+.env.*
+!.env.example
+
+# Local agent/client state
+.agent/
+.claude/settings.local.json
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Build artifacts
+*.js.map
+*.d.ts.map
+mcp-standalone/
+scripts/_oneoff_deps/
+
+# Test
+coverage/
