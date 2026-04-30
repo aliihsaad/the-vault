@@ -9,6 +9,8 @@
   "scripts": {
     "build": "pnpm -r build && pnpm run deploy:mcp",
     "deploy:mcp": "node scripts/deploy-mcp.js",
+    "setup:mcp": "node scripts/setup-mcp.js",
+    "setup:mcp:dry-run": "node scripts/setup-mcp.js --dry-run",
     "dev": "pnpm -r --parallel dev",
     "dev:desktop": "pnpm -r --parallel --filter @the-vault/core --filter @the-vault/desktop run dev",
     "test": "vitest run",

@@ -124,6 +124,24 @@ Low-signal memories are not deleted immediately. They move through reversible li
 
 The MCP server exposes Vault operations to coding agents and other MCP clients. Typical capabilities include saving memories, recalling context, inspecting projects, reading task results, and reviewing project/lifecycle proposals.
 
+For a new machine or a new client setup, use the one-command installer:
+
+```powershell
+pnpm setup:mcp
+```
+
+That command builds the core and MCP server, deploys the standalone MCP runtime, writes `vault-memory` entries for Claude Desktop, Claude Code, and Codex, backs up existing config files before changing them, and verifies the MCP initialize handshake.
+
+To configure only one client:
+
+```powershell
+pnpm setup:mcp -- --client codex
+pnpm setup:mcp -- --client claude-desktop
+pnpm setup:mcp -- --client claude-code
+```
+
+After setup, restart the client app or start a new CLI session so it launches the updated server.
+
 After building, the standalone MCP entry point is:
 
 ```text
