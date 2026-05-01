@@ -62,8 +62,8 @@ app.whenReady().then(() => {
   initializeEnrichment();
 });
 
-const distPath = join(__dirname, '../dist');
-const publicPath = app.isPackaged ? distPath : join(distPath, '../public');
+const rendererPath = join(__dirname, '../dist-renderer');
+const publicPath = app.isPackaged ? rendererPath : join(__dirname, '../public');
 const skillsPath = resolve(__dirname, '../../..', 'skills');
 // Prefer the standalone MCP server because it carries native modules compiled
 // for normal Node, not Electron's ABI. In packaged builds it is copied into
@@ -81,11 +81,11 @@ const DEFAULT_RECALL_TOP_MATCH_LIMIT = 4;
 const DEFAULT_RECALL_DETAIL_EXPANSION_LIMIT = 2;
 const DEFAULT_RECALL_SIDE_CHANNEL_LIMIT = 2;
 
-process.env.DIST = distPath;
+process.env.DIST = rendererPath;
 process.env.VITE_PUBLIC = publicPath;
 
 let win: BrowserWindow | null;
-const VITE_DEV_SERVER_URL = process.env['VITE_DEV_SERVER_URL'];
+const VITE_DEV_SERVER_URL = app.isPackaged ? undefined : process.env['VITE_DEV_SERVER_URL'];
 const taskExecutor = new TaskExecutor({
   vault,
   getApiKey: () => resolveOpenRouterApiKey(),
@@ -149,6 +149,7 @@ type StoredLocalAdapterTaskSessions = Partial<Record<LocalAdapterType, Record<st
 
 function createWindow() {
   win = new BrowserWindow({
+    title: 'The Vault',
     icon: join(publicPath, 'vault-icon.png'),
     width: 1200,
     height: 800,
@@ -176,7 +177,7 @@ function createWindow() {
     win.loadURL(VITE_DEV_SERVER_URL);
     win.webContents.openDevTools();
   } else {
-    win.loadFile(join(distPath, 'index.html'));
+    win.loadFile(join(rendererPath, 'index.html'));
   }
 }
 

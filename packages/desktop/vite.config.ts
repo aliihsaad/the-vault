@@ -4,6 +4,11 @@ import electron from 'vite-plugin-electron/simple';
 import { resolve } from 'node:path';
 
 export default defineConfig({
+  base: './',
+  build: {
+    outDir: 'dist-renderer',
+    emptyOutDir: true,
+  },
   plugins: [
     react(),
     electron({

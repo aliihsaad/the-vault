@@ -1,6 +1,6 @@
 {
   "name": "@the-vault/desktop",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
   "license": "MIT",
   "type": "module",
@@ -17,6 +17,12 @@
     "directories": {
       "output": "dist"
     },
+    "files": [
+      "dist-renderer/**/*",
+      "dist-electron/**/*",
+      "node_modules/**/*",
+      "package.json"
+    ],
     "artifactName": "The-Vault-${version}-${os}-${arch}.${ext}",
     "win": {
       "target": [
