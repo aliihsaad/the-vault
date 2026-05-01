@@ -11,11 +11,13 @@
   --accent-secondary: #ff944d;
   --alert-success: #33d691;
   --alert-error: #ff6a6a;
-  --border-color: rgba(148, 166, 198, 0.18);
+  --border-color: rgba(148, 166, 198, 0.22);
   --border-subtle: rgba(148, 166, 198, 0.1);
   --font-sans: 'Space Grotesk', 'Segoe UI', sans-serif;
   --font-mono: 'IBM Plex Mono', 'SFMono-Regular', monospace;
-  --panel-shadow: 0 24px 48px rgba(0, 0, 0, 0.28);
+  --panel-shadow: 0 24px 48px rgba(0, 0, 0, 0.32), 0 4px 12px rgba(0, 0, 0, 0.18);
+  --panel-glow: 0 0 0 1px rgba(92, 224, 230, 0.06);
+  --transition-fast: 180ms ease;
 }
 
 * {
@@ -35,7 +37,7 @@ body {
   font-family: var(--font-sans);
   background: var(--bg-primary);
   color: var(--text-primary);
-  line-height: 1.5;
+  line-height: 1.55;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   overflow: hidden;
@@ -78,7 +80,7 @@ button {
 }
 
 ::-webkit-scrollbar-thumb {
-  background: rgba(148, 166, 198, 0.24);
+  background: rgba(148, 166, 198, 0.18);
   border-radius: 999px;
 }
 
