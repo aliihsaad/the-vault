@@ -8,7 +8,7 @@
  * two don't conflict.
  */
 import { execSync } from 'node:child_process';
-import { cpSync, existsSync, mkdirSync, realpathSync, rmSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, copyFileSync, cpSync, existsSync, mkdirSync, realpathSync, rmSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
 const root = resolve(import.meta.dirname, '..');
@@ -61,6 +61,8 @@ console.log('Copying workspace package builds...');
 
 const coreTarget = resolve(standalone, 'node_modules/@the-vault/core');
 const mcpDist = resolve(standalone, 'dist');
+const bundledNodeName = process.platform === 'win32' ? 'node.exe' : 'node';
+const bundledNodePath = resolve(standalone, bundledNodeName);
 
 mkdirSync(coreTarget, { recursive: true });
 ensureDirectory(mcpDist);
@@ -72,8 +74,17 @@ copyIfDifferent(resolve(root, 'packages/core/package.json'), resolve(coreTarget,
 // MCP server dist (entry point)
 cpSync(resolve(root, 'packages/mcp-server/dist'), mcpDist, { recursive: true });
 
+// Packaged desktop releases cannot assume users have Node.js installed. Copy
+// the build-time Node binary beside the standalone MCP runtime so the installer
+// can ship a complete stdio sidecar under app resources.
+copyFileSync(process.execPath, bundledNodePath);
+if (process.platform !== 'win32') {
+  chmodSync(bundledNodePath, 0o755);
+}
+
 console.log('Standalone MCP server deployed to:', standalone);
 console.log('Entry point:', resolve(mcpDist, 'index.js'));
+console.log('Bundled Node runtime:', bundledNodePath);
 
 if (!cleanInstall) {
   console.log('Deployment used in-place refresh because the previous standalone folder was locked.');

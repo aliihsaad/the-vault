@@ -132,6 +132,8 @@ pnpm setup:mcp
 
 That command builds the core and MCP server, deploys the standalone MCP runtime, writes `vault-memory` entries for Claude Desktop, Claude Code, and Codex, backs up existing config files before changing them, and verifies the MCP initialize handshake.
 
+Released desktop builds do not require a source checkout. The installer packages the standalone MCP runtime under the app resources and the desktop **Settings -> Client setup** page writes client configs to that bundled runtime.
+
 To configure only one client:
 
 ```powershell

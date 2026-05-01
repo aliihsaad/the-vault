@@ -501,6 +501,12 @@ declare global {
     claudeDesktop: { configured: boolean; configPath: string };
     claudeCode: { configured: boolean; configPath: string };
     codex: { configured: boolean; configPath: string };
+    mcpRuntime: {
+      mode: 'packaged' | 'development';
+      command: string;
+      args: string[];
+      displayPath: string;
+    };
     skill: {
       claudeInstalled: boolean;
       claudeMdPath: string;

@@ -3,35 +3,53 @@ import {
   BookCopy,
   Cable,
   Check,
+  CheckCircle2,
   ChevronRight,
   Copy,
   RefreshCw,
+  Settings2,
   Terminal,
   Unplug,
+  Wrench,
   X,
   Minus,
   Zap,
   Trash2,
 } from 'lucide-react';
 
+const ONE_COMMAND_SETUP = 'pnpm setup:mcp';
+const ONE_COMMAND_DRY_RUN = 'pnpm setup:mcp:dry-run';
 const MCP_SERVER_COMMAND = 'pnpm --filter @the-vault/mcp-server dev';
-
-const JSON_CLIENT_SNIPPET = JSON.stringify(
-  {
-    mcpServers: {
-      'vault-memory': {
-        command: 'pnpm',
-        args: ['--filter', '@the-vault/mcp-server', 'dev'],
-      },
-    },
-  },
-  null,
-  2,
-);
 
 interface ConnectPanelProps {
   copyText: (token: string, value: string, successMessage?: string) => Promise<void>;
   copiedToken: string | null;
+}
+
+function quoteCliArg(value: string): string {
+  return /\s/.test(value) ? `"${value.replace(/"/g, '\\"')}"` : value;
+}
+
+function buildRuntimeCommand(runtime?: ConnectionStatus['mcpRuntime']): string {
+  if (!runtime) {
+    return MCP_SERVER_COMMAND;
+  }
+
+  return [runtime.command, ...runtime.args].map(quoteCliArg).join(' ');
+}
+
+function buildJsonClientSnippet(runtime?: ConnectionStatus['mcpRuntime']): string {
+  return JSON.stringify(
+    {
+      mcpServers: {
+        'vault-memory': runtime
+          ? { command: runtime.command, args: runtime.args }
+          : { command: 'pnpm', args: ['--filter', '@the-vault/mcp-server', 'dev'] },
+      },
+    },
+    null,
+    2,
+  );
 }
 
 function StepIcon({ status }: { status: ConnectStepStatus }) {
@@ -95,15 +113,22 @@ export function ConnectPanel({ copyText, copiedToken }: ConnectPanelProps) {
   const [connectingDesktop, setConnectingDesktop] = useState(false);
   const [connectingCode, setConnectingCode] = useState(false);
   const [connectingCodex, setConnectingCodex] = useState(false);
+  const [connectingAll, setConnectingAll] = useState(false);
   const [installingClaudeSkill, setInstallingClaudeSkill] = useState(false);
   const [installingCodexSkill, setInstallingCodexSkill] = useState(false);
   const [manualOpen, setManualOpen] = useState(false);
+  const [troubleshootingOpen, setTroubleshootingOpen] = useState(false);
 
   const desktopConnected = connectionStatus?.claudeDesktop.configured ?? false;
   const codeConnected = connectionStatus?.claudeCode.configured ?? false;
   const codexConnected = connectionStatus?.codex.configured ?? false;
   const claudeSkillInstalled = connectionStatus?.skill.claudeInstalled ?? false;
   const codexSkillInstalled = connectionStatus?.skill.codexInstalled ?? false;
+  const connectedClientCount = [desktopConnected, codeConnected, codexConnected].filter(Boolean).length;
+  const allClientsConnected = connectedClientCount === 3;
+  const isPackagedRuntime = connectionStatus?.mcpRuntime.mode === 'packaged';
+  const runtimeCommand = buildRuntimeCommand(connectionStatus?.mcpRuntime);
+  const jsonClientSnippet = buildJsonClientSnippet(connectionStatus?.mcpRuntime);
 
   useEffect(() => {
     void refreshStatus();
@@ -134,6 +159,12 @@ export function ConnectPanel({ copyText, copiedToken }: ConnectPanelProps) {
     } finally {
       setLoadingStatus(false);
     }
+  }
+
+  async function handleToggleTroubleshooting() {
+    setTroubleshootingOpen((open) => !open);
+    setManualOpen(true);
+    await refreshStatus();
   }
 
   async function handleToggleDesktop() {
@@ -196,6 +227,43 @@ export function ConnectPanel({ copyText, copiedToken }: ConnectPanelProps) {
     }
   }
 
+  async function handleConnectAllMcp() {
+    setConnectingAll(true);
+    setDesktopResult(null);
+    setCodeResult(null);
+    setCodexResult(null);
+
+    try {
+      if (!desktopConnected) {
+        const response = await window.vaultAPI.connectClaudeDesktop();
+        setDesktopResult(response.success && response.data
+          ? response.data
+          : { success: false, steps: [{ id: 'error', label: 'Claude Desktop setup failed', status: 'fail', detail: response.error }] });
+      }
+
+      if (!codeConnected) {
+        const response = await window.vaultAPI.connectClaudeCode();
+        setCodeResult(response.success && response.data
+          ? response.data
+          : { success: false, steps: [{ id: 'error', label: 'Claude Code setup failed', status: 'fail', detail: response.error }] });
+      }
+
+      if (!codexConnected) {
+        const response = await window.vaultAPI.connectCodex();
+        setCodexResult(response.success && response.data
+          ? response.data
+          : { success: false, steps: [{ id: 'error', label: 'Codex setup failed', status: 'fail', detail: response.error }] });
+      }
+
+      await refreshStatus();
+    } catch (err) {
+      const detail = err instanceof Error ? err.message : 'Unknown error';
+      setCodexResult({ success: false, steps: [{ id: 'error', label: 'Connect all failed', status: 'fail', detail }] });
+    } finally {
+      setConnectingAll(false);
+    }
+  }
+
   async function handleToggleClaudeSkill() {
     setInstallingClaudeSkill(true);
     setClaudeSkillResult(null);
@@ -246,57 +314,218 @@ export function ConnectPanel({ copyText, copiedToken }: ConnectPanelProps) {
     return configured ? `${name}: connected` : `${name}: not configured`;
   }
 
+  const clientDiagnostics: Array<{ label: string; configured: boolean; configPath: string }> = [
+    {
+      label: 'Claude Desktop',
+      configured: desktopConnected,
+      configPath: connectionStatus?.claudeDesktop.configPath || 'claude_desktop_config.json',
+    },
+    {
+      label: 'Claude Code',
+      configured: codeConnected,
+      configPath: connectionStatus?.claudeCode.configPath || '~/.claude/settings.json',
+    },
+    {
+      label: 'Codex',
+      configured: codexConnected,
+      configPath: connectionStatus?.codex.configPath || '~/.codex/config.toml',
+    },
+  ];
+
   return (
     <div className="settings-tab-panel">
-      {/* Status overview */}
-      <section className="panel settings-section">
-        <div className="panel-header">
-          <div>
-            <div className="panel-title">Connection status</div>
-            <div className="panel-subtitle">Current state of Vault MCP wiring and client guide installation.</div>
+      <section className="connect-hero-grid">
+        <div className="panel settings-section connect-primary-panel">
+          <div className="connect-kicker">
+            <Terminal size={16} />
+            <span>New user setup</span>
           </div>
-          <button
-            type="button"
-            className="header-button"
-            onClick={() => void refreshStatus()}
-            disabled={loadingStatus}
-          >
-            <RefreshCw size={16} />
-            <span>{loadingStatus ? 'Checking...' : 'Refresh'}</span>
-          </button>
+          <div className="connect-hero-copy">
+            <h2>Connect Vault MCP without hand-editing configs</h2>
+            <p>
+              {isPackagedRuntime
+                ? 'The installed app ships its own MCP runtime. Use the connect button once, then restart your client so it launches Vault from the installed app resources.'
+                : 'From the Vault repo root, run the setup command once. It builds the server, deploys the standalone MCP runtime, writes client config, creates backups, and checks the MCP handshake.'}
+            </p>
+          </div>
+
+          <div className="connect-command-card">
+            <div>
+              <span className="field-label">{isPackagedRuntime ? 'Bundled MCP runtime' : 'Terminal command'}</span>
+              <code>{isPackagedRuntime ? connectionStatus?.mcpRuntime.displayPath || 'Packaged with Vault' : ONE_COMMAND_SETUP}</code>
+            </div>
+            {isPackagedRuntime ? null : (
+              <button
+                type="button"
+                className="header-button"
+                onClick={() => void copyText('setup-mcp-command', ONE_COMMAND_SETUP, 'Copied one-command MCP setup.')}
+              >
+                <Copy size={16} />
+                <span>{copiedToken === 'setup-mcp-command' ? 'Copied' : 'Copy'}</span>
+              </button>
+            )}
+          </div>
+
+          <div className="inline-actions">
+            <button
+              type="button"
+              className="primary-button"
+              onClick={() => void handleConnectAllMcp()}
+              disabled={connectingAll || allClientsConnected}
+            >
+              <Cable size={16} />
+              <span>{connectingAll ? 'Connecting...' : allClientsConnected ? 'All MCP clients connected' : 'Connect all MCP clients'}</span>
+            </button>
+            {isPackagedRuntime ? null : (
+              <button
+                type="button"
+                className="header-button"
+                onClick={() => void copyText('setup-mcp-dry-run', ONE_COMMAND_DRY_RUN, 'Copied dry-run setup command.')}
+              >
+                <CheckCircle2 size={16} />
+                <span>{copiedToken === 'setup-mcp-dry-run' ? 'Copied' : 'Copy dry run'}</span>
+              </button>
+            )}
+            <button
+              type="button"
+              className="header-button"
+              onClick={() => void handleToggleTroubleshooting()}
+            >
+              <Wrench size={16} />
+              <span>{troubleshootingOpen ? 'Hide troubleshoot' : 'Troubleshoot MCP'}</span>
+            </button>
+          </div>
+
+          <ol className="connect-flow-list">
+            <li>{isPackagedRuntime ? 'Install Vault from the GitHub release installer.' : <>Run <code>pnpm install</code> if dependencies are not installed yet.</>}</li>
+            <li>{isPackagedRuntime ? 'Use Connect all MCP clients or the per-client buttons on this page.' : <>Run <code>{ONE_COMMAND_SETUP}</code> or use the connect buttons on this page.</>}</li>
+            <li>Restart Codex, Claude Desktop, or Claude Code so the client launches the updated server.</li>
+          </ol>
         </div>
 
-        <div className="connect-status-row">
-          <span className={badgeClass(connectionStatus?.claudeDesktop.configured)}>
-            <span className="connect-badge-dot" />
-            {badgeLabel(connectionStatus?.claudeDesktop.configured, 'Claude Desktop')}
-          </span>
-          <span className={badgeClass(connectionStatus?.claudeCode.configured)}>
-            <span className="connect-badge-dot" />
-            {badgeLabel(connectionStatus?.claudeCode.configured, 'Claude Code')}
-          </span>
-          <span className={badgeClass(connectionStatus?.codex.configured)}>
-            <span className="connect-badge-dot" />
-            {badgeLabel(connectionStatus?.codex.configured, 'Codex')}
-          </span>
-          <span className={badgeClass(connectionStatus?.skill.claudeInstalled)}>
-            <span className="connect-badge-dot" />
-            {badgeLabel(connectionStatus?.skill.claudeInstalled, 'Claude skill')}
-          </span>
-          <span className={badgeClass(connectionStatus?.skill.codexInstalled)}>
-            <span className="connect-badge-dot" />
-            {badgeLabel(connectionStatus?.skill.codexInstalled, 'Codex skill')}
-          </span>
+        <div className="panel settings-section connect-status-panel">
+          <div className="panel-header">
+            <div>
+              <div className="panel-title">Connection status</div>
+              <div className="panel-subtitle">{connectedClientCount}/3 MCP clients configured.</div>
+            </div>
+            <button
+              type="button"
+              className="header-button"
+              onClick={() => void refreshStatus()}
+              disabled={loadingStatus}
+            >
+              <RefreshCw size={16} />
+              <span>{loadingStatus ? 'Checking...' : 'Refresh'}</span>
+            </button>
+          </div>
+
+          <div className="connect-status-row connect-status-stack">
+            <span className={badgeClass(connectionStatus?.claudeDesktop.configured)}>
+              <span className="connect-badge-dot" />
+              {badgeLabel(connectionStatus?.claudeDesktop.configured, 'Claude Desktop')}
+            </span>
+            <span className={badgeClass(connectionStatus?.claudeCode.configured)}>
+              <span className="connect-badge-dot" />
+              {badgeLabel(connectionStatus?.claudeCode.configured, 'Claude Code')}
+            </span>
+            <span className={badgeClass(connectionStatus?.codex.configured)}>
+              <span className="connect-badge-dot" />
+              {badgeLabel(connectionStatus?.codex.configured, 'Codex')}
+            </span>
+            <span className={badgeClass(connectionStatus?.skill.claudeInstalled)}>
+              <span className="connect-badge-dot" />
+              {badgeLabel(connectionStatus?.skill.claudeInstalled, 'Claude skill')}
+            </span>
+            <span className={badgeClass(connectionStatus?.skill.codexInstalled)}>
+              <span className="connect-badge-dot" />
+              {badgeLabel(connectionStatus?.skill.codexInstalled, 'Codex skill')}
+            </span>
+          </div>
         </div>
       </section>
+
+      {troubleshootingOpen ? (
+        <section className="panel settings-section connect-troubleshoot-panel">
+          <div className="panel-header">
+            <div>
+              <div className="panel-title">MCP troubleshooting</div>
+              <div className="panel-subtitle">Use this when a client says vault-memory disconnected, cannot attach, or starts with a handshake error.</div>
+            </div>
+            <button
+              type="button"
+              className="header-button"
+              onClick={() => void refreshStatus()}
+              disabled={loadingStatus}
+            >
+              <RefreshCw size={16} />
+              <span>{loadingStatus ? 'Checking...' : 'Recheck'}</span>
+            </button>
+          </div>
+
+          <div className="connect-troubleshoot-grid">
+            <div className="connect-diagnostic-card">
+              <div className="field-label">Runtime used by clients</div>
+              <div className="connect-diagnostic-row">
+                <span>Mode</span>
+                <strong>{connectionStatus?.mcpRuntime.mode || 'checking'}</strong>
+              </div>
+              <div className="connect-diagnostic-row">
+                <span>Command</span>
+                <code>{connectionStatus?.mcpRuntime.command || 'unavailable'}</code>
+              </div>
+              <div className="connect-diagnostic-row">
+                <span>Args</span>
+                <code>{connectionStatus?.mcpRuntime.args.join(' ') || 'none'}</code>
+              </div>
+            </div>
+
+            <div className="connect-diagnostic-card">
+              <div className="field-label">Client config files</div>
+              {clientDiagnostics.map(({ label, configured, configPath }) => (
+                <div key={label} className="connect-client-row">
+                  <span className={badgeClass(configured)}>
+                    <span className="connect-badge-dot" />
+                    {configured ? 'connected' : 'needs setup'}
+                  </span>
+                  <div>
+                    <strong>{label}</strong>
+                    <code>{configPath}</code>
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            <div className="connect-diagnostic-card connect-diagnostic-card-wide">
+              <div className="field-label">Fast fix checklist</div>
+              <ol className="connect-fix-list">
+                <li>Click <strong>Connect all MCP clients</strong> or the affected client's <strong>Connect MCP</strong> button.</li>
+                <li>Fully restart the affected client after setup. MCP config is usually read only at client startup.</li>
+                <li>{isPackagedRuntime ? 'If the runtime path is missing, reinstall Vault from the latest release.' : <>If using a source checkout, run <code>{ONE_COMMAND_SETUP}</code> from the repo root.</>}</li>
+                <li>Verify with <code>vault_get_latest</code> or <code>vault_recall_context</code> inside the client.</li>
+              </ol>
+              <div className="inline-actions">
+                <button type="button" className="header-button" onClick={() => void copyText('troubleshoot-command', runtimeCommand, 'Copied MCP runtime command.')}>
+                  <Copy size={16} />
+                  <span>{copiedToken === 'troubleshoot-command' ? 'Copied' : 'Copy runtime command'}</span>
+                </button>
+                <button type="button" className="header-button" onClick={() => void copyText('troubleshoot-json', jsonClientSnippet, 'Copied MCP JSON config.')}>
+                  <Copy size={16} />
+                  <span>{copiedToken === 'troubleshoot-json' ? 'Copied' : 'Copy JSON config'}</span>
+                </button>
+              </div>
+            </div>
+          </div>
+        </section>
+      ) : null}
 
       <section className="panel settings-section">
         <div className="panel-header">
           <div>
             <div className="panel-title">How to connect a client</div>
-            <div className="panel-subtitle">Use one of these flows. MCP connects the client to Vault memory. The skill or guide file teaches the client when to recall and when to save.</div>
+            <div className="panel-subtitle">Pick the client your new user already works in. MCP gives the client Vault tools; the guide teaches recall and save habits.</div>
           </div>
-          <Terminal size={18} className="panel-icon" />
+          <Settings2 size={18} className="panel-icon" />
         </div>
 
         <div className="settings-card-grid">
@@ -340,15 +569,15 @@ export function ConnectPanel({ copyText, copiedToken }: ConnectPanelProps) {
           <Zap size={18} className="panel-icon" />
         </div>
 
-        <div className="settings-card-grid">
+        <div className="connect-action-grid">
           {/* Claude Desktop */}
-          <div className="snippet-card">
+          <div className="snippet-card connect-action-card">
             <div className="snippet-head">
               <div>
                 <div className="field-label">Claude Desktop</div>
                 <div className="field-help">
-                  {desktopConnected ? 'vault-memory entry is configured in' : 'Writes vault-memory MCP entry to'}{' '}
-                  {connectionStatus?.claudeDesktop.configPath || 'claude_desktop_config.json'}
+                  <span>{desktopConnected ? 'vault-memory entry is configured in' : 'Writes vault-memory MCP entry to'}</span>
+                  <code className="connect-config-path">{connectionStatus?.claudeDesktop.configPath || 'claude_desktop_config.json'}</code>
                 </div>
               </div>
               <button
@@ -381,13 +610,13 @@ export function ConnectPanel({ copyText, copiedToken }: ConnectPanelProps) {
           </div>
 
           {/* Claude Code */}
-          <div className="snippet-card">
+          <div className="snippet-card connect-action-card">
             <div className="snippet-head">
               <div>
                 <div className="field-label">Claude Code</div>
                 <div className="field-help">
-                  {codeConnected ? 'vault-memory entry is configured in' : 'Writes vault-memory MCP entry to'}{' '}
-                  {connectionStatus?.claudeCode.configPath || 'settings.json'}
+                  <span>{codeConnected ? 'vault-memory entry is configured in' : 'Writes vault-memory MCP entry to'}</span>
+                  <code className="connect-config-path">{connectionStatus?.claudeCode.configPath || 'settings.json'}</code>
                 </div>
               </div>
               <button
@@ -420,13 +649,13 @@ export function ConnectPanel({ copyText, copiedToken }: ConnectPanelProps) {
           </div>
 
           {/* Codex */}
-          <div className="snippet-card">
+          <div className="snippet-card connect-action-card">
             <div className="snippet-head">
               <div>
                 <div className="field-label">Codex</div>
                 <div className="field-help">
-                  {codexConnected ? 'vault-memory entry is configured in' : 'Writes vault-memory MCP entry to'}{' '}
-                  {connectionStatus?.codex.configPath || '~/.codex/config.toml'}
+                  <span>{codexConnected ? 'vault-memory entry is configured in' : 'Writes vault-memory MCP entry to'}</span>
+                  <code className="connect-config-path">{connectionStatus?.codex.configPath || '~/.codex/config.toml'}</code>
                 </div>
               </div>
               <button
@@ -457,7 +686,7 @@ export function ConnectPanel({ copyText, copiedToken }: ConnectPanelProps) {
               <p className="success-text" style={{ marginTop: 8 }}>Codex disconnected. Restart Codex or reload tool servers to apply.</p>
             ) : null}
             <div className="inline-actions">
-              <button type="button" className="header-button" onClick={() => void copyText('codex-command', MCP_SERVER_COMMAND, 'Copied Vault launcher command for Codex.')}>
+              <button type="button" className="header-button" onClick={() => void copyText('codex-command', runtimeCommand, 'Copied Vault launcher command for Codex.')}>
                 <Copy size={16} />
                 <span>{copiedToken === 'codex-command' ? 'Copied' : 'Copy MCP command'}</span>
               </button>
@@ -465,13 +694,13 @@ export function ConnectPanel({ copyText, copiedToken }: ConnectPanelProps) {
           </div>
 
           {/* Claude Skill Installation */}
-          <div className="snippet-card">
+          <div className="snippet-card connect-action-card">
             <div className="snippet-head">
               <div>
                 <div className="field-label">{claudeSkillInstalled ? 'Claude skill installed' : 'Install Claude skill'}</div>
                 <div className="field-help">
-                  {claudeSkillInstalled ? 'Vault memory skill reference is in' : 'Appends a Vault memory skill reference to'}{' '}
-                  {connectionStatus?.skill.claudeMdPath || '~/.claude/CLAUDE.md'}
+                  <span>{claudeSkillInstalled ? 'Vault memory skill reference is in' : 'Appends a Vault memory skill reference to'}</span>
+                  <code className="connect-config-path">{connectionStatus?.skill.claudeMdPath || '~/.claude/CLAUDE.md'}</code>
                 </div>
               </div>
               <button
@@ -501,13 +730,13 @@ export function ConnectPanel({ copyText, copiedToken }: ConnectPanelProps) {
           </div>
 
           {/* Codex Skill Installation */}
-          <div className="snippet-card">
+          <div className="snippet-card connect-action-card">
             <div className="snippet-head">
               <div>
                 <div className="field-label">{codexSkillInstalled ? 'Codex skill installed' : 'Install Codex skill'}</div>
                 <div className="field-help">
-                  {codexSkillInstalled ? 'Vault memory skill reference is in' : 'Appends a Vault memory skill reference to'}{' '}
-                  {connectionStatus?.skill.codexAgentsPath || 'AGENTS.md'}
+                  <span>{codexSkillInstalled ? 'Vault memory skill reference is in' : 'Appends a Vault memory skill reference to'}</span>
+                  <code className="connect-config-path">{connectionStatus?.skill.codexAgentsPath || 'AGENTS.md'}</code>
                 </div>
               </div>
               <button
@@ -566,12 +795,12 @@ export function ConnectPanel({ copyText, copiedToken }: ConnectPanelProps) {
                       <div className="field-label">Launcher command</div>
                       <div className="field-help">For clients that start MCP servers from a shell command.</div>
                     </div>
-                    <button type="button" className="header-button" onClick={() => void copyText('mcp-command', MCP_SERVER_COMMAND, 'Copied Vault MCP launcher command.')}>
+                    <button type="button" className="header-button" onClick={() => void copyText('mcp-command', runtimeCommand, 'Copied Vault MCP launcher command.')}>
                       <Copy size={16} />
                       <span>{copiedToken === 'mcp-command' ? 'Copied' : 'Copy'}</span>
                     </button>
                   </div>
-                  <pre className="snippet-block">{MCP_SERVER_COMMAND}</pre>
+                  <pre className="snippet-block">{runtimeCommand}</pre>
                 </div>
 
                 <div className="snippet-card">
@@ -580,12 +809,12 @@ export function ConnectPanel({ copyText, copiedToken }: ConnectPanelProps) {
                       <div className="field-label">JSON config block</div>
                       <div className="field-help">For clients that use an mcpServers JSON config.</div>
                     </div>
-                    <button type="button" className="header-button" onClick={() => void copyText('mcp-json', JSON_CLIENT_SNIPPET, 'Copied Vault MCP JSON snippet.')}>
+                    <button type="button" className="header-button" onClick={() => void copyText('mcp-json', jsonClientSnippet, 'Copied Vault MCP JSON snippet.')}>
                       <Copy size={16} />
                       <span>{copiedToken === 'mcp-json' ? 'Copied' : 'Copy'}</span>
                     </button>
                   </div>
-                  <pre className="snippet-block">{JSON_CLIENT_SNIPPET}</pre>
+                  <pre className="snippet-block">{jsonClientSnippet}</pre>
                 </div>
               </div>
             </section>

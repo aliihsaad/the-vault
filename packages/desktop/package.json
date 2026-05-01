@@ -10,6 +10,18 @@
     "build": "tsc && vite build && electron-builder",
     "preview": "vite preview"
   },
+  "build": {
+    "asar": true,
+    "extraResources": [
+      {
+        "from": "../../mcp-standalone",
+        "to": "mcp",
+        "filter": [
+          "**/*"
+        ]
+      }
+    ]
+  },
   "dependencies": {
     "@the-vault/core": "workspace:*",
     "date-fns": "^4.1.0",

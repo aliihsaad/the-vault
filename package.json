@@ -7,7 +7,8 @@
   "license": "MIT",
   "type": "module",
   "scripts": {
-    "build": "pnpm -r build && pnpm run deploy:mcp",
+    "build": "pnpm --filter @the-vault/core build && pnpm --filter @the-vault/cli build && pnpm --filter @the-vault/mcp-server build && pnpm run deploy:mcp && pnpm --filter @the-vault/desktop build",
+    "build:packages": "pnpm --filter @the-vault/core build && pnpm --filter @the-vault/cli build && pnpm --filter @the-vault/mcp-server build",
     "deploy:mcp": "node scripts/deploy-mcp.js",
     "setup:mcp": "node scripts/setup-mcp.js",
     "setup:mcp:dry-run": "node scripts/setup-mcp.js --dry-run",

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Archive, Clock3, Database, Filter, Link2, RefreshCw, Save, Search, Sparkles, Tags } from 'lucide-react';
+import { Archive, Clock3, Database, FileText, Filter, Link2, Pencil, RefreshCw, Save, Search, Sparkles, Tags, X } from 'lucide-react';
 import { formatDistanceToNow } from 'date-fns';
 import { DayGroupedList } from './DayGroupedList.js';
 
@@ -78,10 +78,15 @@ export function MemoryView({
   const [projectFilter, setProjectFilter] = useState('all');
   const [statusFilter, setStatusFilter] = useState<'all' | VaultStatusValue>('all');
   const [activeMode, setActiveMode] = useState<MemoryViewMode>('browse');
+  const [isEditing, setIsEditing] = useState(false);
 
   useEffect(() => {
     void fetchMemories();
   }, []);
+
+  useEffect(() => {
+    setIsEditing(false);
+  }, [selectedUid]);
 
   useEffect(() => {
     if (!selectedDetail) {
@@ -373,6 +378,7 @@ export function MemoryView({
       }
 
       setMessage(`Saved changes to ${response.data.title}.`);
+      setIsEditing(false);
       await refreshSelectedMemory(response.data.itemUid);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to update memory');
@@ -567,47 +573,37 @@ export function MemoryView({
 
   return (
     <div className="memory-layout">
-      <section className="section-intro">
-        <div className="section-intro-copy">
-          <span className="section-intro-eyebrow">Memory Bank</span>
-          <div className="section-intro-title">Write cleaner memories and browse them without drowning in the backlog</div>
-          <p className="section-intro-text">Creation stays at the top, browsing stays grouped by day, and detail editing remains on the right so the page reads like one workflow instead of three competing screens.</p>
-        </div>
-        <div className="section-intro-meta">
-          <span className="section-intro-chip">structured save</span>
-          <span className="section-intro-chip">duplicate hints</span>
-          <span className="section-intro-chip">daily browse groups</span>
-        </div>
-      </section>
+      <header className="mb-intro">
+        <span className="mb-intro-eyebrow">Memory Bank</span>
+        <h1 className="mb-intro-title">Curate the recall surface</h1>
+        <p className="mb-intro-text">Browse the bank or compose a new structured memory. Selection stays single-focus on the right.</p>
+      </header>
 
-      <div className="page-mode-strip">
+      <nav className="mb-tabs" role="tablist" aria-label="Memory bank mode">
         <button
           type="button"
-          className={`page-mode-button ${activeMode === 'browse' ? 'page-mode-button-active' : ''}`}
+          role="tab"
+          aria-selected={activeMode === 'browse'}
+          className={`mb-tab ${activeMode === 'browse' ? 'mb-tab-active' : ''}`}
           onClick={() => setActiveMode('browse')}
         >
-          <div className="page-mode-heading">
-            <span className="page-mode-label">Browse and curate</span>
-            <span className="page-mode-meta">{visibleMemories.length} visible</span>
-          </div>
-          <span className="page-mode-description">Search the bank, review daily groups, and edit one selected memory at a time.</span>
+          <span>Browse</span>
+          <span className="mb-tab-count">{visibleMemories.length}</span>
         </button>
-
         <button
           type="button"
-          className={`page-mode-button ${activeMode === 'create' ? 'page-mode-button-active' : ''}`}
+          role="tab"
+          aria-selected={activeMode === 'create'}
+          className={`mb-tab ${activeMode === 'create' ? 'mb-tab-active' : ''}`}
           onClick={() => setActiveMode('create')}
         >
-          <div className="page-mode-heading">
-            <span className="page-mode-label">Create new memory</span>
-            <span className="page-mode-meta">{composerCanSave ? 'ready to save' : 'draft'}</span>
-          </div>
-          <span className="page-mode-description">Write one structured memory cleanly, check duplicates, and preview the final saved path before committing.</span>
+          <span>Create</span>
+          <span className="mb-tab-count">{composerCanSave ? 'ready' : 'draft'}</span>
         </button>
-      </div>
+      </nav>
 
-      {error ? <div className="panel empty-state empty-state-error">{error}</div> : null}
-      {message ? <div className="panel note-card success-text">{message}</div> : null}
+      {error ? <div className="mb-banner mb-banner-error">{error}</div> : null}
+      {message ? <div className="mb-banner mb-banner-success">{message}</div> : null}
 
       {activeMode === 'create' ? (
         <section className="panel settings-section">
@@ -941,472 +937,487 @@ export function MemoryView({
         </section>
       ) : (
         <>
-          <div className="stats-strip">
-            <div className="stat-chip">
-              <span className="stat-label">Visible results</span>
-              <strong className="stat-value">{visibleMemories.length}</strong>
-            </div>
-            <div className="stat-chip">
-              <span className="stat-label">Promoted in view</span>
-              <strong className="stat-value">{promotedVisibleCount}</strong>
-            </div>
-            <div className="stat-chip">
-              <span className="stat-label">Drafts in view</span>
-              <strong className="stat-value">{draftVisibleCount}</strong>
-            </div>
+          <div className="mb-toolbar">
+            <label className="mb-search">
+              <Search size={16} />
+              <input
+                type="text"
+                placeholder="Search titles, subjects, summaries, tags, keywords"
+                value={search}
+                onChange={(event) => setSearch(event.target.value)}
+              />
+            </label>
+
+            <div className="mb-toolbar-divider" aria-hidden="true" />
+
+            <label className="mb-pill-select">
+              <Filter size={14} />
+              <select value={projectFilter} onChange={(event) => setProjectFilter(event.target.value)}>
+                <option value="all">All projects</option>
+                {projectOptions.map((project) => (
+                  <option key={project} value={project}>
+                    {project}
+                  </option>
+                ))}
+              </select>
+            </label>
+
+            <label className="mb-pill-select">
+              <Database size={14} />
+              <select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value as 'all' | VaultStatusValue)}>
+                <option value="all">All states</option>
+                <option value="active">active</option>
+                <option value="resolved">resolved</option>
+                <option value="draft">draft</option>
+                <option value="archived">archived</option>
+                <option value="promoted">promoted</option>
+              </select>
+            </label>
+
+            <button type="button" className="mb-icon-button" onClick={() => void fetchMemories(selectedUid || undefined)}>
+              <RefreshCw size={14} />
+              <span>Refresh</span>
+            </button>
           </div>
 
-          <div className="panel">
-            <div className="toolbar-row">
-              <label className="search-field">
-                <Search size={16} />
-                <input
-                  type="text"
-                  placeholder="Search titles, subjects, summaries, tags, and keywords"
-                  value={search}
-                  onChange={(event) => setSearch(event.target.value)}
-                />
-              </label>
-
-              <label className="select-field">
-                <Filter size={16} />
-                <select value={projectFilter} onChange={(event) => setProjectFilter(event.target.value)}>
-                  <option value="all">All projects</option>
-                  {projectOptions.map((project) => (
-                    <option key={project} value={project}>
-                      {project}
-                    </option>
-                  ))}
-                </select>
-              </label>
-
-              <label className="select-field">
-                <Database size={16} />
-                <select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value as 'all' | VaultStatusValue)}>
-                  <option value="all">All states</option>
-                  <option value="active">active</option>
-                  <option value="resolved">resolved</option>
-                  <option value="draft">draft</option>
-                  <option value="archived">archived</option>
-                  <option value="promoted">promoted</option>
-                </select>
-              </label>
-
-              <button type="button" className="header-button" onClick={() => void fetchMemories(selectedUid || undefined)}>
-                <RefreshCw size={16} />
-                <span>Refresh</span>
-              </button>
-            </div>
+          <div className="mb-toolbar-meta">
+            <span><strong>{visibleMemories.length}</strong> visible</span>
+            <span><strong>{promotedVisibleCount}</strong> promoted</span>
+            <span><strong>{draftVisibleCount}</strong> drafts</span>
           </div>
 
-          <div className="memory-results">
-            <div className="memory-results-grid panel">
-              <div className="panel-header">
-                <div>
-                  <div className="panel-title">Stored memories</div>
-                  <div className="panel-subtitle">{visibleMemories.length} results in the current view.</div>
-                </div>
+          <div className="mb-results">
+            <div className="mb-list-panel">
+              <div className="mb-list-header">
+                <span className="mb-list-header-title">Stored memories</span>
+                <span className="mb-list-header-title">{visibleMemories.length} results</span>
               </div>
 
               {loading ? (
-                <div className="empty-state">Loading memory bank...</div>
+                <div className="mb-empty">Loading memory bank...</div>
               ) : visibleMemories.length === 0 ? (
-                <div className="empty-state">No memories match the current filters.</div>
+                <div className="mb-empty">
+                  <span className="mb-empty-title">Nothing matches yet</span>
+                  Try a different search term or clear the project / status filter.
+                </div>
               ) : (
-                <DayGroupedList
-                  items={visibleMemories}
-                  getDate={(memory) => memory.createdAt}
-                  getKey={(memory) => memory.itemUid}
-                  emptyMessage="No memories match the current filters."
-                  renderItem={(memory) => (
-                    <button
-                      type="button"
-                      className={`memory-card ${selectedUid === memory.itemUid ? 'memory-card-active' : ''}`}
-                      onClick={() => void handleSelectMemory(memory.itemUid)}
-                    >
-                      <div className="memory-card-header">
-                        <span className={`badge badge-${memory.memoryType}`}>{memory.memoryType}</span>
-                        <span className="memory-card-project">{memory.project}</span>
-                      </div>
+                <div className="mb-list-scroll">
+                  <DayGroupedList
+                    items={visibleMemories}
+                    getDate={(memory) => memory.createdAt}
+                    getKey={(memory) => memory.itemUid}
+                    emptyMessage="No memories match the current filters."
+                    renderItem={(memory) => (
+                      <button
+                        type="button"
+                        className={`mb-card ${selectedUid === memory.itemUid ? 'mb-card-active' : ''}`}
+                        onClick={() => void handleSelectMemory(memory.itemUid)}
+                      >
+                        <div className="mb-card-top">
+                          <span className={`badge badge-${memory.memoryType}`}>{memory.memoryType}</span>
+                          <span className="mb-card-divider">·</span>
+                          <span className="mb-card-project">{memory.project}</span>
+                          <span className="mb-card-time">{formatDistanceToNow(new Date(memory.createdAt))} ago</span>
+                        </div>
 
-                      <div className="memory-card-title">{memory.title}</div>
-                      <div className="memory-card-summary">{memory.summary}</div>
+                        <div className="mb-card-title">{memory.title}</div>
+                        <div className="mb-card-summary">{memory.summary}</div>
 
-                      <div className="chip-row">
-                        {memory.tags.slice(0, 3).map((tag: string) => (
-                          <span key={tag} className="chip">
-                            {tag}
-                          </span>
-                        ))}
-                        {memory.promoted ? <span className="chip chip-accent">promoted</span> : null}
-                      </div>
-
-                      <div className="memory-card-footer">
-                        <span>{memory.status}</span>
-                        <span>{formatDistanceToNow(new Date(memory.createdAt))} ago</span>
-                      </div>
-                    </button>
-                  )}
-                />
+                        <div className="mb-card-footer">
+                          {memory.tags.slice(0, 3).map((tag: string) => (
+                            <span key={tag} className="mb-card-tag">{tag}</span>
+                          ))}
+                          {memory.promoted ? (
+                            <span className="mb-card-promoted">
+                              <Sparkles size={11} />
+                              promoted
+                            </span>
+                          ) : null}
+                          <span className="mb-card-status">{memory.status}</span>
+                        </div>
+                      </button>
+                    )}
+                  />
+                </div>
               )}
             </div>
 
-            <aside className="detail-panel panel">
-              <div className="panel-header">
-                <div>
-                  <div className="panel-title">Memory detail</div>
-                  <div className="panel-subtitle">Inspect, edit, promote, or archive the selected record.</div>
-                </div>
-              </div>
-
+            <aside className="mb-detail-panel">
               {detailLoading ? (
-                <div className="empty-state">Loading selected memory...</div>
+                <div className="mb-empty">Loading selected memory...</div>
               ) : !selectedDetail || !draft ? (
-                <div className="empty-state">Select a memory to inspect its details.</div>
-              ) : (
-                <div className="detail-stack">
-              <div className="detail-headline">
-                <span className={`badge badge-${selectedDetail.memoryType}`}>{selectedDetail.memoryType}</span>
-                <h3>{selectedDetail.title}</h3>
-                <p>
-                  {selectedDetail.promoted
-                    ? 'This item is promoted and should receive stronger recall priority.'
-                    : 'Use this panel to curate the stored memory rather than leaving structure quality to chance.'}
-                </p>
-              </div>
-
-              <div className="inline-actions">
-                <button
-                  type="button"
-                  className="primary-button"
-                  onClick={() => void handleSaveChanges()}
-                  disabled={busyAction !== null}
-                >
-                  <Save size={16} />
-                  <span>{busyAction === 'save' ? 'Saving...' : 'Save changes'}</span>
-                </button>
-                <button
-                  type="button"
-                  className="header-button"
-                  onClick={resetDraft}
-                  disabled={busyAction !== null}
-                >
-                  <RefreshCw size={16} />
-                  <span>Reset draft</span>
-                </button>
-                <button
-                  type="button"
-                  className="header-button"
-                  onClick={() => void handlePromote()}
-                  disabled={busyAction !== null || selectedDetail.promoted}
-                >
-                  <Sparkles size={16} />
-                  <span>{busyAction === 'promote' ? 'Promoting...' : selectedDetail.promoted ? 'Promoted' : 'Promote'}</span>
-                </button>
-                <button
-                  type="button"
-                  className="header-button"
-                  onClick={() => void handleDemote()}
-                  disabled={busyAction !== null || !selectedDetail.promoted}
-                >
-                  <Sparkles size={16} />
-                  <span>{busyAction === 'demote' ? 'Demoting...' : 'Demote'}</span>
-                </button>
-                <button
-                  type="button"
-                  className="header-button"
-                  onClick={() => void handleArchive()}
-                  disabled={busyAction !== null || selectedDetail.status === 'archived'}
-                >
-                  <Archive size={16} />
-                  <span>{busyAction === 'archive' ? 'Archiving...' : selectedDetail.status === 'archived' ? 'Archived' : 'Archive'}</span>
-                </button>
-              </div>
-
-              <div className="detail-grid">
-                <div className="detail-block">
-                  <span className="detail-label">Project</span>
-                  <strong>{selectedDetail.project}</strong>
+                <div className="mb-empty">
+                  <span className="mb-empty-title">Nothing selected</span>
+                  Pick a memory from the list to inspect its content.
                 </div>
-                <div className="detail-block">
-                  <span className="detail-label">Source app</span>
-                  <strong>{selectedDetail.sourceApp}</strong>
-                </div>
-                <div className="detail-block">
-                  <span className="detail-label">Routine type</span>
-                  <strong>{selectedDetail.routineType || 'none'}</strong>
-                </div>
-                <div className="detail-block">
-                  <span className="detail-label">Created</span>
-                  <strong>{formatDistanceToNow(new Date(selectedDetail.createdAt))} ago</strong>
-                </div>
-                <div className="detail-block">
-                  <span className="detail-label">Updated</span>
-                  <strong>{formatDistanceToNow(new Date(selectedDetail.updatedAt))} ago</strong>
-                </div>
-                <div className="detail-block">
-                  <span className="detail-label">Access count</span>
-                  <strong>{selectedDetail.accessCount}</strong>
-                </div>
-                <div className="detail-block">
-                  <span className="detail-label">Memory UID</span>
-                  <strong className="text-mono">{selectedDetail.itemUid}</strong>
-                </div>
-              </div>
-
-              {(artifactPreviewLoading || artifactPreview?.imageDataUrl) ? (
-                <div className="detail-section">
-                  <div className="detail-section-title">
-                    <Database size={16} />
-                    <span>Artifact preview</span>
-                  </div>
-                  {artifactPreviewLoading ? (
-                    <p>Loading artifact preview...</p>
-                  ) : artifactPreview?.imageDataUrl ? (
-                    <div className="detail-stack">
-                      <img
-                        className="task-image-preview"
-                        src={artifactPreview.imageDataUrl}
-                        alt={selectedDetail.title}
-                      />
-                      <div className="detail-path text-mono">{artifactPreview.absolutePath}</div>
+              ) : isEditing ? (
+                <>
+                  <div className="mb-detail-head">
+                    <div className="mb-detail-meta-row">
+                      <span className={`badge badge-${selectedDetail.memoryType}`}>{selectedDetail.memoryType}</span>
+                      <span className="mb-card-project">{selectedDetail.project}</span>
+                      <div className="mb-detail-actions">
+                        <button
+                          type="button"
+                          className="mb-icon-button mb-icon-button-primary"
+                          onClick={() => void handleSaveChanges()}
+                          disabled={busyAction !== null}
+                        >
+                          <Save size={14} />
+                          <span>{busyAction === 'save' ? 'Saving...' : 'Save'}</span>
+                        </button>
+                        <button
+                          type="button"
+                          className="mb-icon-button"
+                          onClick={() => { resetDraft(); setIsEditing(false); }}
+                          disabled={busyAction !== null}
+                        >
+                          <X size={14} />
+                          <span>Cancel</span>
+                        </button>
+                      </div>
                     </div>
-                  ) : null}
-                </div>
-              ) : null}
-
-              <div className="detail-section">
-                <div className="detail-section-title">
-                  <Database size={16} />
-                  <span>Core fields</span>
-                </div>
-                <div className="field-grid">
-                  <label className="field-row">
-                    <span className="field-label">Title</span>
-                    <input
-                      className="text-input"
-                      value={draft.title}
-                      onChange={(event) => setDraft((current) => current ? { ...current, title: event.target.value } : current)}
-                    />
-                  </label>
-
-                  <label className="field-row">
-                    <span className="field-label">Subject</span>
-                    <input
-                      className="text-input"
-                      value={draft.subject}
-                      onChange={(event) => setDraft((current) => current ? { ...current, subject: event.target.value } : current)}
-                    />
-                  </label>
-
-                  <label className="field-row">
-                    <span className="field-label">Summary</span>
-                    <textarea
-                      className="text-area-input"
-                      rows={4}
-                      value={draft.summary}
-                      onChange={(event) => setDraft((current) => current ? { ...current, summary: event.target.value } : current)}
-                    />
-                  </label>
-
-                  <label className="field-row">
-                    <span className="field-label">Content body</span>
-                    <textarea
-                      className="text-area-input"
-                      rows={8}
-                      value={draft.content}
-                      onChange={(event) => setDraft((current) => current ? { ...current, content: event.target.value } : current)}
-                    />
-                    <span className="field-help">This is the reusable content field that Vault persists into both the registry and the Markdown file.</span>
-                  </label>
-                </div>
-              </div>
-
-              <div className="detail-section">
-                <div className="detail-section-title">
-                  <Tags size={16} />
-                  <span>Classification</span>
-                </div>
-                <div className="field-grid">
-                  <div className="detail-grid">
-                    <label className="field-row">
-                      <span className="field-label">Status</span>
-                      <select
-                        className="text-input"
-                        value={draft.status}
-                        onChange={(event) => setDraft((current) => current ? { ...current, status: event.target.value as VaultStatusValue } : current)}
-                      >
-                        <option value="active">active</option>
-                        <option value="resolved">resolved</option>
-                        <option value="draft">draft</option>
-                        <option value="archived">archived</option>
-                        <option value="promoted">promoted</option>
-                      </select>
-                    </label>
-
-                    <label className="field-row">
-                      <span className="field-label">Priority</span>
-                      <select
-                        className="text-input"
-                        value={draft.priority}
-                        onChange={(event) => setDraft((current) => current ? { ...current, priority: event.target.value as VaultPriorityValue } : current)}
-                      >
-                        <option value="low">low</option>
-                        <option value="normal">normal</option>
-                        <option value="high">high</option>
-                        <option value="critical">critical</option>
-                        <option value="canonical">canonical</option>
-                      </select>
-                    </label>
-
-                    <label className="field-row">
-                      <span className="field-label">Routine type</span>
-                      <select
-                        className="text-input"
-                        value={draft.routineType}
-                        onChange={(event) => setDraft((current) => current ? { ...current, routineType: event.target.value } : current)}
-                      >
-                        {ROUTINE_TYPE_OPTIONS.map((option) => (
-                          <option key={option || 'none'} value={option}>
-                            {option || 'none'}
-                          </option>
-                        ))}
-                      </select>
-                    </label>
                   </div>
 
-                  <label className="field-row">
-                    <span className="field-label">Tags</span>
-                    <input
-                      className="text-input"
-                      value={draft.tagsText}
-                      onChange={(event) => setDraft((current) => current ? { ...current, tagsText: event.target.value } : current)}
-                      placeholder="auth, bug, ui"
-                    />
-                    <span className="field-help">Comma-separated classification labels.</span>
-                  </label>
+                  <div className="mb-detail-body">
+                    <div className="mb-detail-section">
+                      <span className="mb-detail-section-title"><Database size={12} />Core fields</span>
+                      <div className="field-grid">
+                        <label className="field-row">
+                          <span className="field-label">Title</span>
+                          <input
+                            className="text-input"
+                            value={draft.title}
+                            onChange={(event) => setDraft((current) => current ? { ...current, title: event.target.value } : current)}
+                          />
+                        </label>
+                        <label className="field-row">
+                          <span className="field-label">Subject</span>
+                          <input
+                            className="text-input"
+                            value={draft.subject}
+                            onChange={(event) => setDraft((current) => current ? { ...current, subject: event.target.value } : current)}
+                          />
+                        </label>
+                        <label className="field-row">
+                          <span className="field-label">Summary</span>
+                          <textarea
+                            className="text-area-input"
+                            rows={4}
+                            value={draft.summary}
+                            onChange={(event) => setDraft((current) => current ? { ...current, summary: event.target.value } : current)}
+                          />
+                        </label>
+                        <label className="field-row">
+                          <span className="field-label">Content body</span>
+                          <textarea
+                            className="text-area-input"
+                            rows={8}
+                            value={draft.content}
+                            onChange={(event) => setDraft((current) => current ? { ...current, content: event.target.value } : current)}
+                          />
+                        </label>
+                      </div>
+                    </div>
 
-                  <label className="field-row">
-                    <span className="field-label">Keywords</span>
-                    <input
-                      className="text-input"
-                      value={draft.keywordsText}
-                      onChange={(event) => setDraft((current) => current ? { ...current, keywordsText: event.target.value } : current)}
-                      placeholder="login, redirect, middleware"
-                    />
-                    <span className="field-help">Comma-separated search terms used during recall.</span>
-                  </label>
-
-                  <label className="field-row">
-                    <span className="field-label">Next steps</span>
-                    <textarea
-                      className="text-area-input"
-                      rows={4}
-                      value={draft.nextStepsText}
-                      onChange={(event) => setDraft((current) => current ? { ...current, nextStepsText: event.target.value } : current)}
-                      placeholder={'Investigate auth middleware ordering\nValidate fix in desktop app'}
-                    />
-                    <span className="field-help">One next step per line.</span>
-                  </label>
-                </div>
-              </div>
-
-              <div className="detail-section">
-                <div className="detail-section-title">
-                  <Link2 size={16} />
-                  <span>Relations and file context</span>
-                </div>
-                <div className="field-grid">
-                  <label className="field-row">
-                    <span className="field-label">Related memory UIDs</span>
-                    <textarea
-                      className="text-area-input"
-                      rows={4}
-                      value={draft.relatedItemIdsText}
-                      onChange={(event) => setDraft((current) => current ? { ...current, relatedItemIdsText: event.target.value } : current)}
-                      placeholder={'vault-abc123\nvault-def456'}
-                    />
-                    <span className="field-help">Use one UID per line or a comma-separated list. These links stay with the memory item.</span>
-                  </label>
-
-                  {selectedDetail.relatedItemIds.length > 0 ? (
-                    <div className="detail-block">
-                      <span className="detail-label">Resolved related memories</span>
-                      <div className="chip-row">
-                        {selectedDetail.relatedItemIds.map((itemUid) => {
-                          const relatedMemory = relatedMemoryMap.get(itemUid);
-                          return (
-                            <button
-                              key={itemUid}
-                              type="button"
-                              className="chip"
-                              onClick={() => {
-                                if (relatedMemory) {
-                                  void handleSelectMemory(relatedMemory.itemUid);
-                                }
-                              }}
-                              disabled={!relatedMemory}
+                    <div className="mb-detail-section">
+                      <span className="mb-detail-section-title"><Tags size={12} />Classification</span>
+                      <div className="field-grid">
+                        <div className="detail-grid">
+                          <label className="field-row">
+                            <span className="field-label">Status</span>
+                            <select
+                              className="text-input"
+                              value={draft.status}
+                              onChange={(event) => setDraft((current) => current ? { ...current, status: event.target.value as VaultStatusValue } : current)}
                             >
-                              {relatedMemory ? relatedMemory.title : itemUid}
-                            </button>
-                          );
-                        })}
+                              <option value="active">active</option>
+                              <option value="resolved">resolved</option>
+                              <option value="draft">draft</option>
+                              <option value="archived">archived</option>
+                              <option value="promoted">promoted</option>
+                            </select>
+                          </label>
+                          <label className="field-row">
+                            <span className="field-label">Priority</span>
+                            <select
+                              className="text-input"
+                              value={draft.priority}
+                              onChange={(event) => setDraft((current) => current ? { ...current, priority: event.target.value as VaultPriorityValue } : current)}
+                            >
+                              <option value="low">low</option>
+                              <option value="normal">normal</option>
+                              <option value="high">high</option>
+                              <option value="critical">critical</option>
+                              <option value="canonical">canonical</option>
+                            </select>
+                          </label>
+                          <label className="field-row">
+                            <span className="field-label">Routine type</span>
+                            <select
+                              className="text-input"
+                              value={draft.routineType}
+                              onChange={(event) => setDraft((current) => current ? { ...current, routineType: event.target.value } : current)}
+                            >
+                              {ROUTINE_TYPE_OPTIONS.map((option) => (
+                                <option key={option || 'none'} value={option}>
+                                  {option || 'none'}
+                                </option>
+                              ))}
+                            </select>
+                          </label>
+                        </div>
+                        <label className="field-row">
+                          <span className="field-label">Tags</span>
+                          <input
+                            className="text-input"
+                            value={draft.tagsText}
+                            onChange={(event) => setDraft((current) => current ? { ...current, tagsText: event.target.value } : current)}
+                            placeholder="auth, bug, ui"
+                          />
+                        </label>
+                        <label className="field-row">
+                          <span className="field-label">Keywords</span>
+                          <input
+                            className="text-input"
+                            value={draft.keywordsText}
+                            onChange={(event) => setDraft((current) => current ? { ...current, keywordsText: event.target.value } : current)}
+                            placeholder="login, redirect, middleware"
+                          />
+                        </label>
+                        <label className="field-row">
+                          <span className="field-label">Next steps</span>
+                          <textarea
+                            className="text-area-input"
+                            rows={4}
+                            value={draft.nextStepsText}
+                            onChange={(event) => setDraft((current) => current ? { ...current, nextStepsText: event.target.value } : current)}
+                            placeholder={'Investigate auth middleware ordering\nValidate fix in desktop app'}
+                          />
+                          <span className="field-help">One next step per line.</span>
+                        </label>
                       </div>
                     </div>
-                  ) : null}
 
-                  <label className="field-row">
-                    <span className="field-label">Related files</span>
-                    <textarea
-                      className="text-area-input"
-                      rows={4}
-                      value={draft.relatedFilesText}
-                      onChange={(event) => setDraft((current) => current ? { ...current, relatedFilesText: event.target.value } : current)}
-                      placeholder={'packages/desktop/src/components/MemoryView.tsx\npackages/core/src/services/retrieve.service.ts'}
-                    />
-                    <span className="field-help">Store touched files or code references here so future sessions can reopen the right area faster.</span>
-                  </label>
-
-                  {selectedDetail.relatedFiles.length > 0 ? (
-                    <div className="detail-block">
-                      <span className="detail-label">Stored file references</span>
-                      <div className="chip-row">
-                        {selectedDetail.relatedFiles.map((filePath) => (
-                          <button
-                            key={filePath}
-                            type="button"
-                            className={`chip ${selectedArtifactPath === filePath ? '' : 'chip-muted'}`}
-                            onClick={() => setSelectedArtifactPath(filePath)}
-                          >
-                            {filePath}
-                          </button>
-                        ))}
+                    <div className="mb-detail-section">
+                      <span className="mb-detail-section-title"><Link2 size={12} />Relations</span>
+                      <div className="field-grid">
+                        <label className="field-row">
+                          <span className="field-label">Related memory UIDs</span>
+                          <textarea
+                            className="text-area-input"
+                            rows={3}
+                            value={draft.relatedItemIdsText}
+                            onChange={(event) => setDraft((current) => current ? { ...current, relatedItemIdsText: event.target.value } : current)}
+                            placeholder={'vault-abc123\nvault-def456'}
+                          />
+                        </label>
+                        <label className="field-row">
+                          <span className="field-label">Related files</span>
+                          <textarea
+                            className="text-area-input"
+                            rows={4}
+                            value={draft.relatedFilesText}
+                            onChange={(event) => setDraft((current) => current ? { ...current, relatedFilesText: event.target.value } : current)}
+                            placeholder={'packages/desktop/src/components/MemoryView.tsx'}
+                          />
+                        </label>
                       </div>
                     </div>
-                  ) : null}
-                </div>
-              </div>
-
-              <div className="detail-section">
-                <div className="detail-section-title">
-                  <Clock3 size={16} />
-                  <span>Stored content preview</span>
-                </div>
-                <div className="detail-content">
-                  {selectedDetail.fileContent || selectedDetail.content || 'No file-backed content is stored for this memory.'}
-                </div>
-              </div>
-
-              {selectedDetail.vaultPath ? (
-                <div className="detail-section">
-                  <div className="detail-section-title">
-                    <Database size={16} />
-                    <span>Vault path</span>
                   </div>
-                  <div className="detail-path text-mono">{selectedDetail.vaultPath}</div>
-                </div>
-              ) : null}
-                </div>
+                </>
+              ) : (
+                <>
+                  <div className="mb-detail-head">
+                    <div className="mb-detail-meta-row">
+                      <span className={`badge badge-${selectedDetail.memoryType}`}>{selectedDetail.memoryType}</span>
+                      <span className="mb-card-project">{selectedDetail.project}</span>
+                      {selectedDetail.promoted ? (
+                        <span className="mb-card-promoted">
+                          <Sparkles size={11} />
+                          promoted
+                        </span>
+                      ) : null}
+                      <span className="mb-card-time">{formatDistanceToNow(new Date(selectedDetail.updatedAt))} ago</span>
+                      <div className="mb-detail-actions">
+                        <button
+                          type="button"
+                          className="mb-icon-button mb-icon-button-primary"
+                          onClick={() => setIsEditing(true)}
+                          disabled={busyAction !== null}
+                        >
+                          <Pencil size={14} />
+                          <span>Edit</span>
+                        </button>
+                        <button
+                          type="button"
+                          className="mb-icon-button"
+                          onClick={() => void (selectedDetail.promoted ? handleDemote() : handlePromote())}
+                          disabled={busyAction !== null}
+                          title={selectedDetail.promoted ? 'Demote' : 'Promote'}
+                        >
+                          <Sparkles size={14} />
+                          <span>{selectedDetail.promoted ? 'Demote' : 'Promote'}</span>
+                        </button>
+                        <button
+                          type="button"
+                          className="mb-icon-button mb-icon-button-danger"
+                          onClick={() => void handleArchive()}
+                          disabled={busyAction !== null || selectedDetail.status === 'archived'}
+                          title="Archive"
+                        >
+                          <Archive size={14} />
+                        </button>
+                      </div>
+                    </div>
+                    <h2 className="mb-detail-title">{selectedDetail.title}</h2>
+                    {selectedDetail.subject ? (
+                      <span className="mb-card-project">{selectedDetail.subject}</span>
+                    ) : null}
+                    <p className="mb-detail-summary">{selectedDetail.summary}</p>
+                  </div>
+
+                  <div className="mb-detail-body">
+                    <div className="mb-detail-section">
+                      <span className="mb-detail-section-title"><Database size={12} />Properties</span>
+                      <div className="mb-meta-grid">
+                        <div className="mb-meta-cell">
+                          <span className="mb-meta-label">Status</span>
+                          <span className="mb-meta-value">{selectedDetail.status}</span>
+                        </div>
+                        <div className="mb-meta-cell">
+                          <span className="mb-meta-label">Priority</span>
+                          <span className="mb-meta-value">{selectedDetail.priority}</span>
+                        </div>
+                        <div className="mb-meta-cell">
+                          <span className="mb-meta-label">Routine</span>
+                          <span className="mb-meta-value">{selectedDetail.routineType || '—'}</span>
+                        </div>
+                        <div className="mb-meta-cell">
+                          <span className="mb-meta-label">Source</span>
+                          <span className="mb-meta-value">{selectedDetail.sourceApp}</span>
+                        </div>
+                        <div className="mb-meta-cell">
+                          <span className="mb-meta-label">Created</span>
+                          <span className="mb-meta-value">{formatDistanceToNow(new Date(selectedDetail.createdAt))} ago</span>
+                        </div>
+                        <div className="mb-meta-cell">
+                          <span className="mb-meta-label">Recalled</span>
+                          <span className="mb-meta-value">{selectedDetail.accessCount}×</span>
+                        </div>
+                        <div className="mb-meta-cell" style={{ gridColumn: '1 / -1' }}>
+                          <span className="mb-meta-label">Memory UID</span>
+                          <span className="mb-meta-value mb-meta-value-mono">{selectedDetail.itemUid}</span>
+                        </div>
+                      </div>
+                    </div>
+
+                    {(selectedDetail.tags.length > 0 || selectedDetail.keywords.length > 0) ? (
+                      <div className="mb-detail-section">
+                        <span className="mb-detail-section-title"><Tags size={12} />Tags &amp; keywords</span>
+                        <div className="mb-tag-row">
+                          {selectedDetail.tags.map((tag) => (
+                            <span key={`tag-${tag}`} className="mb-tag">{tag}</span>
+                          ))}
+                          {selectedDetail.keywords.map((keyword) => (
+                            <span key={`kw-${keyword}`} className="mb-tag mb-tag-keyword">{keyword}</span>
+                          ))}
+                        </div>
+                      </div>
+                    ) : null}
+
+                    {selectedDetail.nextSteps && selectedDetail.nextSteps.length > 0 ? (
+                      <div className="mb-detail-section">
+                        <span className="mb-detail-section-title"><Clock3 size={12} />Next steps</span>
+                        <ul className="mb-next-steps">
+                          {selectedDetail.nextSteps.map((step, index) => (
+                            <li key={`step-${index}`} className="mb-next-step">{step}</li>
+                          ))}
+                        </ul>
+                      </div>
+                    ) : null}
+
+                    {(artifactPreviewLoading || artifactPreview?.imageDataUrl) ? (
+                      <div className="mb-detail-section">
+                        <span className="mb-detail-section-title"><FileText size={12} />Artifact preview</span>
+                        {artifactPreviewLoading ? (
+                          <p style={{ color: 'var(--text-muted)', fontSize: '0.88rem' }}>Loading artifact preview...</p>
+                        ) : artifactPreview?.imageDataUrl ? (
+                          <>
+                            <img
+                              className="task-image-preview"
+                              src={artifactPreview.imageDataUrl}
+                              alt={selectedDetail.title}
+                            />
+                            <div className="mb-path-box">{artifactPreview.absolutePath}</div>
+                          </>
+                        ) : null}
+                      </div>
+                    ) : null}
+
+                    {selectedDetail.relatedItemIds.length > 0 ? (
+                      <div className="mb-detail-section">
+                        <span className="mb-detail-section-title"><Link2 size={12} />Related memories</span>
+                        <div className="mb-tag-row">
+                          {selectedDetail.relatedItemIds.map((itemUid) => {
+                            const relatedMemory = relatedMemoryMap.get(itemUid);
+                            return (
+                              <button
+                                key={itemUid}
+                                type="button"
+                                className="mb-tag"
+                                onClick={() => {
+                                  if (relatedMemory) {
+                                    void handleSelectMemory(relatedMemory.itemUid);
+                                  }
+                                }}
+                                disabled={!relatedMemory}
+                                style={{ cursor: relatedMemory ? 'pointer' : 'default' }}
+                              >
+                                {relatedMemory ? relatedMemory.title : itemUid}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    ) : null}
+
+                    {selectedDetail.relatedFiles.length > 0 ? (
+                      <div className="mb-detail-section">
+                        <span className="mb-detail-section-title"><FileText size={12} />Related files</span>
+                        <div className="mb-tag-row">
+                          {selectedDetail.relatedFiles.map((filePath) => (
+                            <button
+                              key={filePath}
+                              type="button"
+                              className="mb-tag"
+                              onClick={() => setSelectedArtifactPath(filePath)}
+                              style={{ cursor: 'pointer', fontFamily: 'var(--font-mono)', fontSize: '0.76rem' }}
+                            >
+                              {filePath}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    ) : null}
+
+                    {(selectedDetail.fileContent || selectedDetail.content) ? (
+                      <div className="mb-detail-section">
+                        <span className="mb-detail-section-title"><FileText size={12} />Content</span>
+                        <div className="mb-content-box">
+                          {selectedDetail.fileContent || selectedDetail.content}
+                        </div>
+                      </div>
+                    ) : null}
+
+                    {selectedDetail.vaultPath ? (
+                      <div className="mb-detail-section">
+                        <span className="mb-detail-section-title"><Database size={12} />Vault path</span>
+                        <div className="mb-path-box">{selectedDetail.vaultPath}</div>
+                      </div>
+                    ) : null}
+                  </div>
+                </>
               )}
             </aside>
           </div>

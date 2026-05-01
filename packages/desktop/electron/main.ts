@@ -65,11 +65,15 @@ app.whenReady().then(() => {
 const distPath = join(__dirname, '../dist');
 const publicPath = app.isPackaged ? distPath : join(distPath, '../public');
 const skillsPath = resolve(__dirname, '../../..', 'skills');
-// Prefer standalone MCP server (has native modules compiled for system Node, not Electron).
-// Falls back to workspace path for dev mode (where electron-rebuild hasn't run).
+// Prefer the standalone MCP server because it carries native modules compiled
+// for normal Node, not Electron's ABI. In packaged builds it is copied into
+// resources/mcp with its own Node runtime so users do not need the repo, pnpm,
+// or a system Node install.
 const mcpStandalonePath = resolve(__dirname, '../../../mcp-standalone/dist/index.js');
 const mcpDevPath = resolve(__dirname, '../../mcp-server/dist/index.js');
-const mcpServerDistPath = existsSync(mcpStandalonePath) ? mcpStandalonePath : mcpDevPath;
+const mcpPackagedRoot = join(process.resourcesPath, 'mcp');
+const mcpPackagedNodePath = join(mcpPackagedRoot, process.platform === 'win32' ? 'node.exe' : 'node');
+const mcpPackagedEntryPath = join(mcpPackagedRoot, 'dist', 'index.js');
 const OPENROUTER_MODELS_URL = 'https://openrouter.ai/api/v1/models';
 const OPENROUTER_CURRENT_KEY_URL = 'https://openrouter.ai/api/v1/key';
 const DEFAULT_RECALL_CONTEXT_LIMIT = 6;
@@ -1658,6 +1662,71 @@ app.whenReady().then(() => {
   }
 
   type ConnectStep = { id: string; label: string; status: 'success' | 'fail' | 'skipped'; detail?: string };
+  type McpLaunchConfig = {
+    mode: 'packaged' | 'development';
+    command: string;
+    args: string[];
+    requiredPaths: string[];
+    displayPath: string;
+  };
+
+  function getMcpLaunchConfig(): McpLaunchConfig {
+    if (app.isPackaged) {
+      return {
+        mode: 'packaged',
+        command: mcpPackagedNodePath,
+        args: [mcpPackagedEntryPath],
+        requiredPaths: [mcpPackagedNodePath, mcpPackagedEntryPath],
+        displayPath: mcpPackagedEntryPath,
+      };
+    }
+
+    const entryPath = existsSync(mcpStandalonePath) ? mcpStandalonePath : mcpDevPath;
+    return {
+      mode: 'development',
+      command: 'node',
+      args: [entryPath],
+      requiredPaths: [entryPath],
+      displayPath: entryPath,
+    };
+  }
+
+  async function validateMcpRuntime(steps: ConnectStep[], launchConfig: McpLaunchConfig): Promise<boolean> {
+    const missingPaths: string[] = [];
+    for (const requiredPath of launchConfig.requiredPaths) {
+      if (!(await fileExists(requiredPath))) {
+        missingPaths.push(requiredPath);
+      }
+    }
+
+    if (missingPaths.length > 0) {
+      const hint = launchConfig.mode === 'packaged'
+        ? 'The installed app is missing its bundled MCP runtime. Reinstall Vault or rebuild the installer with MCP resources.'
+        : 'Run "pnpm build" or "pnpm setup:mcp" first.';
+      steps.push({
+        id: 'locate-mcp',
+        label: 'Locate MCP runtime',
+        status: 'fail',
+        detail: `${hint} Missing: ${missingPaths.join(', ')}`,
+      });
+      return false;
+    }
+
+    steps.push({
+      id: 'locate-mcp',
+      label: 'Locate MCP runtime',
+      status: 'success',
+      detail: `${launchConfig.command} ${launchConfig.args.join(' ')}`,
+    });
+    return true;
+  }
+
+  function mcpEntriesMatch(entry: any, launchConfig: McpLaunchConfig): boolean {
+    return !!entry
+      && entry.command === launchConfig.command
+      && Array.isArray(entry.args)
+      && JSON.stringify(entry.args) === JSON.stringify(launchConfig.args);
+  }
 
   function hasCodexVaultEntry(content: string): boolean {
     return /\[mcp_servers(?:\."vault-memory"|\.vault-memory)\]/.test(content);
@@ -1670,23 +1739,26 @@ app.whenReady().then(() => {
       .trimEnd();
   }
 
-  function buildCodexVaultEntry(): string {
-    const escapedPath = JSON.stringify(mcpServerDistPath);
+  function hasCurrentCodexVaultEntry(content: string, launchConfig: McpLaunchConfig): boolean {
+    return content.includes(buildCodexVaultEntry(launchConfig).trim());
+  }
+
+  function buildCodexVaultEntry(launchConfig: McpLaunchConfig): string {
     return [
       '[mcp_servers.vault-memory]',
-      'command = "node"',
-      `args = [${escapedPath}]`,
+      `command = ${JSON.stringify(launchConfig.command)}`,
+      `args = [${launchConfig.args.map((arg) => JSON.stringify(arg)).join(', ')}]`,
       '',
     ].join('\n');
   }
 
   async function connectMcpToConfig(configPath: string, label: string): Promise<{ success: boolean; steps: ConnectStep[]; backupPath?: string }> {
     const steps: ConnectStep[] = [];
+    const launchConfig = getMcpLaunchConfig();
 
     // Step 1: Locate MCP server
-    const mcpExists = await fileExists(mcpServerDistPath);
+    const mcpExists = await validateMcpRuntime(steps, launchConfig);
     if (!mcpExists) {
-      steps.push({ id: 'locate-mcp', label: 'Locate MCP server build', status: 'fail', detail: `Not found: ${mcpServerDistPath}. Run "pnpm build" first.` });
       steps.push({ id: 'read-config', label: `Read ${label} config`, status: 'skipped' });
       steps.push({ id: 'check-existing', label: 'Check existing entry', status: 'skipped' });
       steps.push({ id: 'backup', label: 'Backup config', status: 'skipped' });
@@ -1694,7 +1766,6 @@ app.whenReady().then(() => {
       steps.push({ id: 'verify', label: 'Verify config', status: 'skipped' });
       return { success: false, steps };
     }
-    steps.push({ id: 'locate-mcp', label: 'Locate MCP server build', status: 'success', detail: mcpServerDistPath });
 
     // Step 2: Read existing config
     const configResult = await readJsonFile(configPath);
@@ -1717,12 +1788,7 @@ app.whenReady().then(() => {
 
     // Step 3: Check if already configured
     const existingEntry = config.mcpServers?.['vault-memory'];
-    if (
-      existingEntry &&
-      existingEntry.command === 'node' &&
-      Array.isArray(existingEntry.args) &&
-      existingEntry.args[0] === mcpServerDistPath
-    ) {
+    if (mcpEntriesMatch(existingEntry, launchConfig)) {
       steps.push({ id: 'check-existing', label: 'Check existing entry', status: 'success', detail: 'Already configured with correct path' });
       steps.push({ id: 'backup', label: 'Backup config', status: 'skipped', detail: 'No changes needed' });
       steps.push({ id: 'write-config', label: 'Write MCP entry', status: 'skipped', detail: 'No changes needed' });
@@ -1757,8 +1823,8 @@ app.whenReady().then(() => {
     try {
       config.mcpServers = config.mcpServers || {};
       config.mcpServers['vault-memory'] = {
-        command: 'node',
-        args: [mcpServerDistPath],
+        command: launchConfig.command,
+        args: launchConfig.args,
       };
 
       await mkdir(dirname(configPath), { recursive: true });
@@ -1773,7 +1839,7 @@ app.whenReady().then(() => {
     // Step 6: Verify
     try {
       const verifyResult = await readJsonFile(configPath);
-      if (verifyResult.data?.mcpServers?.['vault-memory']?.args?.[0] === mcpServerDistPath) {
+      if (mcpEntriesMatch(verifyResult.data?.mcpServers?.['vault-memory'], launchConfig)) {
         steps.push({ id: 'verify', label: 'Verify config', status: 'success', detail: 'Entry confirmed in config file' });
       } else {
         steps.push({ id: 'verify', label: 'Verify config', status: 'fail', detail: 'Entry not found after write' });
@@ -1789,10 +1855,10 @@ app.whenReady().then(() => {
 
   async function connectMcpToCodexConfig(): Promise<{ success: boolean; steps: ConnectStep[]; backupPath?: string }> {
     const steps: ConnectStep[] = [];
+    const launchConfig = getMcpLaunchConfig();
 
-    const mcpExists = await fileExists(mcpServerDistPath);
+    const mcpExists = await validateMcpRuntime(steps, launchConfig);
     if (!mcpExists) {
-      steps.push({ id: 'locate-mcp', label: 'Locate MCP server build', status: 'fail', detail: `Not found: ${mcpServerDistPath}. Run "pnpm build" first.` });
       steps.push({ id: 'read-config', label: 'Read Codex config', status: 'skipped' });
       steps.push({ id: 'check-existing', label: 'Check existing entry', status: 'skipped' });
       steps.push({ id: 'backup', label: 'Backup config', status: 'skipped' });
@@ -1800,7 +1866,6 @@ app.whenReady().then(() => {
       steps.push({ id: 'verify', label: 'Verify config', status: 'skipped' });
       return { success: false, steps };
     }
-    steps.push({ id: 'locate-mcp', label: 'Locate MCP server build', status: 'success', detail: mcpServerDistPath });
 
     let configContent = '';
     let configExists = false;
@@ -1821,14 +1886,19 @@ app.whenReady().then(() => {
       }
     }
 
-    if (hasCodexVaultEntry(configContent)) {
-      steps.push({ id: 'check-existing', label: 'Check existing entry', status: 'success', detail: 'Codex already has a vault-memory entry' });
+    if (hasCurrentCodexVaultEntry(configContent, launchConfig)) {
+      steps.push({ id: 'check-existing', label: 'Check existing entry', status: 'success', detail: 'Already configured with correct path' });
       steps.push({ id: 'backup', label: 'Backup config', status: 'skipped', detail: 'No changes needed' });
       steps.push({ id: 'write-config', label: 'Write MCP entry', status: 'skipped', detail: 'No changes needed' });
       steps.push({ id: 'verify', label: 'Verify config', status: 'success', detail: 'Entry verified in config.toml' });
       return { success: true, steps };
     }
-    steps.push({ id: 'check-existing', label: 'Check existing entry', status: 'success', detail: 'No existing vault-memory entry' });
+    steps.push({
+      id: 'check-existing',
+      label: 'Check existing entry',
+      status: 'success',
+      detail: hasCodexVaultEntry(configContent) ? 'Entry exists but path differs — will update' : 'No existing vault-memory entry',
+    });
 
     let backupPath: string | undefined;
     if (configExists) {
@@ -1847,7 +1917,8 @@ app.whenReady().then(() => {
     }
 
     try {
-      const nextContent = `${configContent.trimEnd()}${configContent.trim() ? '\n\n' : ''}${buildCodexVaultEntry()}`;
+      const cleaned = removeCodexVaultEntry(configContent);
+      const nextContent = `${cleaned.trimEnd()}${cleaned.trim() ? '\n\n' : ''}${buildCodexVaultEntry(launchConfig)}`;
       await mkdir(dirname(codexConfigPath), { recursive: true });
       await writeFile(codexConfigPath, nextContent, 'utf8');
       steps.push({ id: 'write-config', label: 'Write MCP entry', status: 'success', detail: 'vault-memory entry written to config.toml' });
@@ -1859,7 +1930,7 @@ app.whenReady().then(() => {
 
     try {
       const verifyContent = await readFile(codexConfigPath, 'utf8');
-      if (hasCodexVaultEntry(verifyContent)) {
+      if (hasCurrentCodexVaultEntry(verifyContent, launchConfig)) {
         steps.push({ id: 'verify', label: 'Verify config', status: 'success', detail: 'Entry confirmed in config.toml' });
         return { success: true, steps, backupPath };
       }
@@ -1874,13 +1945,15 @@ app.whenReady().then(() => {
 
   ipcMain.handle('vault:checkConnectionStatus', async () => {
     try {
+      const launchConfig = getMcpLaunchConfig();
+
       // Check Claude Desktop
       const desktopResult = await readJsonFile(claudeDesktopConfigPath);
-      const desktopConfigured = !!(desktopResult.data?.mcpServers?.['vault-memory']);
+      const desktopConfigured = mcpEntriesMatch(desktopResult.data?.mcpServers?.['vault-memory'], launchConfig);
 
       // Check Claude Code
       const codeResult = await readJsonFile(claudeCodeSettingsPath);
-      const codeConfigured = !!(codeResult.data?.mcpServers?.['vault-memory']);
+      const codeConfigured = mcpEntriesMatch(codeResult.data?.mcpServers?.['vault-memory'], launchConfig);
 
       // Check skill installation
       let claudeSkillInstalled = false;
@@ -1906,9 +1979,15 @@ app.whenReady().then(() => {
           claudeCode: { configured: codeConfigured, configPath: claudeCodeSettingsPath },
           codex: {
             configured: await fileExists(codexConfigPath)
-              ? hasCodexVaultEntry(await readFile(codexConfigPath, 'utf8'))
+              ? hasCurrentCodexVaultEntry(await readFile(codexConfigPath, 'utf8'), launchConfig)
               : false,
             configPath: codexConfigPath,
+          },
+          mcpRuntime: {
+            mode: launchConfig.mode,
+            command: launchConfig.command,
+            args: launchConfig.args,
+            displayPath: launchConfig.displayPath,
           },
           skill: {
             claudeInstalled: claudeSkillInstalled,
