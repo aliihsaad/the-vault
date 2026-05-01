@@ -16,7 +16,7 @@
     "dev:desktop": "pnpm -r --parallel --filter @the-vault/core --filter @the-vault/desktop run dev",
     "test": "vitest run",
     "test:watch": "vitest",
-    "lint": "pnpm -r exec tsc --noEmit"
+    "lint": "pnpm --filter @the-vault/core build && pnpm -r exec tsc --noEmit"
   },
   "devDependencies": {
     "typescript": "^5.7.0",
