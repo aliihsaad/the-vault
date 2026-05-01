@@ -11,7 +11,31 @@
     "preview": "vite preview"
   },
   "build": {
+    "appId": "com.alisaad.thevault",
+    "productName": "The Vault",
     "asar": true,
+    "directories": {
+      "output": "dist"
+    },
+    "artifactName": "The-Vault-${version}-${os}-${arch}.${ext}",
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "The Vault"
+    },
     "extraResources": [
       {
         "from": "../../mcp-standalone",

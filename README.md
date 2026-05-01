@@ -93,6 +93,19 @@ pnpm build
 
 The root build also deploys a standalone MCP bundle into `mcp-standalone/`. That folder is generated and intentionally ignored by Git.
 
+## Release Builds
+
+Windows installer releases are built by GitHub Actions from version tags:
+
+```powershell
+git tag v0.1.0
+git push origin v0.1.0
+```
+
+The release workflow builds the workspace, deploys the standalone MCP sidecar, verifies that the packaged app contains `resources/mcp/node.exe` and `resources/mcp/dist/index.js`, uploads the installer artifact, and creates the GitHub Release.
+
+You can also run the workflow manually from GitHub Actions with a `tag_name` such as `v0.1.0`.
+
 ## Key Concepts
 
 ### Memory Items
