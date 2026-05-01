@@ -40,6 +40,56 @@ function findProjectBySlug(db: DB, name: string): typeof projects.$inferSelect |
 }
 
 /**
+ * Infer the owning project from related file paths. This is intentionally
+ * conservative: only absolute paths are considered, and all matching paths
+ * must agree on the same known project slug.
+ */
+export function inferProjectNameFromRelatedFiles(
+  db: DB,
+  relatedFiles: string[],
+): string | null {
+  const projectRows = db.select().from(projects).all();
+  const slugToName = new Map(projectRows.map((row) => [slugify(row.name), row.name]));
+  const matches = new Set<string>();
+
+  for (const filePath of relatedFiles) {
+    if (!isAbsoluteRelatedFilePath(filePath)) {
+      continue;
+    }
+
+    const pathMatches = filePath
+      .replace(/\\/g, '/')
+      .split('/')
+      .map((segment) => slugify(segment))
+      .filter((segment) => slugToName.has(segment));
+
+    if (pathMatches.length > 0) {
+      matches.add(pathMatches[pathMatches.length - 1]!);
+    }
+  }
+
+  return matches.size === 1 ? slugToName.get([...matches][0]!) ?? null : null;
+}
+
+export function relatedFilesContainProjectSlug(
+  relatedFiles: string[],
+  projectName: string,
+): boolean {
+  const targetSlug = slugify(projectName);
+  return relatedFiles.some((filePath) =>
+    filePath
+      .replace(/\\/g, '/')
+      .split('/')
+      .some((segment) => slugify(segment) === targetSlug),
+  );
+}
+
+function isAbsoluteRelatedFilePath(filePath: string): boolean {
+  const normalized = filePath.replace(/\\/g, '/');
+  return /^[A-Za-z]:\//.test(normalized) || normalized.startsWith('/');
+}
+
+/**
  * Create a new project. Also creates the directory structure.
  * If a project with the same slug already exists, returns it (first-casing wins).
  */

@@ -15,7 +15,11 @@ import {
   normalizeTagLikeValues,
   writeMemoryFile,
 } from './file.service.js';
-import { ensureProject } from './project.service.js';
+import {
+  ensureProject,
+  inferProjectNameFromRelatedFiles,
+  relatedFilesContainProjectSlug,
+} from './project.service.js';
 import { logActivity } from './log.service.js';
 import { isEnrichmentAvailable, enrichAfterSave } from './enrichment.service.js';
 import { schedulePostSaveDuties } from './agent-duties.service.js';
@@ -57,10 +61,20 @@ export function saveMemory(
   const shortUid = generateShortUid();
 
   // 3. Normalize tags (lowercase, trim)
+  const normalizedRelatedFiles = normalizeRelatedFiles(validated.relatedFiles || []);
+
   // Resolve project to its canonical name first so casing/slug variants
-  // collapse before any path is built or row is inserted.
+  // collapse before any path is built or row is inserted. If absolute related
+  // file paths point at exactly one known project folder and the requested
+  // project is absent from those paths, prefer the file-derived project. This
+  // prevents stale agent context from saving work under an unrelated project.
   const trimmedProject = validated.project.trim();
-  const normalizedProject = ensureProject(db, vaultRoot, trimmedProject);
+  const requestedProject = ensureProject(db, vaultRoot, trimmedProject);
+  const relatedFileProject = inferProjectNameFromRelatedFiles(db, normalizedRelatedFiles);
+  const normalizedProject =
+    relatedFileProject && !relatedFilesContainProjectSlug(normalizedRelatedFiles, requestedProject)
+      ? relatedFileProject
+      : requestedProject;
   const normalizedTitle = validated.title.trim();
   const normalizedSubject = validated.subject.trim();
   const normalizedSummary = validated.summary.trim();
@@ -69,7 +83,6 @@ export function saveMemory(
   const normalizedKeywords = normalizeTagLikeValues(validated.keywords || []);
   const normalizedNextSteps = normalizeOrderedValues(validated.nextSteps || []);
   const normalizedRelatedItemIds = normalizeOrderedValues(validated.relatedItemIds || []);
-  const normalizedRelatedFiles = normalizeRelatedFiles(validated.relatedFiles || []);
 
   // 4. Generate vault path
   const timestamp = now();

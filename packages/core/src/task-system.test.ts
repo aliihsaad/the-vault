@@ -313,6 +313,45 @@ describe('task delegation system', () => {
     expect(firstDetail?.relatedItemIds).toContain(second.item.itemUid);
   });
 
+  it('routes saves to the project inferred from absolute related file paths', () => {
+    vault.createProject('the-vault');
+    vault.createProject('Social-Media-Manager-AI-Tool');
+
+    const result = vault.saveMemory({
+      title: 'Rewrote The Vault README',
+      project: 'Social-Media-Manager-AI-Tool',
+      memoryType: 'session',
+      subject: 'The Vault README documentation overhaul',
+      summary: 'Updated The Vault README with feature and setup guidance.',
+      relatedFiles: ['C:/Users/Mini/Desktop/Projects/the-vault/README.md'],
+      sourceApp: 'codex',
+    });
+
+    expect(result.item.project).toBe('the-vault');
+    expect(result.vaultPath.replace(/\\/g, '/')).toContain('/projects/the-vault/sessions/');
+  });
+
+  it('keeps the requested project when related file paths do not identify one project', () => {
+    vault.createProject('the-vault');
+    vault.createProject('Social-Media-Manager-AI-Tool');
+
+    const result = vault.saveMemory({
+      title: 'Cross-project integration note',
+      project: 'Social-Media-Manager-AI-Tool',
+      memoryType: 'session',
+      subject: 'integration note',
+      summary: 'Saved a note that references files from more than one project.',
+      relatedFiles: [
+        'C:/Users/Mini/Desktop/Projects/the-vault/README.md',
+        'C:/Users/Mini/Desktop/Projects/social-media-manager-ai-tool/README.md',
+      ],
+      sourceApp: 'codex',
+    });
+
+    expect(result.item.project).toBe('Social-Media-Manager-AI-Tool');
+    expect(result.vaultPath.replace(/\\/g, '/')).toContain('/projects/social-media-manager-ai-tool/sessions/');
+  });
+
   it('merges memories into the kept item and rewrites references away from the archived item', () => {
     const keep = vault.saveMemory({
       title: 'Canonical sync guidance',
