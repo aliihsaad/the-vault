@@ -1,6 +1,6 @@
 {
   "name": "@the-vault/desktop",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "private": true,
   "license": "MIT",
   "type": "module",
@@ -13,6 +13,7 @@
   "build": {
     "appId": "com.alisaad.thevault",
     "productName": "The Vault",
+    "icon": "public/vault-icon.png",
     "asar": true,
     "directories": {
       "output": "dist"
@@ -48,6 +49,13 @@
         "to": "mcp",
         "filter": [
           "**/*"
+        ]
+      },
+      {
+        "from": "../../skills",
+        "to": "skills",
+        "filter": [
+          "*.md"
         ]
       }
     ]

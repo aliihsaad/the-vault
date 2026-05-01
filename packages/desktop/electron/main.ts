@@ -64,7 +64,7 @@ app.whenReady().then(() => {
 
 const rendererPath = join(__dirname, '../dist-renderer');
 const publicPath = app.isPackaged ? rendererPath : join(__dirname, '../public');
-const skillsPath = resolve(__dirname, '../../..', 'skills');
+const skillsPath = app.isPackaged ? join(process.resourcesPath, 'skills') : resolve(__dirname, '../../..', 'skills');
 // Prefer the standalone MCP server because it carries native modules compiled
 // for normal Node, not Electron's ABI. In packaged builds it is copied into
 // resources/mcp with its own Node runtime so users do not need the repo, pnpm,
@@ -1635,7 +1635,7 @@ app.whenReady().then(() => {
   const claudeMdPath = join(homedir(), '.claude', 'CLAUDE.md');
   const codexConfigPath = join(homedir(), '.codex', 'config.toml');
   const claudeSkillPath = resolve(skillsPath, 'claude-vault-skill.md');
-  const codexAgentsPath = resolve(__dirname, '../../..', 'AGENTS.md');
+  const codexAgentsPath = join(homedir(), '.codex', 'AGENTS.md');
   const codexSkillPath = resolve(skillsPath, 'codex-vault-skill.md');
 
   async function fileExists(filePath: string): Promise<boolean> {

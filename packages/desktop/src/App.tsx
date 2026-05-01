@@ -133,6 +133,8 @@ const TAB_META: Record<AppTab, { title: string; description: string }> = {
   },
 };
 
+const vaultIconSrc = `${import.meta.env.BASE_URL}vault-icon.png`;
+
 function App() {
   const [activeTab, setActiveTab] = useState<AppTab>('dashboard');
   const [vaultStatus, setVaultStatus] = useState<VaultStatus | null>(null);
@@ -196,7 +198,7 @@ function App() {
         <aside className="sidebar-shell">
           <div className="sidebar-brand">
             <div className="brand-mark">
-              <img src="/vault-icon.png" alt="Vault Logo" style={{ width: 24, height: 24, borderRadius: 4 }} />
+              <img src={vaultIconSrc} alt="Vault Logo" style={{ width: 24, height: 24, borderRadius: 4 }} />
             </div>
             <div className="brand-copy">
               <strong>Vault OS</strong>
