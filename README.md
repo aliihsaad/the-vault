@@ -1,59 +1,179 @@
 # The Vault
 
-The Vault is a local-first memory operating system for engineering teams, coding agents, and long-running AI workflows. It captures durable project context, recalls the right memories at the right time, and exposes the same core memory layer through a CLI, an MCP server, and a desktop console.
+[![Windows Installer Release](https://github.com/aliihsaad/the-vault/actions/workflows/release-windows.yml/badge.svg)](https://github.com/aliihsaad/the-vault/actions/workflows/release-windows.yml)
+![Node](https://img.shields.io/badge/node-22%2B-339933)
+![pnpm](https://img.shields.io/badge/pnpm-workspace-F69220)
+![Electron](https://img.shields.io/badge/desktop-Electron-47848F)
+![MCP](https://img.shields.io/badge/MCP-vault--memory-6D5EFc)
+![License](https://img.shields.io/badge/license-MIT-green)
 
-The project is built for a practical problem: modern AI-assisted work loses context between sessions. The Vault keeps implementation decisions, handoffs, task results, project relationships, and lifecycle state in a structured local store so agents can continue work without rediscovering the same facts.
+The Vault is a local-first memory operating system for AI-assisted work. It gives coding agents and human operators a durable project memory layer: decisions, handoffs, implementation summaries, task results, project relationships, and recallable context survive across sessions instead of being lost in chat history.
 
-## What It Does
+It ships as a TypeScript workspace with a shared core engine, command-line interface, MCP server, and Electron desktop console. Windows releases also bundle their own `vault-memory` MCP runtime, so installed users can connect Codex, Claude Desktop, or Claude Code without keeping the source repo on disk.
 
-- Stores structured memory items with project, type, subject, summary, tags, keywords, related files, and related item links.
-- Retrieves ranked context using project-aware recall, related-memory expansion, promoted decisions, and proactive same-project surfacing.
-- Tracks project identity, descriptions, relationships, merge proposals, and naming drift.
-- Runs lifecycle maintenance for low-signal memories with reversible states: `active -> stale -> archived -> pending_delete`.
-- Supports delegated task records with model routing, task results, retry metadata, and reusable saved summaries.
-- Provides multiple interfaces over one core: TypeScript API, command-line tool, MCP server, and Electron desktop app.
+## What The Vault Is
 
-## Architecture
+The Vault is a memory layer outside the model. It preserves project context across sessions, tools, and models so Codex, Claude, desktop workflows, and future agents can work from the same local source of truth.
 
-This repository is a `pnpm` workspace.
+At a product level, The Vault does four jobs:
+
+- captures important project memory in a structured format
+- recalls only the most relevant context when a new session starts
+- keeps memory usable through project hygiene and lifecycle controls
+- connects multiple AI clients to one local memory system through MCP
+
+## Project Tags
+
+`local-first` `ai-memory` `agent-memory` `mcp-server` `codex` `claude` `electron` `sqlite` `typescript` `developer-tools` `workflow-continuity` `knowledge-management` `task-delegation` `project-context`
+
+## Why It Exists
+
+AI coding sessions are productive but forgetful. The next agent often has to rediscover architecture decisions, bug causes, deployment notes, naming decisions, and unfinished work. The Vault turns that context into structured local memory that can be saved, ranked, recalled, curated, and reused by multiple clients.
+
+The goal is not to replace a repo, issue tracker, or documentation site. The Vault fills the space between them: high-signal operational memory for ongoing work.
+
+## Who This Is For
+
+- Developers using Codex, Claude Code, Claude Desktop, or other MCP-aware tools.
+- People juggling multiple projects where decisions and handoffs get scattered.
+- AI-assisted workflows that need continuity across sessions and agents.
+- Local-first users who do not want memory locked inside one chat product.
+- Small teams that want durable implementation context without adopting a heavy knowledge system.
+
+## Use Cases
+
+- Continue feature work across Codex, Claude, and desktop sessions without re-explaining the project.
+- Save implementation handoffs with exact files touched, decisions made, and next steps.
+- Record canonical project decisions such as naming, architecture, release strategy, and integration rules.
+- Recall relevant prior context before debugging or changing a feature.
+- Maintain project identity when names drift or duplicate project records appear.
+- Keep local task results, summaries, and delegated research attached to the right project.
+- Inspect and curate memory through a desktop dashboard instead of raw files.
+- Connect MCP clients to one shared local memory source.
+
+## How It Works
 
 ```text
-packages/
-  core/          Shared Vault engine, database, ranking, services, task system
-  cli/           Command-line entry point over core APIs
-  mcp-server/    MCP stdio server for agent integrations
-  desktop/       Electron and React desktop console
-docs/            Protocol notes, implementation plans, project status
-skills/          Agent-facing Vault memory operating guides
-scripts/         Deployment and one-off maintenance scripts
+Codex / Claude / Agent
+        |
+        v
+Vault MCP server
+        |
+        v
+Recall engine <------> Memory store
+        |                    ^
+        v                    |
+Task executor --------> Saved results
 ```
 
-The core package owns persistence, rules, services, and public APIs. CLI, MCP, and desktop packages are intentionally thin wrappers over `@the-vault/core`.
+The MCP server is the bridge between external clients and The Vault. The recall engine ranks and prunes stored memory into a usable context pack. The task executor can run queued Vault work and save durable results back into the memory store.
 
-## Current Status
+## Typical Workflow
 
-The Vault is an active local-first engineering project. The core memory system, task delegation records, MCP integration, project maintenance, lifecycle controls, and desktop surfaces are in place. Some packaging paths are still being hardened, especially Electron native module rebuild behavior on Windows.
+1. Start a new session in Codex, Claude, or the desktop app.
+2. The agent recalls the relevant project context from The Vault.
+3. Work happens in the repo, client, or desktop workflow.
+4. The agent saves decisions, changed files, bug findings, task results, and next steps.
+5. Another agent or future session can continue from the saved context instead of rediscovering it.
 
-The repository is private by default. Do not commit local vault data, API keys, environment files, generated builds, or machine-specific adapter state.
+## What Makes It Different
 
-## Requirements
+- Memory is externalized from the model instead of being trapped inside one chat session.
+- Recall is ranked and pruned, not dumped wholesale into context.
+- Multiple clients share one local source of truth.
+- Project identity, duplicate cleanup, and lifecycle hygiene are first-class product concerns.
+- The same core memory layer is available through desktop, MCP, CLI, and TypeScript APIs.
 
-- Node.js 22 or newer recommended
-- `pnpm`
-- SQLite native dependency support through `better-sqlite3`
-- GitHub CLI only if you are publishing or pushing checkpoints
+## Trust And Control
 
-On Windows, Electron packaging can lock `better_sqlite3.node` if another process is using it. Stop running Vault/Electron/MCP processes before packaging release builds.
+- Storage is local-first: memory files and SQLite state live on the user's machine.
+- Destructive or structural changes are designed to pass through human review.
+- Lifecycle states are reversible before final deletion.
+- Client setup backs up existing config files before changing them.
+- The desktop setup flow edits only the Vault-specific MCP entry and leaves other client config intact.
 
-## Installation
+## Core Concepts
+
+| Concept | Meaning |
+| --- | --- |
+| Project memory | Structured records tied to a project: decisions, sessions, plans, handoffs, artifacts, references, and summaries. |
+| Recall packs | Ranked, compact sets of relevant memories returned for a task or session. |
+| MCP clients | Tools such as Codex, Claude Desktop, and Claude Code that connect to Vault through the `vault-memory` MCP server. |
+| Agent skills | Client-facing guide files that teach agents when to recall, when to save, and how to structure memory. |
+| Task executor | A Vault runtime that can process queued tasks, store results, and expose task status through MCP and desktop surfaces. |
+| Project hygiene | Naming, relationship, duplicate, and canonical-decision workflows that keep project memory organized. |
+| Lifecycle states | Reversible memory states such as `active`, `stale`, `archived`, and `pending_delete` before final deletion. |
+
+## Feature Overview
+
+| Area | What The Vault Provides |
+| --- | --- |
+| Structured memory | Saves typed records with project, subject, summary, tags, keywords, priority, status, related files, and next steps. |
+| Smart recall | Returns ranked memory packs using project match, keywords, tags, memory type, recency, promoted decisions, and related context. |
+| Desktop console | Electron app with dashboard, recall console, memory browser, activity logs, settings, agent controls, and client setup. |
+| MCP integration | `vault-memory` MCP server for external agents and clients. |
+| One-click client setup | Desktop Settings -> Client setup can connect Codex, Claude Desktop, and Claude Code to the bundled runtime. |
+| CLI access | Command-line entry point over the same core APIs. |
+| Project hygiene | Project descriptions, project listing, naming drift handling, duplicate project merging, and relationship tracking. |
+| Lifecycle controls | Reversible memory states such as `active`, `stale`, `archived`, and `pending_delete` before deletion. |
+| Task records | Queued task metadata, model routing, executor status, task results, retries, and saved summaries. |
+| Local privacy | SQLite database and memory files stay on the user's machine unless the user explicitly pushes or exports them. |
+
+## Interfaces
+
+The Vault is built around one shared core package and several thin interfaces:
+
+- **Desktop app**: the primary operator UI for installed users.
+- **MCP server**: exposes memory tools to Codex, Claude Desktop, Claude Code, and other MCP clients.
+- **CLI**: useful for quick local checks and scripts.
+- **TypeScript core**: reusable services for saving, recalling, ranking, project maintenance, tasks, and settings.
+
+## Screens And Workflows
+
+The desktop app currently includes:
+
+- **Overview**: project and memory status at a glance.
+- **Recall Console**: query memory and create structured saves.
+- **Memory Bank**: browse and inspect saved memory items.
+- **Vault Agent**: inspect backend/task activity and local adapter state.
+- **Agent Review**: review project proposals and pending-delete flows.
+- **Activity**: inspect operational logs.
+- **Vault Files**: browse saved memory files on disk.
+- **Settings**: configure enrichment, local adapters, lifecycle behavior, and client setup.
+- **Client setup**: connect/disconnect Codex, Claude Desktop, Claude Code, install agent guide references, and troubleshoot MCP.
+
+## Install For Normal Use
+
+For Windows users, use the GitHub Release installer:
+
+1. Open the repository's **Releases** page.
+2. Download `The-Vault-<version>-win-x64.exe`.
+3. Run the installer.
+4. Open **The Vault**.
+5. Go to **Settings -> Client setup**.
+6. Connect Codex, Claude Desktop, or Claude Code.
+7. Restart the client so it launches the updated `vault-memory` server.
+
+Do not download the `.blockmap` file unless you are debugging release assets. It is used by updater tooling, not manual installation.
+
+Installed builds store user data separately from the app installation. Updating the app should not delete an existing vault database or memory files.
+
+## Install From Source
+
+Requirements:
+
+- Node.js 22 or newer
+- pnpm 10 or newer
+- Git
+- Windows if you want to build the NSIS installer locally
+
+Install dependencies:
 
 ```powershell
 pnpm install
 ```
 
-## Development
-
-Run the desktop app:
+Run the desktop app in development:
 
 ```powershell
 pnpm --filter @the-vault/desktop dev
@@ -71,83 +191,36 @@ Run the MCP server over stdio:
 pnpm --filter @the-vault/mcp-server dev
 ```
 
-## Quality Checks
+## MCP Setup
 
-Run the test suite:
+### Installed Desktop App
 
-```powershell
-pnpm test
+Installed releases include a bundled MCP sidecar runtime:
+
+```text
+resources/mcp/node.exe
+resources/mcp/dist/index.js
 ```
 
-Run the TypeScript check:
+Use **Settings -> Client setup** in the desktop app. The UI writes only the Vault-specific MCP entry and keeps other client config entries intact. It also shows connection status and includes a troubleshooting panel.
 
-```powershell
-pnpm lint
-```
+### Source Checkout
 
-Build all workspace packages:
-
-```powershell
-pnpm build
-```
-
-The root build also deploys a standalone MCP bundle into `mcp-standalone/`. That folder is generated and intentionally ignored by Git.
-
-## Release Builds
-
-Windows installer releases are built by GitHub Actions from version tags:
-
-```powershell
-git tag v0.1.0
-git push origin v0.1.0
-```
-
-The release workflow builds the workspace, deploys the standalone MCP sidecar, verifies that the packaged app contains `resources/mcp/node.exe` and `resources/mcp/dist/index.js`, uploads the installer artifact, and creates the GitHub Release.
-
-You can also run the workflow manually from GitHub Actions with a `tag_name` such as `v0.1.0`.
-
-## Key Concepts
-
-### Memory Items
-
-Memory items are structured records. Common memory types include `session`, `summary`, `decision`, `plan`, `artifact`, `handoff`, and `reference`.
-
-High-quality memories should include:
-
-- A specific project name
-- A concise subject
-- A durable summary
-- Searchable keywords and tags
-- Related file paths when implementation work is involved
-- Next steps when work is incomplete
-
-### Project Hygiene
-
-The Vault treats project names as first-class data. It can list known projects, maintain descriptions, detect naming drift, propose relationships, and merge duplicate project identities through an explicit review path.
-
-### Task Delegation
-
-Tasks are persisted as records with type, priority, model route, prompt, context, result text, metadata, and retry state. Text task execution is intentionally bounded: task results are stored as analysis unless a separate tool path applies a mutation.
-
-### Lifecycle Management
-
-Low-signal memories are not deleted immediately. They move through reversible lifecycle states before any destructive deletion can happen. Final deletion requires explicit confirmation.
-
-## MCP Usage
-
-The MCP server exposes Vault operations to coding agents and other MCP clients. Typical capabilities include saving memories, recalling context, inspecting projects, reading task results, and reviewing project/lifecycle proposals.
-
-For a new machine or a new client setup, use the one-command installer:
+For development machines using the repo directly:
 
 ```powershell
 pnpm setup:mcp
 ```
 
-That command builds the core and MCP server, deploys the standalone MCP runtime, writes `vault-memory` entries for Claude Desktop, Claude Code, and Codex, backs up existing config files before changing them, and verifies the MCP initialize handshake.
+That command:
 
-Released desktop builds do not require a source checkout. The installer packages the standalone MCP runtime under the app resources and the desktop **Settings -> Client setup** page writes client configs to that bundled runtime.
+- builds `@the-vault/core` and `@the-vault/mcp-server`
+- deploys a standalone MCP runtime to `mcp-standalone/`
+- verifies an MCP initialize handshake
+- backs up existing client config files before editing
+- writes `vault-memory` entries for supported clients
 
-To configure only one client:
+Configure only one client:
 
 ```powershell
 pnpm setup:mcp -- --client codex
@@ -155,28 +228,208 @@ pnpm setup:mcp -- --client claude-desktop
 pnpm setup:mcp -- --client claude-code
 ```
 
-After setup, restart the client app or start a new CLI session so it launches the updated server.
-
-After building, the standalone MCP entry point is:
-
-```text
-mcp-standalone/dist/index.js
-```
-
-For development, use:
+Dry-run the setup without changing files:
 
 ```powershell
-pnpm --filter @the-vault/mcp-server dev
+pnpm setup:mcp:dry-run
 ```
+
+## Agent Skill Guides
+
+The repo includes agent-facing operating guides:
+
+- `skills/claude-vault-skill.md`
+- `skills/codex-vault-skill.md`
+
+Installed releases package these guide files under app resources. The desktop **Client setup** page can append references to:
+
+- Claude: `%USERPROFILE%\.claude\CLAUDE.md`
+- Codex: `%USERPROFILE%\.codex\AGENTS.md`
+
+The guides teach agents when to recall, when to save, how to structure memory, and how to use queued Vault tasks.
+
+## Memory Model
+
+Common memory types:
+
+- `session`
+- `summary`
+- `decision`
+- `plan`
+- `artifact`
+- `handoff`
+- `reference`
+
+High-quality memories should include:
+
+- project name
+- precise subject
+- concise reusable summary
+- 3-8 keywords
+- classification tags
+- related file paths for implementation work
+- next steps for incomplete work
+
+## Recall Model
+
+Recall is designed to return useful context, not every matching record. Ranking uses signals such as:
+
+- exact project match
+- subject and keyword overlap
+- tag overlap
+- memory type
+- priority
+- promoted or canonical status
+- recency
+- relationship expansion
+- lifecycle status
+
+Promoted and canonical memories are intentionally boosted because they represent durable project truths.
+
+## Project Hygiene
+
+The Vault treats project identity as data, not just a folder name. It supports:
+
+- project listing
+- project descriptions
+- project relationship records
+- duplicate and old-name cleanup
+- canonical naming decisions
+- merge workflows for duplicated project entries
+
+This matters because long-running AI work often creates naming drift across sessions and clients.
+
+## Lifecycle Management
+
+The Vault avoids immediate destructive cleanup. Low-signal records can move through reversible states:
+
+```text
+active -> stale -> archived -> pending_delete -> deleted
+```
+
+Deletion requires explicit confirmation. This keeps recall quality manageable without silently losing useful history.
+
+## Workspace Layout
+
+```text
+packages/
+  core/          Shared Vault engine, database, ranking, services, task system
+  cli/           Command-line entry point over core APIs
+  mcp-server/    MCP stdio server for agent integrations
+  desktop/       Electron and React desktop console
+
+docs/            Protocol notes, roadmap status, implementation plans
+skills/          Agent-facing Vault memory guides
+scripts/         MCP setup, deployment, and maintenance scripts
+.github/         Release workflow for Windows installer builds
+```
+
+Core logic belongs in `packages/core`. The CLI, MCP server, and desktop app should stay thin wrappers around shared core APIs.
+
+## Common Commands
+
+```powershell
+pnpm install
+pnpm lint
+pnpm test
+pnpm build
+pnpm --filter @the-vault/desktop dev
+pnpm --filter @the-vault/cli dev -- status
+pnpm --filter @the-vault/mcp-server dev
+pnpm setup:mcp
+```
+
+## Build And Release
+
+Build everything locally:
+
+```powershell
+pnpm build
+```
+
+The root build:
+
+1. builds core, CLI, and MCP packages
+2. deploys the standalone MCP runtime
+3. builds the Electron desktop app
+4. creates a Windows installer under `packages/desktop/dist/`
+
+Release builds are created by GitHub Actions when a version tag is pushed:
+
+```powershell
+git tag -a v0.1.2 -m "v0.1.2"
+git push origin v0.1.2
+```
+
+The workflow typechecks the repo, builds the installer, verifies the bundled MCP sidecar, uploads artifacts, and publishes a GitHub Release.
+
+## Data And Privacy
+
+The Vault is local-first:
+
+- memory data is stored locally
+- SQLite is used for registry and operational state
+- memory files live under the configured Vault root
+- client config writes are local machine changes
+- generated build output and local vault data should not be committed
+
+Secrets and machine-specific files should stay out of Git:
+
+- `.env*`
+- local Vault data
+- generated `dist/` folders
+- generated `mcp-standalone/`
+- client-local settings
+- API keys and adapter state
+
+## Troubleshooting
+
+### Desktop Opens But MCP Client Does Not See Vault
+
+Use **Settings -> Client setup -> Troubleshoot MCP**. Check that the configured client points to the bundled runtime for installed builds or `mcp-standalone/dist/index.js` for source checkouts.
+
+Restart Codex, Claude Desktop, or Claude Code after changing MCP config.
+
+### Codex Skill Shows Not Configured
+
+Open **Settings -> Client setup** and click **Install guide** under Codex skill. Installed builds write the guide reference to:
+
+```text
+%USERPROFILE%\.codex\AGENTS.md
+```
+
+Then refresh the connection status.
+
+### Windows Build Fails Around Native Modules
+
+`better-sqlite3` is a native dependency. Stop running desktop, MCP, and Node processes that may be holding `better_sqlite3.node`, then rebuild.
+
+### Installed App Uses Existing Dev Data
+
+That is expected when the installed app and source checkout resolve the same Vault root. App updates should not delete existing Vault data.
+
+## Current Limitations / Active Development
+
+The Vault is active and usable for local memory, MCP integration, desktop workflows, and Windows installer releases. It is still evolving, and the main active development areas are:
+
+- recall quality, ranking, and explanation of why items were returned
+- richer memory curation in the desktop UI
+- deeper analytics for usage, recall quality, and project activity
+- visual project relationship views
+- smoother first-run onboarding and client setup
+- release hardening for packaged desktop builds and native dependencies
+
+See `docs/master-plan-status.md` for a more detailed implementation status map.
 
 ## Repository Discipline
 
-- Keep domain logic in `packages/core`.
-- Keep generated folders out of commits: `dist/`, `dist-electron/`, `mcp-standalone/`, `node_modules/`, and coverage output.
-- Keep local state out of commits: `.env*`, `.agent/`, `.claude/settings.local.json`, and local vault data.
-- Use focused checkpoint commits with concise imperative messages.
+- Keep domain behavior in `packages/core`.
+- Keep interface packages thin.
+- Do not commit generated build output.
+- Do not commit local vault data or secrets.
+- Prefer focused commits with imperative subjects.
 - Do not add `Co-authored-by` trailers unless explicitly requested.
 
 ## License
 
-This project is licensed under the MIT License. See [LICENSE](LICENSE).
+The Vault is licensed under the MIT License. See [LICENSE](LICENSE).
