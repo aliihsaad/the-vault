@@ -11,20 +11,93 @@ The Vault is a local-first memory operating system for AI-assisted work. It give
 
 It ships as a TypeScript workspace with a shared core engine, command-line interface, MCP server, and Electron desktop console. Windows releases also bundle their own `vault-memory` MCP runtime, so installed users can connect Codex, Claude Desktop, or Claude Code without keeping the source repo on disk.
 
-## What The Vault Is
+## The 60-Second Version
 
-The Vault is a memory layer outside the model. It preserves project context across sessions, tools, and models so Codex, Claude, desktop workflows, and future agents can work from the same local source of truth.
+- AI agents forget between sessions, even when the project has a long history.
+- The Vault stores project memory outside the model, on your machine.
+- Agents ask the Vault MCP server for relevant context instead of reading the whole memory store.
+- Work can continue later from Codex, Claude Desktop, Claude Code, or another MCP client.
+- You stay in control because memory is local, inspectable, and important cleanup changes are reviewable.
 
-At a product level, The Vault does four jobs:
+## How It Feels To Use
 
-- captures important project memory in a structured format
-- recalls only the most relevant context when a new session starts
-- keeps memory usable through project hygiene and lifecycle controls
-- connects multiple AI clients to one local memory system through MCP
+| Without The Vault | With The Vault |
+| --- | --- |
+| Start a new AI session. | Start a new AI session. |
+| Re-explain the project state. | The agent recalls the current project state. |
+| Rediscover decisions and old bug causes. | The agent sees recent decisions, files touched, and next steps. |
+| Repeat handoff work manually. | The agent saves a new handoff for the next session. |
 
-## Project Tags
+The result is not magic memory. It is a practical continuity layer: the important project facts are saved, ranked, reviewed, and reused when they are relevant.
 
-`local-first` `ai-memory` `agent-memory` `mcp-server` `codex` `claude` `electron` `sqlite` `typescript` `developer-tools` `workflow-continuity` `knowledge-management` `task-delegation` `project-context`
+## Visual Overview
+
+### System Topology
+
+```text
+Codex / Claude / Agent
+        |
+        v
+Vault MCP Server
+        |
+        v
+Vault Core
+        |
+        +--> Memory Store
+        +--> Task Executor
+        +--> Desktop Console
+```
+
+### Cross-Agent Continuity
+
+```text
+Codex implements change
+        |
+        v
+Vault saves files touched, intent, decisions, next steps
+        |
+        v
+Claude recalls context later
+        |
+        v
+Claude reviews, debugs, or continues the work
+```
+
+### Recall Funnel
+
+```text
+Stored memories
+        |
+        v
+Candidate search
+        |
+        v
+Ranking and pruning
+        |
+        v
+Recall pack
+        |
+        v
+Injected into agent context
+```
+
+### Project Hygiene
+
+```text
+Naming drift / duplicate projects
+        |
+        v
+Vault detects related records
+        |
+        v
+Proposal generated
+        |
+        v
+Human review
+        |
+        v
+Canonical project memory
+```
 
 ## Why It Exists
 
@@ -40,6 +113,28 @@ The goal is not to replace a repo, issue tracker, or documentation site. The Vau
 - Local-first users who do not want memory locked inside one chat product.
 - Small teams that want durable implementation context without adopting a heavy knowledge system.
 
+## Real-World Scenarios
+
+### Resume a project after days or weeks
+
+Ask an agent to recall the project before it starts work. The Vault can surface the current phase, latest decisions, open issues, files touched, and saved next steps so the session starts from the real project state.
+
+### Switch between Codex and Claude
+
+One agent can implement a change and save the handoff. Later, another client can recall the same project context through MCP and continue from the saved intent, decisions, and file references.
+
+### Debug with historical context
+
+Before debugging, an agent can recall recent changes, related bug notes, prior fixes, and implementation files. That reduces time spent rediscovering what changed and why.
+
+### Keep project identity clean
+
+Long-running AI work can create naming drift: old project names, duplicate records, or inconsistent casing. The Vault tracks canonical project decisions, detects related records, and supports reviewable merge workflows.
+
+### Use Vault while juggling multiple projects
+
+Inactive projects stay warm. When you return, their decisions, handoffs, and next steps are still available without keeping every detail in your head or in a single chat thread.
+
 ## Use Cases
 
 - Continue feature work across Codex, Claude, and desktop sessions without re-explaining the project.
@@ -51,46 +146,33 @@ The goal is not to replace a repo, issue tracker, or documentation site. The Vau
 - Inspect and curate memory through a desktop dashboard instead of raw files.
 - Connect MCP clients to one shared local memory source.
 
-## How It Works
-
-```text
-Codex / Claude / Agent
-        |
-        v
-Vault MCP server
-        |
-        v
-Recall engine <------> Memory store
-        |                    ^
-        v                    |
-Task executor --------> Saved results
-```
-
-The MCP server is the bridge between external clients and The Vault. The recall engine ranks and prunes stored memory into a usable context pack. The task executor can run queued Vault work and save durable results back into the memory store.
-
-## Typical Workflow
-
-1. Start a new session in Codex, Claude, or the desktop app.
-2. The agent recalls the relevant project context from The Vault.
-3. Work happens in the repo, client, or desktop workflow.
-4. The agent saves decisions, changed files, bug findings, task results, and next steps.
-5. Another agent or future session can continue from the saved context instead of rediscovering it.
-
 ## What Makes It Different
 
-- Memory is externalized from the model instead of being trapped inside one chat session.
-- Recall is ranked and pruned, not dumped wholesale into context.
-- Multiple clients share one local source of truth.
-- Project identity, duplicate cleanup, and lifecycle hygiene are first-class product concerns.
-- The same core memory layer is available through desktop, MCP, CLI, and TypeScript APIs.
+The Vault is not:
+
+- a chat history archive
+- a generic notes app
+- a replacement for GitHub issues or documentation
+- memory locked inside one model provider
+- a dump of every saved note into every prompt
+
+The Vault is:
+
+- an external project memory layer
+- local-first by default
+- MCP-accessible from multiple clients
+- ranked and pruned recall for agent context
+- cross-agent continuity for AI-assisted work
+- project lifecycle hygiene for naming drift, duplicates, and cleanup
 
 ## Trust And Control
 
-- Storage is local-first: memory files and SQLite state live on the user's machine.
-- Destructive or structural changes are designed to pass through human review.
-- Lifecycle states are reversible before final deletion.
+- Storage is local-first: memory files and SQLite state live on your machine.
+- MCP clients receive recall packs, not the entire memory store.
+- Destructive cleanup uses lifecycle states and review before final deletion.
 - Client setup backs up existing config files before changing them.
 - The desktop setup flow edits only the Vault-specific MCP entry and leaves other client config intact.
+- The desktop UI lets you inspect saved memory, file placement, activity logs, project proposals, and pending-delete flows.
 
 ## Core Concepts
 
@@ -260,15 +342,20 @@ Common memory types:
 - `handoff`
 - `reference`
 
-High-quality memories should include:
+## Memory Quality Principles
 
-- project name
+A good memory is specific enough to help a future agent act without re-reading the whole repo. Include:
+
+- exact project name
 - precise subject
-- concise reusable summary
-- 3-8 keywords
-- classification tags
-- related file paths for implementation work
-- next steps for incomplete work
+- what changed
+- why it changed
+- files touched
+- decisions made
+- next steps
+- tags and keywords
+
+High-quality memory improves future recall. Vague saves create vague recall packs; specific saves give agents concrete project state, file context, and next actions.
 
 ## Recall Model
 
@@ -408,18 +495,32 @@ Then refresh the connection status.
 
 That is expected when the installed app and source checkout resolve the same Vault root. App updates should not delete existing Vault data.
 
-## Current Limitations / Active Development
+## Current Maturity
 
-The Vault is active and usable for local memory, MCP integration, desktop workflows, and Windows installer releases. It is still evolving, and the main active development areas are:
+The Vault is usable today for:
 
-- recall quality, ranking, and explanation of why items were returned
-- richer memory curation in the desktop UI
-- deeper analytics for usage, recall quality, and project activity
-- visual project relationship views
-- smoother first-run onboarding and client setup
-- release hardening for packaged desktop builds and native dependencies
+- local memory
+- MCP integration
+- desktop workflows
+- client setup
+- recall and save flows
+- task records
+- Windows installer releases
+
+It is still evolving in these areas:
+
+- recall explainability
+- richer graph and project relationship views
+- analytics for usage, recall quality, and project activity
+- onboarding polish
+- release hardening
+- deeper memory curation
 
 See `docs/master-plan-status.md` for a more detailed implementation status map.
+
+## Project Tags
+
+`local-first` `ai-memory` `agent-memory` `mcp-server` `codex` `claude` `electron` `sqlite` `typescript` `developer-tools` `workflow-continuity` `knowledge-management` `task-delegation` `project-context`
 
 ## Repository Discipline
 
