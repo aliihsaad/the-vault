@@ -273,7 +273,10 @@ server.tool(
   },
   async (args) => {
     try {
-      const results = vault.getLatest(args.project, args.limit);
+      const results = vault.getLatest(args.project, args.limit, {
+        logActivity: true,
+        sourceClient: 'mcp',
+      });
       return {
         content: [{
           type: 'text' as const,
@@ -303,7 +306,10 @@ server.tool(
   },
   async (args) => {
     try {
-      const detail = vault.getMemoryDetail(args.item_uid);
+      const detail = vault.getMemoryDetail(args.item_uid, {
+        logActivity: true,
+        sourceClient: 'mcp',
+      });
       if (!detail) {
         return {
           content: [{ type: 'text' as const, text: `Memory item not found: ${args.item_uid}` }],
@@ -824,7 +830,10 @@ server.tool(
   },
   async (args) => {
     try {
-      const briefing = vault.getProjectBriefing(args.project, args.keywords, args.limit || 5);
+      const briefing = vault.getProjectBriefing(args.project, args.keywords, args.limit || 5, {
+        logActivity: true,
+        sourceClient: 'mcp',
+      });
 
       return {
         content: [{

@@ -29,7 +29,7 @@ import {
   markMemoryPendingDelete,
   confirmMemoryDelete,
 } from './services/retrieve.service.js';
-import { getRecentLogs } from './services/log.service.js';
+import { getRecentLogs, logActivity } from './services/log.service.js';
 import {
   createTask as createTaskService,
   findTasks as findTasksService,
@@ -195,17 +195,55 @@ export class Vault {
   /**
    * Get the N most recent memory items.
    */
-  getLatest(project?: string, limit?: number): MemoryItem[] {
+  getLatest(project?: string, limit?: number, options?: RetrievalActivityOptions): MemoryItem[] {
     this.ensureInitialized();
-    return getLatest(this.db, project, limit);
+    const startTime = Date.now();
+    const results = getLatest(this.db, project, limit);
+    if (options?.logActivity) {
+      logActivity(this.db, this.logsPath, {
+        sourceClient: options.sourceClient ?? 'system',
+        project,
+        actionType: 'recall',
+        status: 'success',
+        latencyMs: Date.now() - startTime,
+        message: project
+          ? `Retrieved ${results.length} latest memory item(s) for ${project}`
+          : `Retrieved ${results.length} latest memory item(s)`,
+        metadata: {
+          recallKind: 'latest',
+          requestedLimit: limit ?? 10,
+          resultCount: results.length,
+          itemUids: results.map((item) => item.itemUid),
+        },
+      });
+    }
+    return results;
   }
 
   /**
    * Get full detail for a memory item (with file content).
    */
-  getMemoryDetail(itemUid: string): MemoryItemDetail | null {
+  getMemoryDetail(itemUid: string, options?: RetrievalActivityOptions): MemoryItemDetail | null {
     this.ensureInitialized();
-    return getMemoryDetail(this.db, itemUid);
+    const startTime = Date.now();
+    const detail = getMemoryDetail(this.db, itemUid);
+    if (detail && options?.logActivity) {
+      logActivity(this.db, this.logsPath, {
+        sourceClient: options.sourceClient ?? 'system',
+        project: detail.project,
+        actionType: 'recall',
+        targetItemId: detail.itemUid,
+        status: 'success',
+        latencyMs: Date.now() - startTime,
+        message: `Retrieved memory detail: ${detail.title}`,
+        metadata: {
+          recallKind: 'detail',
+          itemUid: detail.itemUid,
+          memoryType: detail.memoryType,
+        },
+      });
+    }
+    return detail;
   }
 
   /**
@@ -539,9 +577,48 @@ export class Vault {
     return executeAutoPromotionService(this.db, this.logsPath);
   }
 
-  getProjectBriefing(project: string, keywords?: string[], limit?: number): ProjectBriefing {
+  getProjectBriefing(
+    project: string,
+    keywords?: string[],
+    limit?: number,
+    options?: RetrievalActivityOptions,
+  ): ProjectBriefing {
     this.ensureInitialized();
-    return buildProjectBriefingService(this.db, project, keywords, limit);
+    const startTime = Date.now();
+    const briefing = buildProjectBriefingService(this.db, project, keywords, limit);
+    if (options?.logActivity) {
+      const itemUids = [
+        ...briefing.promotedDecisions,
+        ...briefing.activePlans,
+        ...briefing.recentSummaries,
+        ...briefing.recentHandoffs,
+        ...briefing.promotedItems,
+        ...briefing.proactiveContext,
+      ].map((item) => item.itemUid);
+
+      logActivity(this.db, this.logsPath, {
+        sourceClient: options.sourceClient ?? 'system',
+        project: briefing.project,
+        actionType: 'recall',
+        status: 'success',
+        latencyMs: Date.now() - startTime,
+        message: `Retrieved project briefing for ${briefing.project}`,
+        metadata: {
+          recallKind: 'project_briefing',
+          keywords: keywords ?? [],
+          requestedLimit: limit ?? 5,
+          resultCount: new Set(itemUids).size,
+          promotedDecisionCount: briefing.promotedDecisions.length,
+          activePlanCount: briefing.activePlans.length,
+          recentSummaryCount: briefing.recentSummaries.length,
+          recentHandoffCount: briefing.recentHandoffs.length,
+          promotedItemCount: briefing.promotedItems.length,
+          proactiveContextCount: briefing.proactiveContext.length,
+          itemUids: Array.from(new Set(itemUids)),
+        },
+      });
+    }
+    return briefing;
   }
 
   requestClusterSummary(itemUids: string[], queryContext?: string, project?: string): VaultTask | null {
@@ -620,4 +697,9 @@ export class Vault {
       );
     }
   }
+}
+
+interface RetrievalActivityOptions {
+  logActivity?: boolean;
+  sourceClient?: string;
 }

@@ -572,6 +572,38 @@ describe('task delegation system', () => {
     ).toBe(true);
   });
 
+  it('logs agent retrieval tools as recall activity only when explicitly requested', () => {
+    const saved = vault.saveMemory({
+      title: 'Agent recall telemetry note',
+      project: 'Vault',
+      memoryType: 'summary',
+      subject: 'agent recall telemetry',
+      summary: 'Verifies MCP read tools show up as recall activity without desktop self-noise.',
+      tags: ['telemetry'],
+      keywords: ['recall', 'activity'],
+      sourceApp: 'codex',
+    });
+
+    vault.getLatest('Vault', 5);
+    vault.getMemoryDetail(saved.item.itemUid);
+    vault.getProjectBriefing('Vault', ['telemetry'], 5);
+    expect(vault.getRecentLogs(20, { actionType: 'recall' })).toHaveLength(0);
+
+    vault.getLatest('Vault', 5, { logActivity: true, sourceClient: 'mcp' });
+    vault.getMemoryDetail(saved.item.itemUid, { logActivity: true, sourceClient: 'mcp' });
+    vault.getProjectBriefing('Vault', ['telemetry'], 5, { logActivity: true, sourceClient: 'mcp' });
+
+    const recallLogs = vault.getRecentLogs(10, { actionType: 'recall' });
+    expect(recallLogs).toHaveLength(3);
+    expect(recallLogs.map((log) => log.sourceClient)).toEqual(['mcp', 'mcp', 'mcp']);
+    expect(recallLogs.map((log) => log.project)).toEqual(['Vault', 'Vault', 'Vault']);
+    expect(recallLogs.map((log) => log.metadata?.recallKind).sort()).toEqual([
+      'detail',
+      'latest',
+      'project_briefing',
+    ]);
+  });
+
   it('builds project briefings and creates summarize tasks for memory clusters', () => {
     const first = vault.saveMemory({
       title: 'Project kickoff handoff',
