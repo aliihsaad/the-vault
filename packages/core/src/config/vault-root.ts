@@ -4,13 +4,15 @@
 // ============================================================================
 
 import { existsSync, mkdirSync } from 'node:fs';
+import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { getProjectSubdirectories } from '../rules/naming.js';
 
 /**
- * The default Vault root path.
+ * The default Vault root path. Resolves to `<user-home>/Vault` so installs
+ * work for any user without hand-editing config.
  */
-export const DEFAULT_VAULT_ROOT = 'C:\\Users\\Mini\\Vault';
+export const DEFAULT_VAULT_ROOT = join(homedir(), 'Vault');
 
 /**
  * Top-level directories that should exist in the Vault root.

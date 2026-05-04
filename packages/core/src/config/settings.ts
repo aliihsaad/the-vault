@@ -5,6 +5,7 @@
 
 import { eq } from 'drizzle-orm';
 import { settings } from '../database/schema.js';
+import { DEFAULT_VAULT_ROOT } from './vault-root.js';
 import { now } from '../utils/datetime.js';
 import type { BetterSQLite3Database } from 'drizzle-orm/better-sqlite3';
 import type * as schema from '../database/schema.js';
@@ -15,7 +16,7 @@ type DB = BetterSQLite3Database<typeof schema>;
  * Default settings seeded on first initialization.
  */
 const DEFAULT_SETTINGS: Record<string, unknown> = {
-  vault_root: 'C:\\Users\\Mini\\Vault',
+  vault_root: DEFAULT_VAULT_ROOT,
   openrouter_api_key: '',
   enrichment_model: '',
   enrichment_enabled: false,
