@@ -54,7 +54,7 @@ export const FindMemoryQuerySchema = z.object({
   sourceApp: SourceAppSchema.optional(),
   dateFrom: z.string().optional(),
   dateTo: z.string().optional(),
-  limit: z.number().int().min(1).max(100).optional().default(20),
+  limit: z.number().int().min(1).max(1000).optional().default(20),
   offset: z.number().int().min(0).optional().default(0),
 });
 

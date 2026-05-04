@@ -266,7 +266,7 @@ export function MemoryView({
     setError(null);
 
     try {
-      const response = await window.vaultAPI.findMemory({ limit: 120 });
+      const response = await window.vaultAPI.findMemory({ limit: 500 });
       if (!response.success) {
         throw new Error(response.error || 'Failed to load memories');
       }
@@ -318,7 +318,7 @@ export function MemoryView({
   }
 
   async function refreshMemoryList(uid?: string) {
-    const response = await window.vaultAPI.findMemory({ limit: 120 });
+    const response = await window.vaultAPI.findMemory({ limit: 500 });
     if (!response.success) {
       throw new Error(response.error || 'Failed to refresh memory list');
     }
