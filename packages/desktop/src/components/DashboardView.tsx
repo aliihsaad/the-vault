@@ -3,14 +3,27 @@ import { useEffect, useMemo, useState } from 'react';
 import { formatDistanceToNow } from 'date-fns';
 import {
   BarChart3,
+  Bug,
   Clock3,
   Coins,
   FolderKanban,
+  Hammer,
+  Lightbulb,
+  ListChecks,
+  Microscope,
+  Minus,
+  MoonStar,
+  PencilRuler,
+  Rocket,
+  Search,
   Sparkles,
+  TestTube2,
   TrendingDown,
+  TrendingUp,
   Waypoints,
   Inbox,
   Trash2,
+  Wrench,
 } from 'lucide-react';
 import { DayGroupedList } from './DayGroupedList.js';
 
@@ -44,6 +57,9 @@ export function DashboardView({ vaultStatus, onOpenReview }: DashboardViewProps)
   const [settings, setSettings] = useState<VaultSettings | null>(null);
   const [pendingProposalCount, setPendingProposalCount] = useState(0);
   const [pendingDeleteCount, setPendingDeleteCount] = useState(0);
+  const [momentum, setMomentum] = useState<VaultProjectMomentum[]>([]);
+  const [openLoops, setOpenLoops] = useState<VaultOpenLoop[]>([]);
+  const [openLoopTagFilter, setOpenLoopTagFilter] = useState<string[]>([]);
 
   useEffect(() => {
     void hydrateOverview();
@@ -51,12 +67,22 @@ export function DashboardView({ vaultStatus, onOpenReview }: DashboardViewProps)
 
   async function hydrateOverview() {
     try {
-      const [latestResponse, logsResponse, settingsResponse, proposalsResponse, pendingDeleteResponse] = await Promise.all([
+      const [
+        latestResponse,
+        logsResponse,
+        settingsResponse,
+        proposalsResponse,
+        pendingDeleteResponse,
+        momentumResponse,
+        openLoopsResponse,
+      ] = await Promise.all([
         window.vaultAPI.getLatest(undefined, 8),
         window.vaultAPI.getRecentLogs(240),
         window.vaultAPI.getAllSettings(),
         window.vaultAPI.listProjectProposals({ status: 'pending' }),
         window.vaultAPI.findMemory({ status: 'pending_delete', limit: 200 }),
+        window.vaultAPI.getProjectsMomentum(),
+        window.vaultAPI.getOpenLoops(),
       ]);
 
       if (latestResponse.success) {
@@ -78,12 +104,22 @@ export function DashboardView({ vaultStatus, onOpenReview }: DashboardViewProps)
       if (pendingDeleteResponse.success && Array.isArray(pendingDeleteResponse.data)) {
         setPendingDeleteCount(pendingDeleteResponse.data.length);
       }
+
+      if (momentumResponse.success && Array.isArray(momentumResponse.data)) {
+        setMomentum(momentumResponse.data);
+      }
+
+      if (openLoopsResponse.success && Array.isArray(openLoopsResponse.data)) {
+        setOpenLoops(openLoopsResponse.data);
+      }
     } catch {
       setLatest([]);
       setLogs([]);
       setSettings(null);
       setPendingProposalCount(0);
       setPendingDeleteCount(0);
+      setMomentum([]);
+      setOpenLoops([]);
     }
   }
 
@@ -93,6 +129,10 @@ export function DashboardView({ vaultStatus, onOpenReview }: DashboardViewProps)
   const topProjects = [...(vaultStatus?.projects || [])]
     .sort((left, right) => (right.memoryCount || 0) - (left.memoryCount || 0))
     .slice(0, 5);
+  const momentumByName = useMemo(
+    () => new Map(momentum.map((entry) => [entry.name, entry])),
+    [momentum],
+  );
   const recallPacking = getRecallPackingSettings(settings);
 
   const recallLogs = useMemo(
@@ -271,7 +311,7 @@ export function DashboardView({ vaultStatus, onOpenReview }: DashboardViewProps)
           <div className="panel-header">
             <div>
               <div className="panel-title">Project radar</div>
-              <div className="panel-subtitle">Workspaces with the heaviest context footprint.</div>
+              <div className="panel-subtitle">Workspaces with the heaviest context footprint and weekly direction.</div>
             </div>
             <FolderKanban size={18} className="panel-icon" />
           </div>
@@ -280,21 +320,36 @@ export function DashboardView({ vaultStatus, onOpenReview }: DashboardViewProps)
             <div className="empty-state">No projects detected in the vault.</div>
           ) : (
             <div className="project-list">
-              {topProjects.map((project) => (
-                <article key={project.name} className="project-row">
-                  <div>
-                    <div className="project-row-title">{project.name}</div>
-                    <div className="project-row-description">
-                      {project.description || 'No description stored for this project.'}
+              {topProjects.map((project) => {
+                const m = momentumByName.get(project.name);
+                return (
+                  <article key={project.name} className="project-row">
+                    <div>
+                      <div className="project-row-title">
+                        <span>{project.name}</span>
+                        {m ? <MomentumBadge momentum={m} /> : null}
+                      </div>
+                      <div className="project-row-description">
+                        {project.description || 'No description stored for this project.'}
+                      </div>
                     </div>
-                  </div>
-                  <strong className="project-row-count">{project.memoryCount || 0}</strong>
-                </article>
-              ))}
+                    <strong className="project-row-count">{project.memoryCount || 0}</strong>
+                  </article>
+                );
+              })}
             </div>
           )}
         </div>
       </section>
+
+      <OpenLoopsSection
+        loops={openLoops}
+        activeTagFilter={openLoopTagFilter}
+        onToggleTag={(tag) => setOpenLoopTagFilter((prev) => (
+          prev.includes(tag) ? prev.filter((entry) => entry !== tag) : [...prev, tag]
+        ))}
+        onClearTags={() => setOpenLoopTagFilter([])}
+      />
 
       <section className="section-grid">
         <div className="panel">
@@ -419,6 +474,48 @@ export function DashboardView({ vaultStatus, onOpenReview }: DashboardViewProps)
         )}
       </section>
     </div>
+  );
+}
+
+function MomentumBadge({ momentum }: { momentum: VaultProjectMomentum }) {
+  const { direction, delta, lastActivityAt } = momentum;
+
+  if (direction === 'inactive') {
+    const inactiveDays = lastActivityAt
+      ? Math.max(Math.floor((Date.now() - new Date(lastActivityAt).getTime()) / (24 * 60 * 60 * 1000)), 14)
+      : null;
+    const note = inactiveDays !== null ? `inactive ${inactiveDays}d` : 'inactive';
+    return (
+      <span className="momentum-badge momentum-badge-inactive" title={lastActivityAt ? `Last activity ${new Date(lastActivityAt).toLocaleDateString()}` : 'No activity recorded'}>
+        <MoonStar size={11} />
+        <span>{note}</span>
+      </span>
+    );
+  }
+
+  if (direction === 'up') {
+    return (
+      <span className="momentum-badge momentum-badge-up" title={`+${delta} memories vs prior 7 days`}>
+        <TrendingUp size={11} />
+        <span>+{delta} this week</span>
+      </span>
+    );
+  }
+
+  if (direction === 'down') {
+    return (
+      <span className="momentum-badge momentum-badge-down" title={`${delta} memories vs prior 7 days`}>
+        <TrendingDown size={11} />
+        <span>{delta} this week</span>
+      </span>
+    );
+  }
+
+  return (
+    <span className="momentum-badge momentum-badge-flat" title="No change vs prior 7 days">
+      <Minus size={11} />
+      <span>flat</span>
+    </span>
   );
 }
 
@@ -571,4 +668,183 @@ function formatCompactNumber(value: number): string {
   }
 
   return String(value);
+}
+
+const OPEN_LOOP_BUCKET_LABELS: Record<VaultOpenLoopBucket, { label: string; emoji: string }> = {
+  high: { label: 'High priority', emoji: '🔥' },
+  medium: { label: 'Medium', emoji: '🟡' },
+  low: { label: 'Low / older', emoji: '⚪' },
+};
+
+const OPEN_LOOP_BUCKET_ORDER: VaultOpenLoopBucket[] = ['high', 'medium', 'low'];
+
+function OpenLoopsSection({
+  loops,
+  activeTagFilter,
+  onToggleTag,
+  onClearTags,
+}: {
+  loops: VaultOpenLoop[];
+  activeTagFilter: string[];
+  onToggleTag: (tag: string) => void;
+  onClearTags: () => void;
+}) {
+  const distinctTags = useMemo(() => {
+    const map = new Map<string, number>();
+    for (const loop of loops) {
+      for (const tag of loop.tags) {
+        map.set(tag, (map.get(tag) || 0) + 1);
+      }
+    }
+    return Array.from(map.entries())
+      .sort((left, right) => right[1] - left[1])
+      .map(([tag]) => tag);
+  }, [loops]);
+
+  const filteredLoops = useMemo(() => {
+    if (activeTagFilter.length === 0) return loops;
+    return loops.filter((loop) => activeTagFilter.every((tag) => loop.tags.includes(tag)));
+  }, [loops, activeTagFilter]);
+
+  const bucketed = useMemo(() => {
+    const groups: Record<VaultOpenLoopBucket, VaultOpenLoop[]> = { high: [], medium: [], low: [] };
+    for (const loop of filteredLoops) {
+      groups[loop.bucket].push(loop);
+    }
+    return groups;
+  }, [filteredLoops]);
+
+  return (
+    <section className="panel open-loops-panel">
+      <div className="panel-header">
+        <div>
+          <div className="panel-title">Open loops</div>
+          <div className="panel-subtitle">
+            Unfinished work surfaced from active memories with next steps and stagnant debugging items.
+          </div>
+        </div>
+        <ListChecks size={18} className="panel-icon" />
+      </div>
+
+      {loops.length === 0 ? (
+        <div className="empty-state">No open loops detected — everything active has been resolved or has no next steps.</div>
+      ) : (
+        <>
+          {distinctTags.length > 0 ? (
+            <div className="open-loops-tag-filter">
+              <span className="open-loops-tag-filter-label">Filter by tag</span>
+              <div className="open-loops-tag-chips">
+                {distinctTags.slice(0, 18).map((tag) => {
+                  const active = activeTagFilter.includes(tag);
+                  return (
+                    <button
+                      key={tag}
+                      type="button"
+                      className={`open-loops-tag-chip${active ? ' open-loops-tag-chip-active' : ''}`}
+                      onClick={() => onToggleTag(tag)}
+                    >
+                      {tag}
+                    </button>
+                  );
+                })}
+                {activeTagFilter.length > 0 ? (
+                  <button
+                    type="button"
+                    className="open-loops-tag-chip-clear"
+                    onClick={onClearTags}
+                  >
+                    Clear
+                  </button>
+                ) : null}
+              </div>
+            </div>
+          ) : null}
+
+          {filteredLoops.length === 0 ? (
+            <div className="empty-state">No open loops match the current tag filter.</div>
+          ) : (
+            <div className="open-loops-buckets">
+              {OPEN_LOOP_BUCKET_ORDER.map((bucket) => {
+                const items = bucketed[bucket];
+                if (items.length === 0) return null;
+                const meta = OPEN_LOOP_BUCKET_LABELS[bucket];
+                return (
+                  <div key={bucket} className={`open-loops-bucket open-loops-bucket-${bucket}`}>
+                    <div className="open-loops-bucket-header">
+                      <span className="open-loops-bucket-emoji" aria-hidden>{meta.emoji}</span>
+                      <span className="open-loops-bucket-label">{meta.label}</span>
+                      <span className="open-loops-bucket-count">{items.length}</span>
+                    </div>
+                    <ul className="open-loops-list">
+                      {items.map((loop) => (
+                        <OpenLoopRow key={loop.itemUid} loop={loop} />
+                      ))}
+                    </ul>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </>
+      )}
+    </section>
+  );
+}
+
+function OpenLoopRow({ loop }: { loop: VaultOpenLoop }) {
+  const ageLabel = loop.daysOpen <= 0 ? 'today' : `${loop.daysOpen}d`;
+  const firstNextStep = loop.nextSteps[0];
+  return (
+    <li className="open-loops-row">
+      <div className="open-loops-row-head">
+        <RoutineIcon routineType={loop.routineType} />
+        <span className="open-loops-row-title">{loop.title}</span>
+        <span className="open-loops-row-age" title={`Last updated ${new Date(loop.lastUpdated).toLocaleString()}`}>
+          {ageLabel}
+        </span>
+      </div>
+      <div className="open-loops-row-meta">
+        <span className="open-loops-row-project">{loop.project}</span>
+        {loop.recentlyReferenced ? (
+          <span className="open-loops-row-recent" title="Referenced within the last 3 days">
+            recently referenced
+          </span>
+        ) : null}
+        <span className="open-loops-row-score" title="Derived priority score">score {loop.score}</span>
+      </div>
+      {firstNextStep ? (
+        <div className="open-loops-row-next" title={loop.nextSteps.join(' • ')}>
+          → {firstNextStep}
+          {loop.nextSteps.length > 1 ? (
+            <span className="open-loops-row-next-more"> (+{loop.nextSteps.length - 1})</span>
+          ) : null}
+        </div>
+      ) : null}
+    </li>
+  );
+}
+
+function RoutineIcon({ routineType }: { routineType: VaultRoutineType | null }) {
+  const size = 12;
+  const iconClass = `open-loops-routine-icon open-loops-routine-${routineType ?? 'none'}`;
+  switch (routineType) {
+    case 'debugging':
+      return <Bug size={size} className={iconClass} aria-label="debugging" />;
+    case 'deployment':
+      return <Rocket size={size} className={iconClass} aria-label="deployment" />;
+    case 'planning':
+      return <ListChecks size={size} className={iconClass} aria-label="planning" />;
+    case 'testing':
+      return <TestTube2 size={size} className={iconClass} aria-label="testing" />;
+    case 'review':
+      return <Search size={size} className={iconClass} aria-label="review" />;
+    case 'implementation':
+      return <Hammer size={size} className={iconClass} aria-label="implementation" />;
+    case 'refactor':
+      return <Wrench size={size} className={iconClass} aria-label="refactor" />;
+    case 'brainstorming':
+      return <Lightbulb size={size} className={iconClass} aria-label="brainstorming" />;
+    default:
+      return <PencilRuler size={size} className={iconClass} aria-label="general" />;
+  }
 }

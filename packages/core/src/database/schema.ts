@@ -39,6 +39,12 @@ export const memoryItems = sqliteTable(
       .$defaultFn(() => new Date().toISOString()),
     lastAccessedAt: text('last_accessed_at'),
     accessCount: integer('access_count').notNull().default(0),
+    // Open-loops snooze: if set and in the future, the item is hidden from
+    // the open-loops panel. Filter-only — no schema impact on recall.
+    snoozedUntil: text('snoozed_until'),
+    // Resolution outcome: set by vault_resolve_loop. One of fixed, won't_fix,
+    // obsolete, duplicate. Null until the loop is closed.
+    outcome: text('outcome'),
   },
   (table) => [
     index('idx_memory_items_project').on(table.project),
@@ -49,6 +55,8 @@ export const memoryItems = sqliteTable(
     index('idx_memory_items_promoted').on(table.promoted),
     index('idx_memory_items_created_at').on(table.createdAt),
     index('idx_memory_items_updated_at').on(table.updatedAt),
+    index('idx_memory_items_snoozed_until').on(table.snoozedUntil),
+    index('idx_memory_items_outcome').on(table.outcome),
   ],
 );
 

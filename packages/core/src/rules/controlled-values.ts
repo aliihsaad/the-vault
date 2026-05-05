@@ -177,6 +177,21 @@ export type TaskPriority = (typeof TASK_PRIORITIES)[number];
 export const TaskPrioritySchema = z.enum(TASK_PRIORITIES);
 
 // ---------------------------------------------------------------------------
+// Outcome Values — set by vault_resolve_loop when closing an open loop.
+// Stored on memory_items.outcome (nullable). Only meaningful when status
+// is 'resolved'. See plan vm_-wkwx67j33XDx2aE Step 3.
+// ---------------------------------------------------------------------------
+export const OUTCOME_VALUES = [
+  'fixed',
+  'wont_fix',
+  'obsolete',
+  'duplicate',
+] as const;
+
+export type OutcomeValue = (typeof OUTCOME_VALUES)[number];
+export const OutcomeSchema = z.enum(OUTCOME_VALUES);
+
+// ---------------------------------------------------------------------------
 // Action Types (for activity_logs)
 // ---------------------------------------------------------------------------
 export const ACTION_TYPES = [
@@ -194,6 +209,7 @@ export const ACTION_TYPES = [
   'proposal_create',
   'proposal_accept',
   'proposal_reject',
+  'resolve_loop',
 ] as const;
 
 export type ActionType = (typeof ACTION_TYPES)[number];
@@ -222,3 +238,32 @@ export const PRIORITY_BOOST: Record<PriorityValue, number> = {
   normal: 0,
   low: -5,
 };
+
+// ---------------------------------------------------------------------------
+// Open-Loops scoring weights — derived priority bucket assignment for the
+// Overview "Open loops" panel. See plan vm_-wkwx67j33XDx2aE and addendum
+// vm_aoMAWT1zG56tt9M0. Pure query-side; not stored.
+// ---------------------------------------------------------------------------
+export const OPEN_LOOP_PRIORITY_WEIGHT: Record<PriorityValue, number> = {
+  critical: 20,
+  canonical: 20,
+  high: 10,
+  normal: 5,
+  low: 2,
+};
+
+export const OPEN_LOOP_ROUTINE_WEIGHT: Record<RoutineType, number> = {
+  debugging: 5,
+  deployment: 8,
+  review: 3,
+  implementation: 2,
+  refactor: 2,
+  testing: 2,
+  planning: 0,
+  brainstorming: -3,
+};
+
+export const OPEN_LOOP_RECENT_REFERENCE_BOOST = 5;
+export const OPEN_LOOP_RECENT_REFERENCE_DAYS = 3;
+export const OPEN_LOOP_BUCKET_HIGH_THRESHOLD = 15;
+export const OPEN_LOOP_BUCKET_MEDIUM_THRESHOLD = 5;

@@ -218,6 +218,45 @@ export function initializeSchema(dbPath: string): void {
     CREATE INDEX IF NOT EXISTS idx_tasks_created_at ON tasks(created_at);
     CREATE INDEX IF NOT EXISTS idx_tasks_parent_task_uid ON tasks(parent_task_uid);
   `);
+
+  // Idempotent additive migrations for columns introduced after the initial
+  // bootstrap. SQLite has no IF NOT EXISTS for ADD COLUMN, so we probe via
+  // PRAGMA and only run when missing. Existing databases pick up the column
+  // on next start; new databases match the CREATE TABLE definition.
+  applyAdditiveMigrations(raw);
+}
+
+function applyAdditiveMigrations(raw: Database.Database): void {
+  const ensureColumn = (
+    table: string,
+    column: string,
+    columnDef: string,
+    indexSql?: string,
+  ): void => {
+    const existing = raw
+      .prepare(`PRAGMA table_info(${table})`)
+      .all() as Array<{ name: string }>;
+    if (!existing.some((row) => row.name === column)) {
+      raw.exec(`ALTER TABLE ${table} ADD COLUMN ${columnDef};`);
+    }
+    if (indexSql) {
+      raw.exec(indexSql);
+    }
+  };
+
+  ensureColumn(
+    'memory_items',
+    'snoozed_until',
+    'snoozed_until TEXT',
+    'CREATE INDEX IF NOT EXISTS idx_memory_items_snoozed_until ON memory_items(snoozed_until);',
+  );
+
+  ensureColumn(
+    'memory_items',
+    'outcome',
+    'outcome TEXT',
+    'CREATE INDEX IF NOT EXISTS idx_memory_items_outcome ON memory_items(outcome);',
+  );
 }
 
 /**

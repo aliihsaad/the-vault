@@ -121,6 +121,8 @@ export function saveMemory(
     updatedAt: timestamp,
     lastAccessedAt: null,
     accessCount: 0,
+    snoozedUntil: null,
+    outcome: null,
   };
 
   // 5. Write Markdown file

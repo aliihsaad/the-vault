@@ -13,6 +13,7 @@ import {
   TaskTypeSchema,
   TaskStatusSchema,
   TaskPrioritySchema,
+  OutcomeSchema,
 } from './controlled-values.js';
 
 // ---------------------------------------------------------------------------
@@ -93,6 +94,17 @@ export const UpdateMemoryInputSchema = z.object({
 });
 
 export type ValidatedUpdateInput = z.infer<typeof UpdateMemoryInputSchema>;
+
+// ---------------------------------------------------------------------------
+// Resolve Loop Input (vault_resolve_loop)
+// ---------------------------------------------------------------------------
+export const ResolveLoopInputSchema = z.object({
+  itemUid: z.string().min(1).max(200),
+  outcome: OutcomeSchema,
+  resolutionNote: z.string().max(2000).optional(),
+});
+
+export type ValidatedResolveLoopInput = z.infer<typeof ResolveLoopInputSchema>;
 
 // ---------------------------------------------------------------------------
 // Create Task Input

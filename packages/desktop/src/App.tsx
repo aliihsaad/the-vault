@@ -258,6 +258,13 @@ function App() {
               <strong>{vaultStatus?.initialized ? 'Online' : loadingStatus ? 'Booting' : 'Offline'}</strong>
             </div>
           </div>
+
+          <div className="sidebar-version">
+            <span className="sidebar-version-label">Version</span>
+            <span className="sidebar-version-value text-mono">
+              {vaultStatus?.appVersion ? `v${vaultStatus.appVersion}` : '—'}
+            </span>
+          </div>
         </aside>
 
         <main className="workspace">

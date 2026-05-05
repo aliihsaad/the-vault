@@ -6,7 +6,7 @@
 import { eq, and, like, desc, gte, lte, sql } from 'drizzle-orm';
 import { existsSync, unlinkSync } from 'node:fs';
 import { memoryItems } from '../database/schema.js';
-import { FindMemoryQuerySchema, RecallQuerySchema } from '../rules/validation.js';
+import { FindMemoryQuerySchema, RecallQuerySchema, ResolveLoopInputSchema } from '../rules/validation.js';
 import { rankCandidates } from './ranking.service.js';
 import {
   readMemoryFile,
@@ -28,7 +28,18 @@ import type {
   MemoryPack,
   FindMemoryQuery,
   RecallQuery,
+  OpenLoop,
+  OpenLoopBucket,
+  ResolveLoopInput,
 } from '../types/index.js';
+import {
+  OPEN_LOOP_PRIORITY_WEIGHT,
+  OPEN_LOOP_ROUTINE_WEIGHT,
+  OPEN_LOOP_RECENT_REFERENCE_BOOST,
+  OPEN_LOOP_RECENT_REFERENCE_DAYS,
+  OPEN_LOOP_BUCKET_HIGH_THRESHOLD,
+  OPEN_LOOP_BUCKET_MEDIUM_THRESHOLD,
+} from '../rules/controlled-values.js';
 import type { BetterSQLite3Database } from 'drizzle-orm/better-sqlite3';
 import type * as schema from '../database/schema.js';
 
@@ -116,6 +127,8 @@ function mapRow(row: typeof memoryItems.$inferSelect): MemoryItem {
     updatedAt: row.updatedAt,
     lastAccessedAt: row.lastAccessedAt,
     accessCount: row.accessCount,
+    snoozedUntil: row.snoozedUntil,
+    outcome: row.outcome as MemoryItem['outcome'],
   };
 }
 
@@ -259,6 +272,7 @@ export async function recallContext(
     topMatches,
     totalCandidates: candidates.length,
     topScore: topMatches.length > 0 ? topMatches[0].score : 0,
+    openLoops: [],
   };
 
   const expandedPack = expandRecallWithRelated(db, pack, topMatches);
@@ -276,6 +290,14 @@ export async function recallContext(
 
   expandedPack.proactive = proactive;
   expandedPack.topScore = expandedPack.topMatches.length > 0 ? expandedPack.topMatches[0].score : 0;
+
+  // Step 5a: Surface open loops scoped to the recall query so skills can
+  // close-the-loop on every recall. See plan vm_-wkwx67j33XDx2aE Step 3.
+  // Cap to avoid swamping recall responses; skills only need the most
+  // urgent few. expandRecallWithRelated may have widened the result set
+  // beyond the original limit, so the cap is independent.
+  const OPEN_LOOPS_RECALL_CAP = 5;
+  expandedPack.openLoops = getOpenLoops(db, validated.project).slice(0, OPEN_LOOPS_RECALL_CAP);
 
   for (const match of expandedPack.topMatches) {
     const { item } = match;
@@ -467,6 +489,10 @@ export function updateMemory(
     setValues.relatedItemIdsJson = JSON.stringify(normalizeOrderedValues(updates.relatedItemIds));
   if (updates.relatedFiles !== undefined)
     setValues.relatedFilesJson = JSON.stringify(normalizeRelatedFiles(updates.relatedFiles));
+  if (updates.snoozedUntil !== undefined)
+    setValues.snoozedUntil = updates.snoozedUntil ?? null;
+  if (updates.outcome !== undefined)
+    setValues.outcome = updates.outcome ?? null;
 
   if (updates.title !== undefined && nextTitle !== row.title && row.vaultPath) {
     const nextVaultPath = rehomeMemoryFile(vaultRoot, {
@@ -718,4 +744,169 @@ export function confirmMemoryDelete(
   });
 
   return true;
+}
+
+// ---------------------------------------------------------------------------
+// getOpenLoops — Surface unfinished work using derived priority buckets
+//
+// Plan vm_-wkwx67j33XDx2aE + addendum vm_aoMAWT1zG56tt9M0. Pure query-side
+// scoring (no stored bucket). Sources: active memories with non-empty
+// next_steps, plus active debugging items (which signal unfinished work
+// even without explicit next steps). Snoozed and terminal-status items
+// are excluded.
+// ---------------------------------------------------------------------------
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+function bucketForScore(score: number): OpenLoopBucket {
+  if (score >= OPEN_LOOP_BUCKET_HIGH_THRESHOLD) return 'high';
+  if (score >= OPEN_LOOP_BUCKET_MEDIUM_THRESHOLD) return 'medium';
+  return 'low';
+}
+
+export function getOpenLoops(db: DB, project?: string): OpenLoop[] {
+  const nowDate = new Date();
+  const nowIso = nowDate.toISOString();
+
+  const conditions = [
+    eq(memoryItems.status, 'active'),
+    sql`(${memoryItems.snoozedUntil} IS NULL OR ${memoryItems.snoozedUntil} <= ${nowIso})`,
+  ];
+  if (project) {
+    conditions.push(eq(memoryItems.project, project));
+  }
+
+  const rows = db
+    .select()
+    .from(memoryItems)
+    .where(and(...conditions))
+    .all();
+
+  const loops: OpenLoop[] = [];
+
+  for (const row of rows) {
+    const item = mapRow(row);
+    const hasNextSteps = item.nextSteps.length > 0;
+    const isStaleDebugging = item.routineType === 'debugging';
+    if (!hasNextSteps && !isStaleDebugging) continue;
+
+    const updatedMs = new Date(item.updatedAt).getTime();
+    const daysOpen = Math.max(0, Math.floor((nowDate.getTime() - updatedMs) / DAY_MS));
+
+    const lastAccess = item.lastAccessedAt ? new Date(item.lastAccessedAt).getTime() : null;
+    const recentlyReferenced =
+      lastAccess !== null &&
+      (nowDate.getTime() - lastAccess) <= OPEN_LOOP_RECENT_REFERENCE_DAYS * DAY_MS;
+
+    const priorityWeight = OPEN_LOOP_PRIORITY_WEIGHT[item.priority] ?? 5;
+    const routineWeight = item.routineType
+      ? (OPEN_LOOP_ROUTINE_WEIGHT[item.routineType] ?? 0)
+      : 0;
+    const recencyBoost = recentlyReferenced ? OPEN_LOOP_RECENT_REFERENCE_BOOST : 0;
+
+    const score = priorityWeight + daysOpen * 2 + recencyBoost + routineWeight;
+
+    loops.push({
+      itemUid: item.itemUid,
+      title: item.title,
+      project: item.project,
+      memoryType: item.memoryType,
+      subject: item.subject,
+      summary: item.summary,
+      priority: item.priority,
+      routineType: item.routineType,
+      tags: item.tags,
+      nextSteps: item.nextSteps,
+      lastUpdated: item.updatedAt,
+      lastAccessedAt: item.lastAccessedAt,
+      daysOpen,
+      score,
+      bucket: bucketForScore(score),
+      recentlyReferenced,
+    });
+  }
+
+  const bucketOrder: Record<OpenLoopBucket, number> = { high: 0, medium: 1, low: 2 };
+  loops.sort((left, right) => {
+    const bucketDiff = bucketOrder[left.bucket] - bucketOrder[right.bucket];
+    if (bucketDiff !== 0) return bucketDiff;
+    if (right.score !== left.score) return right.score - left.score;
+    return right.daysOpen - left.daysOpen;
+  });
+
+  return loops;
+}
+
+// ---------------------------------------------------------------------------
+// resolveLoop — Close an open loop with an outcome.
+//
+// Atomic single-call close: sets status='resolved', stores the outcome enum
+// value, optionally appends a resolution note to content, and logs a
+// dedicated `resolve_loop` activity row so adoption (close-rate) is
+// queryable from activity_logs. See plan vm_-wkwx67j33XDx2aE Step 3.
+// ---------------------------------------------------------------------------
+export function resolveLoop(
+  db: DB,
+  logsPath: string,
+  input: ResolveLoopInput,
+): MemoryItem | null {
+  const validated = ResolveLoopInputSchema.parse(input);
+
+  const row = db
+    .select()
+    .from(memoryItems)
+    .where(eq(memoryItems.itemUid, validated.itemUid))
+    .get();
+  if (!row) return null;
+
+  const timestamp = now();
+  const note = validated.resolutionNote?.trim();
+  const nextContent = note
+    ? appendResolutionNote(row.content, note, validated.outcome, timestamp)
+    : row.content;
+
+  db.update(memoryItems)
+    .set({
+      status: 'resolved',
+      outcome: validated.outcome,
+      content: nextContent,
+      updatedAt: timestamp,
+    })
+    .where(eq(memoryItems.itemUid, validated.itemUid))
+    .run();
+
+  logActivity(db, logsPath, {
+    sourceClient: 'system',
+    project: row.project,
+    actionType: 'resolve_loop',
+    targetItemId: validated.itemUid,
+    status: 'success',
+    message: `Resolved loop (${validated.outcome}): ${row.title}`,
+    metadata: {
+      outcome: validated.outcome,
+      hasNote: Boolean(note),
+    },
+  });
+
+  const updated = db
+    .select()
+    .from(memoryItems)
+    .where(eq(memoryItems.itemUid, validated.itemUid))
+    .get();
+  if (!updated) return null;
+
+  const updatedItem = mapRow(updated);
+  persistMemoryFile(updatedItem);
+  return updatedItem;
+}
+
+function appendResolutionNote(
+  current: string | null,
+  note: string,
+  outcome: string,
+  timestamp: string,
+): string {
+  const header = `## Resolution (${outcome}) — ${timestamp}`;
+  const block = `${header}\n\n${note}`;
+  if (!current || current.trim().length === 0) return block;
+  return `${current.trimEnd()}\n\n${block}`;
 }

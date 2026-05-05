@@ -58,6 +58,47 @@ declare global {
     memoryCount?: number;
   }
 
+  type VaultProjectMomentumDirection = 'up' | 'down' | 'flat' | 'inactive';
+
+  interface VaultProjectMomentum {
+    name: string;
+    last7dCount: number;
+    prior7dCount: number;
+    delta: number;
+    direction: VaultProjectMomentumDirection;
+    lastActivityAt: string | null;
+  }
+
+  type VaultOpenLoopBucket = 'high' | 'medium' | 'low';
+  type VaultRoutineType =
+    | 'debugging'
+    | 'planning'
+    | 'implementation'
+    | 'review'
+    | 'testing'
+    | 'brainstorming'
+    | 'refactor'
+    | 'deployment';
+
+  interface VaultOpenLoop {
+    itemUid: string;
+    title: string;
+    project: string;
+    memoryType: VaultMemoryType;
+    subject: string;
+    summary: string;
+    priority: VaultPriorityValue;
+    routineType: VaultRoutineType | null;
+    tags: string[];
+    nextSteps: string[];
+    lastUpdated: string;
+    lastAccessedAt: string | null;
+    daysOpen: number;
+    score: number;
+    bucket: VaultOpenLoopBucket;
+    recentlyReferenced: boolean;
+  }
+
   interface VaultMemory {
     id: number;
     itemUid: string;
@@ -83,6 +124,16 @@ declare global {
     updatedAt: string;
     lastAccessedAt: string | null;
     accessCount: number;
+    snoozedUntil: string | null;
+    outcome: VaultOutcomeValue | null;
+  }
+
+  type VaultOutcomeValue = 'fixed' | 'wont_fix' | 'obsolete' | 'duplicate';
+
+  interface VaultResolveLoopInput {
+    itemUid: string;
+    outcome: VaultOutcomeValue;
+    resolutionNote?: string;
   }
 
   interface VaultMemoryDetail extends VaultMemory {
@@ -145,6 +196,7 @@ declare global {
     totalCandidates: number;
     topScore: number;
     contextSummary?: string;
+    openLoops: VaultOpenLoop[];
   }
 
   interface VaultRecallMatch {
@@ -244,6 +296,7 @@ declare global {
     root: string;
     workspaceRoot?: string;
     projects: VaultProject[];
+    appVersion?: string;
   }
 
   interface VaultSettings {
@@ -517,6 +570,8 @@ declare global {
 
   interface VaultAPI {
     status: () => Promise<VaultStatus>;
+    getProjectsMomentum: () => Promise<VaultResponse<VaultProjectMomentum[]>>;
+    getOpenLoops: (project?: string) => Promise<VaultResponse<VaultOpenLoop[]>>;
     createProject: (name: string, description?: string) => Promise<VaultResponse<VaultProject>>;
     saveMemory: (input: any) => Promise<VaultResponse<VaultSaveResult>>;
     findMemory: (query: any) => Promise<VaultResponse<VaultMemory[]>>;
@@ -542,6 +597,7 @@ declare global {
     updateMemory: (uid: string, updates: Partial<VaultMemory>) => Promise<VaultResponse<VaultMemory | null>>;
     promoteMemory: (uid: string) => Promise<VaultResponse<VaultMemory | null>>;
     archiveMemory: (uid: string) => Promise<VaultResponse<VaultMemory | null>>;
+    resolveLoop: (input: VaultResolveLoopInput) => Promise<VaultResponse<VaultMemory | null>>;
     listProjectProposals: (query?: {
       project?: string;
       status?: VaultProposalStatus;

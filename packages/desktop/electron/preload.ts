@@ -3,6 +3,8 @@ import { contextBridge, ipcRenderer } from 'electron';
 // Expose a safe API to the renderer process
 contextBridge.exposeInMainWorld('vaultAPI', {
   status: () => ipcRenderer.invoke('vault:status'),
+  getProjectsMomentum: () => ipcRenderer.invoke('vault:getProjectsMomentum'),
+  getOpenLoops: (project?: string) => ipcRenderer.invoke('vault:getOpenLoops', project),
   createProject: (name: string, description?: string) => ipcRenderer.invoke('vault:createProject', name, description),
   saveMemory: (input: any) => ipcRenderer.invoke('vault:saveMemory', input),
   findMemory: (query: any) => ipcRenderer.invoke('vault:findMemory', query),
@@ -15,6 +17,7 @@ contextBridge.exposeInMainWorld('vaultAPI', {
   updateMemory: (uid: string, updates: any) => ipcRenderer.invoke('vault:updateMemory', uid, updates),
   promoteMemory: (uid: string) => ipcRenderer.invoke('vault:promoteMemory', uid),
   archiveMemory: (uid: string) => ipcRenderer.invoke('vault:archiveMemory', uid),
+  resolveLoop: (input: unknown) => ipcRenderer.invoke('vault:resolveLoop', input),
   listProjectProposals: (query?: unknown) => ipcRenderer.invoke('vault:listProjectProposals', query),
   decideProjectProposal: (input: unknown) => ipcRenderer.invoke('vault:decideProjectProposal', input),
   mergeProject: (sourceName: string, targetName: string, options?: unknown) => ipcRenderer.invoke('vault:mergeProject', sourceName, targetName, options),

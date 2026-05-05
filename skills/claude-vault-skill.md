@@ -23,6 +23,7 @@ You have access to these Vault MCP tools:
 | `vault_update_memory` | When you need to update an existing item's metadata |
 | `vault_promote_memory` | When a memory item is clearly important long-term |
 | `vault_archive_memory` | When an item is no longer relevant |
+| `vault_resolve_loop` | When the user confirms a surfaced open loop is done — closes it atomically with an outcome |
 | `vault_suggest_save_path` | When you need to know where a file would be stored |
 
 You may also have Vault task tools available through MCP:
@@ -77,6 +78,31 @@ Project & lifecycle review tools:
 - Don't dump raw recalled content to the user
 - Reference it: "Based on the previous decision about auth middleware..."
 - If the recalled context contradicts the current request, mention it
+
+---
+
+## Closing Open Loops on Recall
+
+Every recall response includes an `open_loops` field — active memory items with non-empty next steps or unresolved debugging routines, sorted high → low by derived priority. They represent unfinished work the user has implicitly committed to.
+
+**When `open_loops` is non-empty, surface them to the user before answering the actual query.** This is non-negotiable — the loops only close if you bring them back into view.
+
+**Per-loop protocol:**
+
+1. State the loop briefly: title, last-updated age, the first next step.
+2. Ask: still pending, done, or come back later?
+3. Branch on the answer:
+   - **Done** → call `vault_resolve_loop({ item_uid, outcome, resolution_note? })`. Outcome is one of:
+     - `fixed` — work was completed
+     - `wont_fix` — explicitly decided not to do it
+     - `obsolete` — context changed; no longer needed
+     - `duplicate` — covered by another memory (note the other uid in `resolution_note`)
+   - **Later** → call `vault_update_memory({ item_uid, snoozedUntil: <ISO date> })` with a sensible future date (e.g., 7 days). Snoozed items disappear from open-loops until the date passes.
+   - **Still pending** → just acknowledge ("noted") and proceed to the user's actual query. Don't nag.
+
+**Don't close a loop without explicit user confirmation.** Inferring "fixed" from context is wrong — the cost of premature closure is permanent loss of an open thread.
+
+**Don't surface loops on every micro-recall.** If the recall response was triggered by another tool internally and the user didn't ask a session-start question, suppress the prompt and just keep them in your working context.
 
 ---
 

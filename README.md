@@ -199,6 +199,9 @@ The Vault is:
 | Project hygiene | Project descriptions, project listing, naming drift handling, duplicate project merging, and relationship tracking. |
 | Lifecycle controls | Reversible memory states such as `active`, `stale`, `archived`, and `pending_delete` before deletion. |
 | Task records | Queued task metadata, model routing, executor status, task results, retries, and saved summaries. |
+| Project momentum | Per-project week-over-week activity delta (↑/↓/inactive) shown on the Overview to make stagnating projects visible. |
+| Open loops panel | Aggregated unfinished work — items with non-empty `next_steps` plus stale debugging routines — bucketed by derived priority (high/medium/low) with snooze support via `snoozed_until`. |
+| Close-the-loop on recall | `vault_recall_context` returns an `open_loops` field so agents surface unfinished work back to the user. The dedicated `vault_resolve_loop` MCP tool atomically closes a loop with an outcome (`fixed`/`wont_fix`/`obsolete`/`duplicate`). |
 | Local privacy | SQLite database and memory files stay on the user's machine unless the user explicitly pushes or exports them. |
 
 ## Interfaces
@@ -214,7 +217,7 @@ The Vault is built around one shared core package and several thin interfaces:
 
 The desktop app currently includes:
 
-- **Overview**: project and memory status at a glance.
+- **Overview**: project and memory status at a glance, with project momentum (week-over-week activity) and an open loops panel for unfinished work.
 - **Recall Console**: query memory and create structured saves.
 - **Memory Bank**: browse and inspect saved memory items.
 - **Vault Agent**: inspect backend/task activity and local adapter state.
@@ -444,8 +447,8 @@ The root build:
 Release builds are created by GitHub Actions when a version tag is pushed:
 
 ```powershell
-git tag -a v0.1.4 -m "v0.1.4"
-git push origin v0.1.4
+git tag -a v0.2.0 -m "v0.2.0"
+git push origin v0.2.0
 ```
 
 The workflow typechecks the repo, builds the installer, verifies the bundled MCP sidecar, uploads artifacts, and publishes a GitHub Release.

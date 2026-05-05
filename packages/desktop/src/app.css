@@ -261,6 +261,25 @@
   color: var(--text-primary);
 }
 
+.sidebar-version {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 10px 16px;
+  font-size: 0.75rem;
+  color: var(--text-muted);
+}
+
+.sidebar-version-label {
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+}
+
+.sidebar-version-value {
+  color: var(--text-secondary);
+  font-size: 0.78rem;
+}
+
 .workspace {
   display: flex;
   flex-direction: column;
@@ -995,6 +1014,48 @@
 .project-row-count {
   font-size: 1.5rem;
   color: var(--accent-primary);
+}
+
+.project-row-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.momentum-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text-secondary);
+}
+
+.momentum-badge-up {
+  color: rgba(92, 224, 167, 0.96);
+  border-color: rgba(92, 224, 167, 0.28);
+  background: rgba(92, 224, 167, 0.12);
+}
+
+.momentum-badge-down {
+  color: rgba(255, 148, 77, 0.96);
+  border-color: rgba(255, 148, 77, 0.28);
+  background: rgba(255, 148, 77, 0.12);
+}
+
+.momentum-badge-flat {
+  color: var(--text-secondary);
+}
+
+.momentum-badge-inactive {
+  color: rgba(153, 167, 193, 0.85);
+  border-color: rgba(153, 167, 193, 0.22);
+  background: rgba(153, 167, 193, 0.1);
 }
 
 .badge {
@@ -3490,3 +3551,229 @@ select.text-input optgroup {
     scroll-behavior: auto !important;
   }
 }
+
+/* Open Loops panel */
+.open-loops-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.open-loops-tag-filter {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.open-loops-tag-filter-label {
+  font-size: 0.7rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+}
+
+.open-loops-tag-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.open-loops-tag-chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 3px 10px;
+  border-radius: 999px;
+  font-size: 0.74rem;
+  font-family: var(--font-mono);
+  letter-spacing: 0.02em;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: background 0.12s ease, color 0.12s ease, border-color 0.12s ease;
+}
+
+.open-loops-tag-chip:hover {
+  background: rgba(92, 224, 230, 0.08);
+  color: var(--text-primary);
+  border-color: rgba(92, 224, 230, 0.22);
+}
+
+.open-loops-tag-chip-active {
+  background: rgba(92, 224, 230, 0.18);
+  border-color: rgba(92, 224, 230, 0.45);
+  color: var(--accent-primary);
+}
+
+.open-loops-tag-chip-clear {
+  display: inline-flex;
+  align-items: center;
+  padding: 3px 10px;
+  border-radius: 999px;
+  font-size: 0.74rem;
+  background: transparent;
+  border: 1px dashed rgba(255, 255, 255, 0.18);
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.open-loops-tag-chip-clear:hover {
+  color: var(--text-primary);
+  border-color: rgba(255, 255, 255, 0.32);
+}
+
+.open-loops-buckets {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.open-loops-bucket {
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 12px;
+  padding: 12px 14px;
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.open-loops-bucket-high {
+  border-color: rgba(255, 95, 95, 0.28);
+  background: rgba(255, 95, 95, 0.06);
+}
+
+.open-loops-bucket-medium {
+  border-color: rgba(255, 184, 77, 0.28);
+  background: rgba(255, 184, 77, 0.05);
+}
+
+.open-loops-bucket-low {
+  border-color: rgba(153, 167, 193, 0.22);
+}
+
+.open-loops-bucket-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.open-loops-bucket-emoji {
+  font-size: 1rem;
+}
+
+.open-loops-bucket-label {
+  font-size: 0.78rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.open-loops-bucket-count {
+  margin-left: auto;
+  font-size: 0.72rem;
+  font-family: var(--font-mono);
+  color: var(--text-secondary);
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.open-loops-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.open-loops-row {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.02);
+  border: 1px solid rgba(255, 255, 255, 0.04);
+}
+
+.open-loops-row-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.open-loops-row-title {
+  flex: 1;
+  font-size: 0.9rem;
+  color: var(--text-primary);
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.open-loops-row-age {
+  font-size: 0.72rem;
+  font-family: var(--font-mono);
+  color: var(--text-secondary);
+  flex-shrink: 0;
+}
+
+.open-loops-row-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.74rem;
+  color: var(--text-secondary);
+}
+
+.open-loops-row-project {
+  font-family: var(--font-mono);
+  color: var(--accent-primary);
+}
+
+.open-loops-row-recent {
+  font-size: 0.7rem;
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: rgba(92, 224, 167, 0.12);
+  color: rgba(92, 224, 167, 0.96);
+  border: 1px solid rgba(92, 224, 167, 0.26);
+}
+
+.open-loops-row-score {
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  color: var(--text-secondary);
+}
+
+.open-loops-row-next {
+  font-size: 0.78rem;
+  color: var(--text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.open-loops-row-next-more {
+  color: var(--accent-primary);
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+}
+
+.open-loops-routine-icon {
+  flex-shrink: 0;
+  color: var(--text-secondary);
+}
+
+.open-loops-routine-debugging { color: #ff8f8f; }
+.open-loops-routine-deployment { color: rgba(92, 224, 167, 0.96); }
+.open-loops-routine-review { color: var(--accent-primary); }
+.open-loops-routine-testing { color: rgba(155, 191, 255, 0.95); }
+.open-loops-routine-implementation { color: var(--accent-secondary); }
+.open-loops-routine-refactor { color: rgba(255, 184, 77, 0.9); }
+.open-loops-routine-planning { color: rgba(153, 167, 193, 0.9); }
+.open-loops-routine-brainstorming { color: rgba(214, 158, 255, 0.9); }
+.open-loops-routine-none { color: var(--text-secondary); }

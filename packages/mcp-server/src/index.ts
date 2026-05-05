@@ -7,7 +7,7 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
-import { Vault, OpenRouterClient, TaskExecutor, portableDecrypt, slugify, MEMORY_TYPES, ROUTINE_TYPES, STATUS_VALUES, PRIORITY_VALUES, SOURCE_APPS, TASK_TYPES, TASK_STATUSES, TASK_PRIORITIES, PROPOSAL_STATUSES, PROPOSAL_TYPES, PROJECT_LINK_TYPES } from '@the-vault/core';
+import { Vault, OpenRouterClient, TaskExecutor, portableDecrypt, slugify, MEMORY_TYPES, ROUTINE_TYPES, STATUS_VALUES, PRIORITY_VALUES, SOURCE_APPS, TASK_TYPES, TASK_STATUSES, TASK_PRIORITIES, PROPOSAL_STATUSES, PROPOSAL_TYPES, PROJECT_LINK_TYPES, OUTCOME_VALUES } from '@the-vault/core';
 
 // Initialize Vault
 const vault = new Vault();
@@ -249,6 +249,16 @@ server.tool(
             decisions: pack.decisions.map(briefItem),
             plans: pack.plans.map(briefItem),
             other: pack.other.map(briefItem),
+            open_loops: (pack.openLoops || []).map((loop) => ({
+              uid: loop.itemUid,
+              title: loop.title,
+              project: loop.project,
+              next_steps: loop.nextSteps,
+              last_updated: loop.lastUpdated,
+              days_open: loop.daysOpen,
+              bucket: loop.bucket,
+              score: loop.score,
+            })),
           }, null, 2),
         }],
       };
@@ -436,6 +446,54 @@ server.tool(
         content: [{
           type: 'text' as const,
           text: JSON.stringify({ success: true, item_uid: archived.itemUid, message: `Archived: ${archived.title}` }, null, 2),
+        }],
+      };
+    } catch (error) {
+      return {
+        content: [{ type: 'text' as const, text: `Error: ${error instanceof Error ? error.message : String(error)}` }],
+        isError: true,
+      };
+    }
+  },
+);
+
+// ============================================================================
+// Tool: vault_resolve_loop
+// Atomic close for an open loop. Sets status='resolved', records the outcome
+// enum, optionally appends a resolution note. Logs a `resolve_loop` activity
+// row so close-rate is observable. See plan vm_-wkwx67j33XDx2aE Step 3.
+// ============================================================================
+server.tool(
+  'vault_resolve_loop',
+  'Close an open loop on a memory item. Sets status=resolved with an outcome (fixed | wont_fix | obsolete | duplicate) and optionally records a resolution note. Use when the user confirms a surfaced open loop is done. For "come back later" use vault_update_memory with snoozed_until instead.',
+  {
+    item_uid: z.string().describe('The unique ID of the memory item to resolve'),
+    outcome: z.enum(OUTCOME_VALUES).describe('Resolution outcome: fixed, wont_fix, obsolete, or duplicate'),
+    resolution_note: z.string().max(2000).optional().describe('Optional short note appended to the memory describing how it was closed'),
+  },
+  async (args) => {
+    try {
+      const resolved = vault.resolveLoop({
+        itemUid: args.item_uid,
+        outcome: args.outcome,
+        resolutionNote: args.resolution_note,
+      });
+      if (!resolved) {
+        return {
+          content: [{ type: 'text' as const, text: `Memory item not found: ${args.item_uid}` }],
+          isError: true,
+        };
+      }
+      return {
+        content: [{
+          type: 'text' as const,
+          text: JSON.stringify({
+            success: true,
+            item_uid: resolved.itemUid,
+            status: resolved.status,
+            outcome: resolved.outcome,
+            message: `Resolved (${resolved.outcome}): ${resolved.title}`,
+          }, null, 2),
         }],
       };
     } catch (error) {

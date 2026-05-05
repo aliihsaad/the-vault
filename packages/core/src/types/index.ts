@@ -17,6 +17,7 @@ import type {
   TaskType,
   TaskStatus,
   TaskPriority,
+  OutcomeValue,
 } from '../rules/controlled-values.js';
 
 // ---------------------------------------------------------------------------
@@ -47,6 +48,18 @@ export interface MemoryItem {
   updatedAt: string;
   lastAccessedAt: string | null;
   accessCount: number;
+  /**
+   * If set and in the future, the item is suppressed from the open-loops
+   * panel until the timestamp passes. ISO 8601 string. Filter-only — does
+   * not affect recall ranking.
+   */
+  snoozedUntil: string | null;
+  /**
+   * Resolution outcome set by vault_resolve_loop when closing an open loop.
+   * Null until the item transitions to status='resolved' via the resolve
+   * tool. Only meaningful when paired with that status.
+   */
+  outcome: OutcomeValue | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -136,6 +149,22 @@ export interface MemoryPack {
   totalCandidates: number;
   topScore: number;
   contextSummary?: string;
+  /**
+   * Active open loops scoped to the recall query. Skills must surface these
+   * before answering and prompt the user to resolve, snooze, or acknowledge
+   * each. Sorted high → low by bucket then score. See plan
+   * vm_-wkwx67j33XDx2aE Step 3.
+   */
+  openLoops: OpenLoop[];
+}
+
+// ---------------------------------------------------------------------------
+// Resolve Loop input (vault_resolve_loop)
+// ---------------------------------------------------------------------------
+export interface ResolveLoopInput {
+  itemUid: string;
+  outcome: OutcomeValue;
+  resolutionNote?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -165,6 +194,51 @@ export interface Project {
   updatedAt: string;
   memoryCount?: number;
   relationships?: ProjectRelationship[];
+}
+
+/**
+ * Per-project activity delta used by the Overview "Project radar" panel.
+ * Counts are over `memory_items.created_at` for the trailing 7 days vs the
+ * preceding 7 days. `direction` is 'inactive' when no memory has been
+ * created in the last 14 days, otherwise the sign of the delta.
+ */
+export type ProjectMomentumDirection = 'up' | 'down' | 'flat' | 'inactive';
+
+export interface ProjectMomentum {
+  name: string;
+  last7dCount: number;
+  prior7dCount: number;
+  delta: number;
+  direction: ProjectMomentumDirection;
+  lastActivityAt: string | null;
+}
+
+/**
+ * Open-loops panel surfacing — derived bucket from the deterministic
+ * scoring formula in retrieve.service.ts (priority + days_open*2 +
+ * recency boost + routine weight). High-value rows are unfinished work
+ * the user has implicitly committed to (memories with non-empty
+ * next_steps or active debugging items).
+ */
+export type OpenLoopBucket = 'high' | 'medium' | 'low';
+
+export interface OpenLoop {
+  itemUid: string;
+  title: string;
+  project: string;
+  memoryType: MemoryType;
+  subject: string;
+  summary: string;
+  priority: PriorityValue;
+  routineType: RoutineType | null;
+  tags: string[];
+  nextSteps: string[];
+  lastUpdated: string;
+  lastAccessedAt: string | null;
+  daysOpen: number;
+  score: number;
+  bucket: OpenLoopBucket;
+  recentlyReferenced: boolean;
 }
 
 // ---------------------------------------------------------------------------

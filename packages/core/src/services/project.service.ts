@@ -22,6 +22,8 @@ import type {
   AddProjectRelationshipInput,
   MergeProjectResult,
   Project,
+  ProjectMomentum,
+  ProjectMomentumDirection,
   ProjectRelationship,
 } from '../types/index.js';
 import type { BetterSQLite3Database } from 'drizzle-orm/better-sqlite3';
@@ -165,6 +167,58 @@ export function listProjects(db: DB): Project[] {
       ...mapProjectRow(row),
       memoryCount: countResult?.count || 0,
       relationships,
+    };
+  });
+}
+
+/**
+ * Per-project activity momentum for the Overview "Project radar" panel.
+ * Compares memory creation in the trailing 7 days against the preceding 7
+ * days, plus the most recent activity timestamp. Pure read-only aggregation
+ * over `memory_items.created_at` — no schema change, no writes.
+ */
+export function getProjectsMomentum(db: DB, referenceDate?: Date): ProjectMomentum[] {
+  const now = referenceDate ?? new Date();
+  const last7Cutoff = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000).toISOString();
+  const prior7Cutoff = new Date(now.getTime() - 14 * 24 * 60 * 60 * 1000).toISOString();
+  const inactiveCutoff = new Date(now.getTime() - 14 * 24 * 60 * 60 * 1000).toISOString();
+
+  const projectRows = db.select().from(projects).all();
+
+  return projectRows.map((row) => {
+    const stats = db
+      .select({
+        last7d: sql<number>`SUM(CASE WHEN ${memoryItems.createdAt} >= ${last7Cutoff} THEN 1 ELSE 0 END)`,
+        prior7d: sql<number>`SUM(CASE WHEN ${memoryItems.createdAt} >= ${prior7Cutoff} AND ${memoryItems.createdAt} < ${last7Cutoff} THEN 1 ELSE 0 END)`,
+        lastActivityAt: sql<string | null>`MAX(${memoryItems.createdAt})`,
+      })
+      .from(memoryItems)
+      .where(eq(memoryItems.project, row.name))
+      .get();
+
+    const last7dCount = Number(stats?.last7d ?? 0);
+    const prior7dCount = Number(stats?.prior7d ?? 0);
+    const delta = last7dCount - prior7dCount;
+    const lastActivityAt = stats?.lastActivityAt ?? null;
+
+    let direction: ProjectMomentumDirection;
+    if (!lastActivityAt || lastActivityAt < inactiveCutoff) {
+      direction = 'inactive';
+    } else if (delta > 0) {
+      direction = 'up';
+    } else if (delta < 0) {
+      direction = 'down';
+    } else {
+      direction = 'flat';
+    }
+
+    return {
+      name: row.name,
+      last7dCount,
+      prior7dCount,
+      delta,
+      direction,
+      lastActivityAt,
     };
   });
 }

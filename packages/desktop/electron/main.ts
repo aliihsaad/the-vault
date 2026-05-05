@@ -729,6 +729,7 @@ function formatCompactRecallContext(
 
   const related = pack.related.slice(0, limits.relatedLimit);
   const proactive = pack.proactive.slice(0, limits.proactiveLimit);
+  const openLoops = (pack.openLoops || []).slice(0, 5);
   const detailSections = items
     .map((match) => details.get(match.item.itemUid))
     .filter((detail): detail is MemoryItemDetail => Boolean(detail))
@@ -762,6 +763,12 @@ function formatCompactRecallContext(
     ...related.map((item) => `- ${item.title} [${item.project}] :: ${collapseText(item.summary, 120)}`),
     proactive.length > 0 ? 'Proactive cues:' : '',
     ...proactive.map((item) => `- ${item.title} [${item.project}] :: ${collapseText(item.summary, 120)}`),
+    openLoops.length > 0 ? 'Open loops (surface these to the user before answering — confirm if pending, resolve if done):' : '',
+    ...openLoops.map((loop) => {
+      const next = loop.nextSteps.slice(0, 1).join(' | ');
+      const nextHint = next ? ` next: ${collapseText(next, 100)}` : '';
+      return `- [${loop.bucket}] ${loop.title} [${loop.project}] (${loop.daysOpen}d, score ${loop.score}) :: ${collapseText(loop.summary, 110)} | uid: ${loop.itemUid}${nextHint}`;
+    }),
     detailSections.length > 0 ? 'Expanded details:' : '',
     ...detailSections,
   ]
@@ -1095,7 +1102,25 @@ app.whenReady().then(() => {
       root: vault.getVaultRoot(),
       workspaceRoot: process.cwd(),
       projects: vault.listProjects(),
+      appVersion: app.getVersion(),
     };
+  });
+
+  ipcMain.handle('vault:getProjectsMomentum', () => {
+    try {
+      return { success: true, data: vault.getProjectsMomentum() };
+    } catch (e: any) {
+      return { success: false, error: e.message };
+    }
+  });
+
+  ipcMain.handle('vault:getOpenLoops', (_, project?: string) => {
+    try {
+      const projectArg = typeof project === 'string' && project.trim().length > 0 ? project : undefined;
+      return { success: true, data: vault.getOpenLoops(projectArg) };
+    } catch (e: any) {
+      return { success: false, error: e.message };
+    }
   });
 
   ipcMain.handle('vault:createProject', (_, name, description) => {
@@ -1245,6 +1270,14 @@ app.whenReady().then(() => {
   ipcMain.handle('vault:archiveMemory', (_, uid) => {
     try {
       return { success: true, data: vault.archiveMemory(uid) };
+    } catch (e: any) {
+      return { success: false, error: e.message };
+    }
+  });
+
+  ipcMain.handle('vault:resolveLoop', (_, input) => {
+    try {
+      return { success: true, data: vault.resolveLoop(input) };
     } catch (e: any) {
       return { success: false, error: e.message };
     }

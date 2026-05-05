@@ -28,6 +28,8 @@ import {
   markMemoryStale,
   markMemoryPendingDelete,
   confirmMemoryDelete,
+  getOpenLoops,
+  resolveLoop,
 } from './services/retrieve.service.js';
 import { getRecentLogs, logActivity } from './services/log.service.js';
 import {
@@ -56,6 +58,7 @@ import {
   listProjects,
   createProject,
   getProject,
+  getProjectsMomentum,
   updateProjectDescription,
   listProjectRelationships,
   addProjectRelationship,
@@ -88,7 +91,9 @@ import type {
   MemoryItem,
   MemoryItemDetail,
   MemoryPack,
+  OpenLoop,
   Project,
+  ProjectMomentum,
   ActivityLogEntry,
   CreateTaskInput,
   FindTaskQuery,
@@ -112,6 +117,7 @@ import type {
   ProjectReviewResult,
   ModelRoutingTable,
   ModelRouteConfig,
+  ResolveLoopInput,
 } from './types/index.js';
 
 export class Vault {
@@ -298,6 +304,27 @@ export class Vault {
   }
 
   /**
+   * Surface unfinished work as an "open loops" list with derived priority
+   * buckets. Pure read; uses the deterministic scoring formula in
+   * retrieve.service.ts (no stored bucket). Excludes snoozed items.
+   */
+  getOpenLoops(project?: string): OpenLoop[] {
+    this.ensureInitialized();
+    return getOpenLoops(this.db, project);
+  }
+
+  /**
+   * Close an open loop with an outcome. Atomic — sets status='resolved',
+   * stores the outcome enum, optionally appends a resolution note, and
+   * logs a `resolve_loop` activity row so close-rate is observable.
+   * See plan vm_-wkwx67j33XDx2aE Step 3.
+   */
+  resolveLoop(input: ResolveLoopInput): MemoryItem | null {
+    this.ensureInitialized();
+    return resolveLoop(this.db, this.logsPath, input);
+  }
+
+  /**
    * Get a suggested save path for a memory item.
    */
   suggestSavePath(project: string, memoryType: string, title: string): string {
@@ -331,6 +358,15 @@ export class Vault {
   listProjects(): Project[] {
     this.ensureInitialized();
     return listProjects(this.db);
+  }
+
+  /**
+   * Per-project activity momentum (last 7d vs prior 7d memory counts plus
+   * last activity timestamp). Read-only; powers the Overview Project radar.
+   */
+  getProjectsMomentum(): ProjectMomentum[] {
+    this.ensureInitialized();
+    return getProjectsMomentum(this.db);
   }
 
   createProject(name: string, description?: string): Project {

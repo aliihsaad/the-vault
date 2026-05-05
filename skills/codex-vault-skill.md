@@ -20,6 +20,7 @@ Same tools as Claude (via MCP):
 - `vault_update_memory` — Update existing items
 - `vault_promote_memory` — Mark important items
 - `vault_archive_memory` — Archive outdated items
+- `vault_resolve_loop` — Atomically close a surfaced open loop with an outcome (`fixed | wont_fix | obsolete | duplicate`) when the user confirms it's done
 
 You may also have task delegation tools through Vault MCP:
 - `vault_create_task` — Queue delegated work in Vault
@@ -56,6 +57,29 @@ Project & lifecycle review tools:
 - Bug findings related to the area you're working in
 - Architecture decisions that constrain your implementation
 - File references and touched-file context
+
+---
+
+## Closing Open Loops on Recall
+
+Every recall response includes an `open_loops` field — active items with non-empty next steps or unresolved debugging routines. They represent unfinished work the user implicitly committed to.
+
+**When `open_loops` is non-empty, surface them to the user before answering.** Don't bury them in the response — they only close if you bring them back into view.
+
+**Per-loop protocol:**
+
+1. State the loop briefly: title, last-updated age, the first next step.
+2. Ask: still pending, done, or come back later?
+3. Branch on the answer:
+   - **Done** → `vault_resolve_loop({ item_uid, outcome, resolution_note? })`. Outcome is one of:
+     - `fixed` — completed
+     - `wont_fix` — explicitly decided not to do it
+     - `obsolete` — context changed; no longer needed
+     - `duplicate` — covered by another memory (note the other uid in `resolution_note`)
+   - **Later** → `vault_update_memory({ item_uid, snoozedUntil: <ISO date> })` with a sensible future date.
+   - **Still pending** → acknowledge and proceed to the user's actual query. Don't nag.
+
+**Never close a loop without explicit user confirmation.** Premature closure permanently loses an open thread.
 
 ---
 

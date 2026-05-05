@@ -1074,6 +1074,8 @@ function mapMemoryRow(row: typeof memoryItems.$inferSelect): MemoryItem {
     updatedAt: row.updatedAt,
     lastAccessedAt: row.lastAccessedAt,
     accessCount: row.accessCount,
+    snoozedUntil: row.snoozedUntil,
+    outcome: row.outcome as MemoryItem['outcome'],
   };
 }
 

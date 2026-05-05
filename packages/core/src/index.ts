@@ -45,6 +45,9 @@ export type {
   ProjectReviewSkipReason,
   ModelRouteConfig,
   ModelRoutingTable,
+  OpenLoop,
+  OpenLoopBucket,
+  ResolveLoopInput,
 } from './types/index.js';
 
 // Controlled values
@@ -64,6 +67,7 @@ export {
   TASK_TYPES,
   TASK_STATUSES,
   TASK_PRIORITIES,
+  OUTCOME_VALUES,
 } from './rules/controlled-values.js';
 
 export type {
@@ -80,6 +84,7 @@ export type {
   TaskType,
   TaskStatus,
   TaskPriority,
+  OutcomeValue,
 } from './rules/controlled-values.js';
 
 // Validation schemas (useful for MCP server)
@@ -90,6 +95,7 @@ export {
   UpdateMemoryInputSchema,
   CreateTaskInputSchema,
   FindTaskQuerySchema,
+  ResolveLoopInputSchema,
 } from './rules/validation.js';
 
 // Model routing
