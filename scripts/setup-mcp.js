@@ -58,7 +58,7 @@ async function main() {
 
   if (selectedClients.has('claude-code')) {
     results.push(configureJsonClient(
-      join(homedir(), '.claude', 'settings.json'),
+      join(homedir(), '.claude.json'),
       'Claude Code',
       ['mcpServers', 'vault-memory'],
       { command: 'node', args: [mcpEntry] },

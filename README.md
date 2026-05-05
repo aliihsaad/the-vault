@@ -243,6 +243,8 @@ Do not download the `.blockmap` file unless you are debugging release assets. It
 
 Installed builds store user data separately from the app installation. Updating the app should not delete an existing vault database or memory files.
 
+Upgrading from a 0.2.x build auto-migrates existing Vault MCP entries and the Claude Code skill install path on app startup when a previous Vault connection is detected.
+
 ## Install From Source
 
 Requirements:
@@ -326,9 +328,9 @@ The repo includes agent-facing operating guides:
 - `skills/claude-vault-skill.md`
 - `skills/codex-vault-skill.md`
 
-Installed releases package these guide files under app resources. The desktop **Client setup** page can append references to:
+Installed releases package these guide files under app resources. The desktop **Client setup** page can install or reference them at:
 
-- Claude: `%USERPROFILE%\.claude\CLAUDE.md`
+- Claude Code: `%USERPROFILE%\.claude\skills\vault-memory\SKILL.md`
 - Codex: `%USERPROFILE%\.codex\AGENTS.md`
 
 The guides teach agents when to recall, when to save, how to structure memory, and how to use queued Vault tasks.
@@ -447,8 +449,8 @@ The root build:
 Release builds are created by GitHub Actions when a version tag is pushed:
 
 ```powershell
-git tag -a v0.2.0 -m "v0.2.0"
-git push origin v0.2.0
+git tag -a v0.2.2 -m "v0.2.2"
+git push origin v0.2.2
 ```
 
 The workflow typechecks the repo, builds the installer, verifies the bundled MCP sidecar, uploads artifacts, and publishes a GitHub Release.

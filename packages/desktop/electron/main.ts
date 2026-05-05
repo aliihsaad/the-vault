@@ -17,6 +17,11 @@ import {
   testLocalAdapterEnvironment,
 } from './local-adapters.js';
 import type { LocalAdapterRuntimeSession, LocalAdapterType } from './local-adapters.js';
+import {
+  mcpEntriesMatch,
+  shouldAutoConnectJsonMcp,
+  shouldAutoInstallClaudeSkill,
+} from './connection-migration.js';
 import { TaskExecutor } from './task-executor.js';
 
 // Recreate __dirname for ESM
@@ -1671,6 +1676,7 @@ app.whenReady().then(() => {
   // Writing to settings.json silently does nothing for MCP — the CLI only consumes mcpServers
   // out of ~/.claude.json (the same file `claude mcp add --scope user` writes to).
   const claudeCodeSettingsPath = join(homedir(), '.claude.json');
+  const legacyClaudeCodeSettingsPath = join(homedir(), '.claude', 'settings.json');
   const claudeMdPath = join(homedir(), '.claude', 'CLAUDE.md');
   const claudeUserSkillDir = join(homedir(), '.claude', 'skills', 'vault-memory');
   const claudeUserSkillPath = join(claudeUserSkillDir, 'SKILL.md');
@@ -1698,6 +1704,17 @@ app.whenReady().then(() => {
       }
       if (err instanceof SyntaxError) {
         return { exists: true, data: null, error: `Invalid JSON: ${err.message}` };
+      }
+      throw err;
+    }
+  }
+
+  async function readTextFileIfExists(filePath: string): Promise<string | null> {
+    try {
+      return await readFile(filePath, 'utf8');
+    } catch (err: any) {
+      if (err.code === 'ENOENT') {
+        return null;
       }
       throw err;
     }
@@ -1761,13 +1778,6 @@ app.whenReady().then(() => {
       detail: `${launchConfig.command} ${launchConfig.args.join(' ')}`,
     });
     return true;
-  }
-
-  function mcpEntriesMatch(entry: any, launchConfig: McpLaunchConfig): boolean {
-    return !!entry
-      && entry.command === launchConfig.command
-      && Array.isArray(entry.args)
-      && JSON.stringify(entry.args) === JSON.stringify(launchConfig.args);
   }
 
   function hasCodexVaultEntry(content: string): boolean {
@@ -1997,18 +2007,9 @@ app.whenReady().then(() => {
       const codeResult = await readJsonFile(claudeCodeSettingsPath);
       const codeConfigured = mcpEntriesMatch(codeResult.data?.mcpServers?.['vault-memory'], launchConfig);
 
-      // Check skill installation. The active vector is ~/.claude/skills/vault-memory/SKILL.md;
-      // the legacy CLAUDE.md reference is kept as a fallback signal so users upgrading from
-      // <=0.2.0 don't see "Not installed" until they reinstall.
-      let claudeSkillInstalled = await fileExists(claudeUserSkillPath);
-      if (!claudeSkillInstalled) {
-        try {
-          const claudeMdContent = await readFile(claudeMdPath, 'utf8');
-          claudeSkillInstalled = claudeMdContent.includes('claude-vault-skill') || claudeMdContent.includes('## Vault Memory Skill');
-        } catch {
-          // File doesn't exist — not installed
-        }
-      }
+      // Check the active Claude Code skill vector only. Legacy CLAUDE.md references
+      // are migration signals, not proof that Claude Code will load the skill.
+      const claudeSkillInstalled = await fileExists(claudeUserSkillPath);
 
       let codexSkillInstalled = false;
       try {
@@ -2227,6 +2228,69 @@ app.whenReady().then(() => {
       return { success: false, steps };
     }
   }
+
+  function logAutoMigration(label: string, result: { success: boolean; steps: ConnectStep[]; backupPath?: string }): void {
+    const changed = result.steps.some((step) => step.status === 'success' && (
+      step.id === 'write-config'
+      || step.id === 'write-skill'
+      || step.id === 'append-reference'
+    ));
+    const failedStep = result.steps.find((step) => step.status === 'fail');
+
+    if (result.success && changed) {
+      console.info(`[vault] Auto-migrated ${label}${result.backupPath ? `; backup: ${result.backupPath}` : ''}`);
+      return;
+    }
+
+    if (!result.success) {
+      console.warn(`[vault] Auto-migration skipped for ${label}: ${failedStep?.detail || 'unknown failure'}`);
+    }
+  }
+
+  async function runConnectionAutoMigration(): Promise<void> {
+    try {
+      const launchConfig = getMcpLaunchConfig();
+
+      const desktopResult = await readJsonFile(claudeDesktopConfigPath);
+      if (!desktopResult.error && shouldAutoConnectJsonMcp({ currentConfig: desktopResult.data, launchConfig })) {
+        logAutoMigration('Claude Desktop MCP config', await connectMcpToConfig(claudeDesktopConfigPath, 'Claude Desktop'));
+      }
+
+      const codeResult = await readJsonFile(claudeCodeSettingsPath);
+      const legacyCodeResult = await readJsonFile(legacyClaudeCodeSettingsPath);
+      if (
+        !codeResult.error
+        && !legacyCodeResult.error
+        && shouldAutoConnectJsonMcp({
+          currentConfig: codeResult.data,
+          legacyConfig: legacyCodeResult.data,
+          launchConfig,
+        })
+      ) {
+        logAutoMigration('Claude Code MCP config', await connectMcpToConfig(claudeCodeSettingsPath, 'Claude Code'));
+      }
+
+      const codexConfigContent = await readTextFileIfExists(codexConfigPath);
+      if (
+        codexConfigContent !== null
+        && hasCodexVaultEntry(codexConfigContent)
+        && !hasCurrentCodexVaultEntry(codexConfigContent, launchConfig)
+      ) {
+        logAutoMigration('Codex MCP config', await connectMcpToCodexConfig());
+      }
+
+      const bundledSkillContent = await readTextFileIfExists(claudeSkillPath);
+      const installedSkillContent = await readTextFileIfExists(claudeUserSkillPath);
+      const claudeInstructionsContent = await readTextFileIfExists(claudeMdPath);
+      if (shouldAutoInstallClaudeSkill({ bundledSkillContent, installedSkillContent, claudeInstructionsContent })) {
+        logAutoMigration('Claude Code Vault skill', await installClaudeSkill());
+      }
+    } catch (err) {
+      console.warn('[vault] Connection auto-migration failed:', err instanceof Error ? err.message : String(err));
+    }
+  }
+
+  void runConnectionAutoMigration();
 
   ipcMain.handle('vault:installSkillFile', async (_, target) => {
     try {

@@ -323,7 +323,7 @@ export function ConnectPanel({ copyText, copiedToken }: ConnectPanelProps) {
     {
       label: 'Claude Code',
       configured: codeConnected,
-      configPath: connectionStatus?.claudeCode.configPath || '~/.claude/settings.json',
+      configPath: connectionStatus?.claudeCode.configPath || '~/.claude.json',
     },
     {
       label: 'Codex',
@@ -616,7 +616,7 @@ export function ConnectPanel({ copyText, copiedToken }: ConnectPanelProps) {
                 <div className="field-label">Claude Code</div>
                 <div className="field-help">
                   <span>{codeConnected ? 'vault-memory entry is configured in' : 'Writes vault-memory MCP entry to'}</span>
-                  <code className="connect-config-path">{connectionStatus?.claudeCode.configPath || 'settings.json'}</code>
+                  <code className="connect-config-path">{connectionStatus?.claudeCode.configPath || '~/.claude.json'}</code>
                 </div>
               </div>
               <button
@@ -699,8 +699,8 @@ export function ConnectPanel({ copyText, copiedToken }: ConnectPanelProps) {
               <div>
                 <div className="field-label">{claudeSkillInstalled ? 'Claude skill installed' : 'Install Claude skill'}</div>
                 <div className="field-help">
-                  <span>{claudeSkillInstalled ? 'Vault memory skill reference is in' : 'Appends a Vault memory skill reference to'}</span>
-                  <code className="connect-config-path">{connectionStatus?.skill.claudeMdPath || '~/.claude/CLAUDE.md'}</code>
+                  <span>{claudeSkillInstalled ? 'Vault memory skill is installed at' : 'Writes Vault memory SKILL.md to'}</span>
+                  <code className="connect-config-path">{connectionStatus?.skill.claudeSkillPath || '~/.claude/skills/vault-memory/SKILL.md'}</code>
                 </div>
               </div>
               <button
@@ -722,10 +722,10 @@ export function ConnectPanel({ copyText, copiedToken }: ConnectPanelProps) {
               <p className="error-text" style={{ marginTop: 8 }}>Operation failed. See steps above.</p>
             ) : null}
             {claudeSkillResult?.success && claudeSkillInstalled ? (
-              <p className="success-text" style={{ marginTop: 8 }}>Skill reference added to CLAUDE.md.</p>
+              <p className="success-text" style={{ marginTop: 8 }}>SKILL.md installed for Claude Code.</p>
             ) : null}
             {claudeSkillResult?.success && !claudeSkillInstalled ? (
-              <p className="success-text" style={{ marginTop: 8 }}>Skill reference removed from CLAUDE.md.</p>
+              <p className="success-text" style={{ marginTop: 8 }}>Claude Code skill removed.</p>
             ) : null}
           </div>
 
@@ -836,7 +836,7 @@ export function ConnectPanel({ copyText, copiedToken }: ConnectPanelProps) {
             <section className="manual-guide-section">
               <div className="manual-guide-heading">Claude Code</div>
               <div className="manual-guide-description">
-                Config file: <code>{connectionStatus?.claudeCode.configPath || '~/.claude/settings.json'}</code>
+                Config file: <code>{connectionStatus?.claudeCode.configPath || '~/.claude.json'}</code>
               </div>
               <ol className="manual-guide-steps">
                 <li>Open the config file above (create it if it does not exist).</li>
