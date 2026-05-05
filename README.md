@@ -11,6 +11,8 @@ The Vault is a local-first memory operating system for AI-assisted work. It give
 
 It ships as a TypeScript workspace with a shared core engine, command-line interface, MCP server, and Electron desktop console. Windows releases also bundle their own `vault-memory` MCP runtime, so installed users can connect Codex, Claude Desktop, or Claude Code without keeping the source repo on disk.
 
+![The Vault desktop overview showing project momentum, recall efficiency, and memory status](assets/screenshots/vault-overview.png)
+
 ## The 60-Second Version
 
 - AI agents forget between sessions, even when the project has a long history.
@@ -227,6 +229,18 @@ The desktop app currently includes:
 - **Settings**: configure enrichment, local adapters, lifecycle behavior, and client setup.
 - **Client setup**: connect/disconnect Codex, Claude Desktop, Claude Code, install agent guide references, and troubleshoot MCP.
 
+### Open Loops
+
+The Overview surfaces unfinished work from saved next steps, stale debugging sessions, and recall-time loop closure. Operators can resolve, snooze, or open items directly from the dashboard.
+
+![The Vault Open Loops panel with today focus, priority buckets, tag filters, and inline resolve/snooze/open actions](assets/screenshots/open-loops.png)
+
+### Memory Bank
+
+The Memory Bank is the main inspection surface for saved project context: search, filter, select a record, inspect metadata, and review the full saved summary without leaving the desktop console.
+
+![The Vault Memory Bank showing saved memories, a selected handoff, metadata, tags, and next steps](assets/screenshots/memory-bank.png)
+
 ## Install For Normal Use
 
 For Windows users, use the GitHub Release installer:
@@ -290,6 +304,8 @@ resources/mcp/dist/index.js
 ```
 
 Use **Settings -> Client setup** in the desktop app. The UI writes only the Vault-specific MCP entry and keeps other client config entries intact. It also shows connection status and includes a troubleshooting panel.
+
+![The Vault Client setup screen showing connected MCP clients, bundled runtime path, and troubleshooting details](assets/screenshots/client-MCP-setup.png)
 
 ### Source Checkout
 
@@ -464,6 +480,8 @@ The Vault is local-first:
 - memory files live under the configured Vault root
 - client config writes are local machine changes
 - generated build output and local vault data should not be committed
+
+![The Vault Files screen showing the local vault directory tree, file counts, and a selected file preview](assets/screenshots/vault-files.png)
 
 Secrets and machine-specific files should stay out of Git:
 
