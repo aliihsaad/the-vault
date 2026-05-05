@@ -19,6 +19,7 @@ contextBridge.exposeInMainWorld('vaultAPI', {
   archiveMemory: (uid: string) => ipcRenderer.invoke('vault:archiveMemory', uid),
   resolveLoop: (input: unknown) => ipcRenderer.invoke('vault:resolveLoop', input),
   listProjectProposals: (query?: unknown) => ipcRenderer.invoke('vault:listProjectProposals', query),
+  executeProjectReview: (projectName: string, options?: unknown) => ipcRenderer.invoke('vault:executeProjectReview', projectName, options),
   decideProjectProposal: (input: unknown) => ipcRenderer.invoke('vault:decideProjectProposal', input),
   mergeProject: (sourceName: string, targetName: string, options?: unknown) => ipcRenderer.invoke('vault:mergeProject', sourceName, targetName, options),
   addProjectRelationship: (input: unknown) => ipcRenderer.invoke('vault:addProjectRelationship', input),

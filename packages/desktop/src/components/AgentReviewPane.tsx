@@ -6,11 +6,16 @@ import {
   ChevronDown,
   ChevronRight,
   Inbox,
+  Play,
   RefreshCw,
   RotateCcw,
   Trash2,
   X,
 } from 'lucide-react';
+import {
+  buildPendingDeleteReviewQuery,
+  describeProjectReviewResult,
+} from '../agent-review-query.js';
 
 export type AgentReviewTab = 'proposals' | 'pending-deletes';
 
@@ -44,6 +49,10 @@ export function AgentReviewPane({ initialTab = 'proposals', onCountsChanged }: A
   const [loadingProposals, setLoadingProposals] = useState(false);
   const [loadingPendingDeletes, setLoadingPendingDeletes] = useState(false);
   const [globalError, setGlobalError] = useState<string | null>(null);
+  const [reviewProjects, setReviewProjects] = useState<VaultProject[]>([]);
+  const [selectedReviewProject, setSelectedReviewProject] = useState('');
+  const [runningProjectReview, setRunningProjectReview] = useState(false);
+  const [projectReviewResult, setProjectReviewResult] = useState<VaultProjectReviewResult | null>(null);
   const [actionStateByUid, setActionStateByUid] = useState<Record<string, ProposalActionState>>({});
   const [confirmDeleteUid, setConfirmDeleteUid] = useState<string | null>(null);
   const [deletingUid, setDeletingUid] = useState<string | null>(null);
@@ -88,7 +97,7 @@ export function AgentReviewPane({ initialTab = 'proposals', onCountsChanged }: A
   async function refreshPendingDeletes() {
     setLoadingPendingDeletes(true);
     try {
-      const response = await window.vaultAPI.findMemory({ status: 'pending_delete', limit: 200 });
+      const response = await window.vaultAPI.findMemory(buildPendingDeleteReviewQuery());
       if (response.success && Array.isArray(response.data)) {
         setPendingDeletes(response.data);
         setGlobalError(null);
@@ -106,7 +115,44 @@ export function AgentReviewPane({ initialTab = 'proposals', onCountsChanged }: A
   }
 
   async function refreshAll() {
-    await Promise.all([refreshProposals(), refreshPendingDeletes()]);
+    await Promise.all([refreshProposals(), refreshPendingDeletes(), refreshReviewProjects()]);
+  }
+
+  async function refreshReviewProjects() {
+    try {
+      const status = await window.vaultAPI.status();
+      const projects = Array.isArray(status.projects) ? status.projects : [];
+      setReviewProjects(projects);
+      setSelectedReviewProject((current) => current || projects[0]?.name || '');
+    } catch (err) {
+      setGlobalError(err instanceof Error ? err.message : 'Failed to load projects');
+    }
+  }
+
+  async function runProjectReview() {
+    const projectName = selectedReviewProject.trim();
+    if (!projectName) {
+      setGlobalError('Choose a project before running review');
+      return;
+    }
+
+    setRunningProjectReview(true);
+    setProjectReviewResult(null);
+    try {
+      const response = await window.vaultAPI.executeProjectReview(projectName, { force: true });
+      if (!response.success || !response.data) {
+        setGlobalError(response.error ?? 'Project review failed');
+        return;
+      }
+
+      setProjectReviewResult(response.data);
+      setGlobalError(null);
+      await refreshProposals();
+    } catch (err) {
+      setGlobalError(err instanceof Error ? err.message : 'Project review failed');
+    } finally {
+      setRunningProjectReview(false);
+    }
   }
 
   function getActionState(uid: string): ProposalActionState {
@@ -293,10 +339,41 @@ export function AgentReviewPane({ initialTab = 'proposals', onCountsChanged }: A
               <span>{pendingDeletesTabLabel}</span>
             </button>
           </nav>
+          <div className="agent-review-runner" aria-label="Run project review">
+            <select
+              className="agent-review-project-select"
+              value={selectedReviewProject}
+              onChange={(event) => setSelectedReviewProject(event.target.value)}
+              disabled={runningProjectReview || reviewProjects.length === 0}
+            >
+              {reviewProjects.length === 0 ? (
+                <option value="">No projects</option>
+              ) : (
+                reviewProjects.map((project) => (
+                  <option key={project.id} value={project.name}>{project.name}</option>
+                ))
+              )}
+            </select>
+            <button
+              type="button"
+              className="primary-button"
+              disabled={runningProjectReview || !selectedReviewProject}
+              onClick={() => void runProjectReview()}
+            >
+              <Play size={16} />
+              <span>{runningProjectReview ? 'Reviewing...' : 'Run review now'}</span>
+            </button>
+          </div>
         </div>
 
         {globalError ? (
           <div className="empty-state empty-state-error" style={{ marginTop: 16 }}>{globalError}</div>
+        ) : null}
+
+        {projectReviewResult ? (
+          <div className="agent-review-result">
+            {describeProjectReviewResult(projectReviewResult)}
+          </div>
         ) : null}
 
         {activeTab === 'proposals' ? (

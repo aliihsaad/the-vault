@@ -185,6 +185,21 @@ declare global {
     error?: string;
   }
 
+  type VaultProjectReviewSkipReason =
+    | 'disabled'
+    | 'cooldown'
+    | 'project_not_found'
+    | 'below_item_threshold';
+
+  interface VaultProjectReviewResult {
+    project: string;
+    skipped: boolean;
+    skipReason?: VaultProjectReviewSkipReason;
+    proposalsCreated: VaultProjectProposal[];
+    candidatesEvaluated: number;
+    reviewedAt: string;
+  }
+
   interface VaultRecallPack {
     summaries: VaultMemory[];
     decisions: VaultMemory[];
@@ -605,6 +620,10 @@ declare global {
       proposalType?: VaultProposalType;
       limit?: number;
     }) => Promise<VaultResponse<VaultProjectProposal[]>>;
+    executeProjectReview: (
+      projectName: string,
+      options?: { force?: boolean; dryRun?: boolean },
+    ) => Promise<VaultResponse<VaultProjectReviewResult>>;
     decideProjectProposal: (input: {
       proposalUid: string;
       decision: 'accept' | 'reject';

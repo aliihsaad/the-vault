@@ -1296,6 +1296,26 @@ app.whenReady().then(() => {
     }
   });
 
+  ipcMain.handle('vault:executeProjectReview', async (_, projectName, options) => {
+    try {
+      const project = typeof projectName === 'string' ? projectName.trim() : '';
+      if (!project) {
+        return { success: false, error: 'Project name is required' };
+      }
+
+      const normalizedOptions = options && typeof options === 'object'
+        ? {
+            force: (options as { force?: unknown }).force === true,
+            dryRun: (options as { dryRun?: unknown }).dryRun === true,
+          }
+        : undefined;
+
+      return { success: true, data: await vault.executeProjectReview(project, normalizedOptions) };
+    } catch (e: any) {
+      return { success: false, error: e.message };
+    }
+  });
+
   ipcMain.handle('vault:decideProjectProposal', (_, input) => {
     try {
       return { success: true, data: vault.decideProjectProposal(input) };

@@ -28,6 +28,7 @@ import {
   Wrench,
 } from 'lucide-react';
 import { DayGroupedList } from './DayGroupedList.js';
+import { buildPendingDeleteReviewQuery } from '../agent-review-query.js';
 import {
   buildOpenLoopFocusList,
   describeOpenLoopSignals,
@@ -90,7 +91,7 @@ export function DashboardView({ vaultStatus, onOpenReview, onOpenMemory }: Dashb
         window.vaultAPI.getRecentLogs(240),
         window.vaultAPI.getAllSettings(),
         window.vaultAPI.listProjectProposals({ status: 'pending' }),
-        window.vaultAPI.findMemory({ status: 'pending_delete', limit: 200 }),
+        window.vaultAPI.findMemory(buildPendingDeleteReviewQuery()),
         window.vaultAPI.getProjectsMomentum(),
         window.vaultAPI.getOpenLoops(),
       ]);

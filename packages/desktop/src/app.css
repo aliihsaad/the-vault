@@ -2029,6 +2029,41 @@ select.text-input optgroup {
   color: var(--text-primary);
 }
 
+.agent-review-runner {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.agent-review-project-select {
+  min-width: 220px;
+  max-width: min(320px, 100%);
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text-primary);
+  font: inherit;
+}
+
+.agent-review-project-select option {
+  background: #11151d;
+  color: var(--text-primary);
+}
+
+.agent-review-result {
+  margin-top: 16px;
+  padding: 12px 14px;
+  border-radius: 12px;
+  border: 1px solid rgba(92, 224, 230, 0.18);
+  background: rgba(92, 224, 230, 0.08);
+  color: var(--text-secondary);
+  font-size: 0.9rem;
+  line-height: 1.5;
+}
+
 .agent-review-list {
   display: flex;
   flex-direction: column;
