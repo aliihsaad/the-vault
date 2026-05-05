@@ -52,10 +52,14 @@ type MemoryViewMode = 'browse' | 'create';
 
 export function MemoryView({
   composerPrefill,
+  initialSelection,
   onComposerPrefillConsumed,
+  onInitialSelectionConsumed,
 }: {
   composerPrefill?: { draft: Partial<VaultMemoryComposerDraft>; nonce: number } | null;
+  initialSelection?: { itemUid: string; nonce: number } | null;
   onComposerPrefillConsumed?: () => void;
+  onInitialSelectionConsumed?: () => void;
 }) {
   const [memories, setMemories] = useState<VaultMemory[]>([]);
   const [selectedUid, setSelectedUid] = useState<string | null>(null);
@@ -81,8 +85,20 @@ export function MemoryView({
   const [isEditing, setIsEditing] = useState(false);
 
   useEffect(() => {
-    void fetchMemories();
+    if (!initialSelection) {
+      void fetchMemories();
+    }
   }, []);
+
+  useEffect(() => {
+    if (!initialSelection) {
+      return;
+    }
+
+    void fetchMemories(initialSelection.itemUid).finally(() => {
+      onInitialSelectionConsumed?.();
+    });
+  }, [initialSelection?.nonce]);
 
   useEffect(() => {
     setIsEditing(false);

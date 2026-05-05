@@ -80,6 +80,13 @@ jobs:
             packages/desktop/dist/*.blockmap
             packages/desktop/dist/latest*.yml
           body: |
-            Windows installer for The Vault.
+            The Vault v0.2.3 hardens the Overview open-loops surface into a more action-oriented control panel.
+
+            Highlights:
+            - Adds a Today focus strip for the highest-priority open loops.
+            - Makes next actions visually dominant with stronger `Next:` hierarchy.
+            - Adds stale-pressure styling so older loops stand out before they rot.
+            - Adds inline `Resolve fixed`, `Snooze 1d`, and `Open` actions directly on each loop.
+            - Keeps the v0.2.2 upgrade migration for Claude Code MCP and skill paths.
 
             This build packages the desktop app and the bundled `vault-memory` MCP sidecar runtime. After installing, open The Vault and use Settings -> Client setup to connect Codex, Claude Desktop, or Claude Code.

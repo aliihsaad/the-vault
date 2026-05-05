@@ -144,6 +144,7 @@ function App() {
     draft: Partial<VaultMemoryComposerDraft>;
     nonce: number;
   } | null>(null);
+  const [memoryInitialSelection, setMemoryInitialSelection] = useState<{ itemUid: string; nonce: number } | null>(null);
   const [reviewInitialTab, setReviewInitialTab] = useState<AgentReviewTab>('proposals');
 
   useEffect(() => {
@@ -183,6 +184,11 @@ function App() {
   function openReviewPane(tab: AgentReviewTab) {
     setReviewInitialTab(tab);
     setActiveTab('reviews');
+  }
+
+  function openMemoryItem(itemUid: string) {
+    setMemoryInitialSelection({ itemUid, nonce: Date.now() });
+    setActiveTab('memory');
   }
 
   return (
@@ -293,14 +299,16 @@ function App() {
 
             <div className="content-surface">
               {activeTab === 'dashboard' ? (
-                <DashboardView vaultStatus={vaultStatus} onOpenReview={openReviewPane} />
+                <DashboardView vaultStatus={vaultStatus} onOpenReview={openReviewPane} onOpenMemory={openMemoryItem} />
               ) : null}
               {activeTab === 'reviews' ? <AgentReviewPane initialTab={reviewInitialTab} /> : null}
               {activeTab === 'agent' ? <VaultAgentView /> : null}
               {activeTab === 'memory' ? (
                 <MemoryView
                   composerPrefill={memoryComposerPrefill}
+                  initialSelection={memoryInitialSelection}
                   onComposerPrefillConsumed={() => setMemoryComposerPrefill(null)}
+                  onInitialSelectionConsumed={() => setMemoryInitialSelection(null)}
                 />
               ) : null}
               {activeTab === 'structure' ? <VaultStructureView /> : null}

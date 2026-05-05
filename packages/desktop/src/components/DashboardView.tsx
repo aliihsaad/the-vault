@@ -4,8 +4,10 @@ import { formatDistanceToNow } from 'date-fns';
 import {
   BarChart3,
   Bug,
+  CheckCircle2,
   Clock3,
   Coins,
+  ExternalLink,
   FolderKanban,
   Hammer,
   Lightbulb,
@@ -26,6 +28,13 @@ import {
   Wrench,
 } from 'lucide-react';
 import { DayGroupedList } from './DayGroupedList.js';
+import {
+  buildOpenLoopFocusList,
+  describeOpenLoopSignals,
+  getOpenLoopNextAction,
+  getOpenLoopStaleness,
+  type OpenLoopStalenessTone,
+} from '../open-loop-ui.js';
 
 const ESTIMATED_FULL_CANDIDATE_TOKENS = 120;
 const ESTIMATED_COMPACT_MATCH_TOKENS = 28;
@@ -49,9 +58,10 @@ type RecallDayMetric = {
 interface DashboardViewProps {
   vaultStatus: VaultStatus | null;
   onOpenReview?: (tab: 'proposals' | 'pending-deletes') => void;
+  onOpenMemory?: (itemUid: string) => void;
 }
 
-export function DashboardView({ vaultStatus, onOpenReview }: DashboardViewProps) {
+export function DashboardView({ vaultStatus, onOpenReview, onOpenMemory }: DashboardViewProps) {
   const [logs, setLogs] = useState<VaultLogEntry[]>([]);
   const [latest, setLatest] = useState<VaultMemory[]>([]);
   const [settings, setSettings] = useState<VaultSettings | null>(null);
@@ -349,6 +359,8 @@ export function DashboardView({ vaultStatus, onOpenReview }: DashboardViewProps)
           prev.includes(tag) ? prev.filter((entry) => entry !== tag) : [...prev, tag]
         ))}
         onClearTags={() => setOpenLoopTagFilter([])}
+        onRefresh={() => void hydrateOverview()}
+        onOpenMemory={onOpenMemory}
       />
 
       <section className="section-grid">
@@ -689,11 +701,15 @@ function OpenLoopsSection({
   activeTagFilter,
   onToggleTag,
   onClearTags,
+  onRefresh,
+  onOpenMemory,
 }: {
   loops: VaultOpenLoop[];
   activeTagFilter: string[];
   onToggleTag: (tag: string) => void;
   onClearTags: () => void;
+  onRefresh: () => void;
+  onOpenMemory?: (itemUid: string) => void;
 }) {
   const distinctTags = useMemo(() => {
     const map = new Map<string, number>();
@@ -719,6 +735,8 @@ function OpenLoopsSection({
     }
     return groups;
   }, [filteredLoops]);
+
+  const focusLoops = useMemo(() => buildOpenLoopFocusList(filteredLoops, 3), [filteredLoops]);
 
   const [expandedBuckets, setExpandedBuckets] = useState<Record<VaultOpenLoopBucket, boolean>>({
     high: false,
@@ -779,40 +797,61 @@ function OpenLoopsSection({
           {filteredLoops.length === 0 ? (
             <div className="empty-state">No open loops match the current tag filter.</div>
           ) : (
-            <div className="open-loops-buckets">
-              {OPEN_LOOP_BUCKET_ORDER.map((bucket) => {
-                const items = bucketed[bucket];
-                if (items.length === 0) return null;
-                const meta = OPEN_LOOP_BUCKET_LABELS[bucket];
-                const limit = OPEN_LOOP_BUCKET_DEFAULT_LIMIT[bucket];
-                const expanded = expandedBuckets[bucket];
-                const hiddenCount = Math.max(0, items.length - limit);
-                const visibleItems = expanded ? items : items.slice(0, limit);
-                return (
-                  <div key={bucket} className={`open-loops-bucket open-loops-bucket-${bucket}`}>
-                    <div className="open-loops-bucket-header">
-                      <span className="open-loops-bucket-emoji" aria-hidden>{meta.emoji}</span>
-                      <span className="open-loops-bucket-label">{meta.label}</span>
-                      <span className="open-loops-bucket-count">{items.length}</span>
+            <>
+              {focusLoops.length > 0 ? (
+                <div className="open-loops-focus">
+                  <div className="open-loops-focus-label">Today</div>
+                  <ol className="open-loops-focus-list">
+                    {focusLoops.map((loop) => (
+                      <li key={loop.itemUid}>
+                        <span className="open-loops-focus-title">{loop.title}</span>
+                        <span className="open-loops-focus-next">Next: {getOpenLoopNextAction(loop)}</span>
+                      </li>
+                    ))}
+                  </ol>
+                </div>
+              ) : null}
+
+              <div className="open-loops-buckets">
+                {OPEN_LOOP_BUCKET_ORDER.map((bucket) => {
+                  const items = bucketed[bucket];
+                  if (items.length === 0) return null;
+                  const meta = OPEN_LOOP_BUCKET_LABELS[bucket];
+                  const limit = OPEN_LOOP_BUCKET_DEFAULT_LIMIT[bucket];
+                  const expanded = expandedBuckets[bucket];
+                  const hiddenCount = Math.max(0, items.length - limit);
+                  const visibleItems = expanded ? items : items.slice(0, limit);
+                  return (
+                    <div key={bucket} className={`open-loops-bucket open-loops-bucket-${bucket}`}>
+                      <div className="open-loops-bucket-header">
+                        <span className="open-loops-bucket-emoji" aria-hidden>{meta.emoji}</span>
+                        <span className="open-loops-bucket-label">{meta.label}</span>
+                        <span className="open-loops-bucket-count">{items.length}</span>
+                      </div>
+                      <ul className="open-loops-list">
+                        {visibleItems.map((loop) => (
+                          <OpenLoopRow
+                            key={loop.itemUid}
+                            loop={loop}
+                            onRefresh={onRefresh}
+                            onOpenMemory={onOpenMemory}
+                          />
+                        ))}
+                      </ul>
+                      {hiddenCount > 0 ? (
+                        <button
+                          type="button"
+                          className="open-loops-bucket-toggle"
+                          onClick={() => toggleBucket(bucket)}
+                        >
+                          {expanded ? 'Show less' : `Show ${hiddenCount} more`}
+                        </button>
+                      ) : null}
                     </div>
-                    <ul className="open-loops-list">
-                      {visibleItems.map((loop) => (
-                        <OpenLoopRow key={loop.itemUid} loop={loop} />
-                      ))}
-                    </ul>
-                    {hiddenCount > 0 ? (
-                      <button
-                        type="button"
-                        className="open-loops-bucket-toggle"
-                        onClick={() => toggleBucket(bucket)}
-                      >
-                        {expanded ? 'Show less' : `Show ${hiddenCount} more`}
-                      </button>
-                    ) : null}
-                  </div>
-                );
-              })}
-            </div>
+                  );
+                })}
+              </div>
+            </>
           )}
         </>
       )}
@@ -820,36 +859,134 @@ function OpenLoopsSection({
   );
 }
 
-function OpenLoopRow({ loop }: { loop: VaultOpenLoop }) {
-  const ageLabel = loop.daysOpen <= 0 ? 'today' : `${loop.daysOpen}d`;
-  const firstNextStep = loop.nextSteps[0];
+function OpenLoopRow({
+  loop,
+  onRefresh,
+  onOpenMemory,
+}: {
+  loop: VaultOpenLoop;
+  onRefresh: () => void;
+  onOpenMemory?: (itemUid: string) => void;
+}) {
+  const staleness = getOpenLoopStaleness(loop.daysOpen);
+  const nextAction = getOpenLoopNextAction(loop);
+  const [busyAction, setBusyAction] = useState<'resolve' | 'snooze' | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  async function handleResolve() {
+    setBusyAction('resolve');
+    setError(null);
+    try {
+      const response = await window.vaultAPI.resolveLoop({
+        itemUid: loop.itemUid,
+        outcome: 'fixed',
+        resolutionNote: 'Resolved from the Overview open loops panel.',
+      });
+      if (!response.success) {
+        throw new Error(response.error || 'Failed to resolve loop');
+      }
+      onRefresh();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to resolve loop');
+    } finally {
+      setBusyAction(null);
+    }
+  }
+
+  async function handleSnooze() {
+    setBusyAction('snooze');
+    setError(null);
+    try {
+      const snoozedUntil = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
+      const response = await window.vaultAPI.updateMemory(loop.itemUid, { snoozedUntil });
+      if (!response.success) {
+        throw new Error(response.error || 'Failed to snooze loop');
+      }
+      onRefresh();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to snooze loop');
+    } finally {
+      setBusyAction(null);
+    }
+  }
+
   return (
-    <li className="open-loops-row">
+    <li className={`open-loops-row open-loops-row-pressure-${staleness.tone}`}>
       <div className="open-loops-row-head">
         <RoutineIcon routineType={loop.routineType} />
         <span className="open-loops-row-title">{loop.title}</span>
-        <span className="open-loops-row-age" title={`Last updated ${new Date(loop.lastUpdated).toLocaleString()}`}>
-          {ageLabel}
-        </span>
+        <StalenessBadge staleness={staleness} lastUpdated={loop.lastUpdated} />
       </div>
       <div className="open-loops-row-meta">
         <span className="open-loops-row-project">{loop.project}</span>
+        <span className="open-loops-row-signals" title="Why this loop is surfaced">
+          {describeOpenLoopSignals(loop)}
+        </span>
         {loop.recentlyReferenced ? (
           <span className="open-loops-row-recent" title="Referenced within the last 3 days">
             recently referenced
           </span>
         ) : null}
-        <span className="open-loops-row-score" title="Derived priority score">score {loop.score}</span>
       </div>
-      {firstNextStep ? (
-        <div className="open-loops-row-next" title={loop.nextSteps.join(' • ')}>
-          → {firstNextStep}
+      {nextAction ? (
+        <div className="open-loops-row-next" title={loop.nextSteps.join(' • ') || nextAction}>
+          <span>Next:</span> {nextAction}
           {loop.nextSteps.length > 1 ? (
             <span className="open-loops-row-next-more"> (+{loop.nextSteps.length - 1})</span>
           ) : null}
         </div>
       ) : null}
+      <div className="open-loops-row-actions">
+        <button
+          type="button"
+          className="open-loops-row-action open-loops-row-action-resolve"
+          title="Close this loop with outcome: fixed"
+          onClick={() => void handleResolve()}
+          disabled={busyAction !== null}
+        >
+          <CheckCircle2 size={12} />
+          <span>{busyAction === 'resolve' ? 'Resolving' : 'Resolve fixed'}</span>
+        </button>
+        <button
+          type="button"
+          className="open-loops-row-action"
+          onClick={() => void handleSnooze()}
+          disabled={busyAction !== null}
+        >
+          <Clock3 size={12} />
+          <span>{busyAction === 'snooze' ? 'Snoozing' : 'Snooze 1d'}</span>
+        </button>
+        {onOpenMemory ? (
+          <button
+            type="button"
+            className="open-loops-row-action"
+            onClick={() => onOpenMemory(loop.itemUid)}
+            disabled={busyAction !== null}
+          >
+            <ExternalLink size={12} />
+            <span>Open</span>
+          </button>
+        ) : null}
+      </div>
+      {error ? <div className="open-loops-row-error">{error}</div> : null}
     </li>
+  );
+}
+
+function StalenessBadge({
+  staleness,
+  lastUpdated,
+}: {
+  staleness: { tone: OpenLoopStalenessTone; label: string; title: string };
+  lastUpdated: string;
+}) {
+  return (
+    <span
+      className={`open-loops-row-age open-loops-row-age-${staleness.tone}`}
+      title={`${staleness.title} Last updated ${new Date(lastUpdated).toLocaleString()}`}
+    >
+      {staleness.label}
+    </span>
   );
 }
 
