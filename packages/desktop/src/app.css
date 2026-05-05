@@ -3687,6 +3687,26 @@ select.text-input optgroup {
   gap: 8px;
 }
 
+.open-loops-bucket-toggle {
+  margin-top: 8px;
+  align-self: flex-start;
+  background: transparent;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  color: var(--text-secondary);
+  font-size: 0.72rem;
+  font-family: var(--font-mono);
+  padding: 4px 10px;
+  border-radius: 999px;
+  cursor: pointer;
+  transition: background 120ms ease, color 120ms ease, border-color 120ms ease;
+}
+
+.open-loops-bucket-toggle:hover {
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text-primary);
+  border-color: rgba(255, 255, 255, 0.16);
+}
+
 .open-loops-row {
   display: flex;
   flex-direction: column;

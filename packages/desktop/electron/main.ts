@@ -1663,9 +1663,17 @@ app.whenReady().then(() => {
   // Connection setup handlers
   // ==========================================================================
 
-  const claudeDesktopConfigPath = join(process.env.APPDATA || '', 'Claude', 'claude_desktop_config.json');
-  const claudeCodeSettingsPath = join(homedir(), '.claude', 'settings.json');
+  // Claude Desktop reads its MCP config from %APPDATA%/Claude/claude_desktop_config.json on Windows.
+  // Use Electron's app.getPath rather than process.env.APPDATA — the env var can be unset in
+  // some launch contexts (services, restricted shells), and getPath always resolves the right dir.
+  const claudeDesktopConfigPath = join(app.getPath('appData'), 'Claude', 'claude_desktop_config.json');
+  // Claude Code reads user-level MCP servers from ~/.claude.json (not ~/.claude/settings.json).
+  // Writing to settings.json silently does nothing for MCP — the CLI only consumes mcpServers
+  // out of ~/.claude.json (the same file `claude mcp add --scope user` writes to).
+  const claudeCodeSettingsPath = join(homedir(), '.claude.json');
   const claudeMdPath = join(homedir(), '.claude', 'CLAUDE.md');
+  const claudeUserSkillDir = join(homedir(), '.claude', 'skills', 'vault-memory');
+  const claudeUserSkillPath = join(claudeUserSkillDir, 'SKILL.md');
   const codexConfigPath = join(homedir(), '.codex', 'config.toml');
   const claudeSkillPath = resolve(skillsPath, 'claude-vault-skill.md');
   const codexAgentsPath = join(homedir(), '.codex', 'AGENTS.md');
@@ -1989,13 +1997,17 @@ app.whenReady().then(() => {
       const codeResult = await readJsonFile(claudeCodeSettingsPath);
       const codeConfigured = mcpEntriesMatch(codeResult.data?.mcpServers?.['vault-memory'], launchConfig);
 
-      // Check skill installation
-      let claudeSkillInstalled = false;
-      try {
-        const claudeMdContent = await readFile(claudeMdPath, 'utf8');
-        claudeSkillInstalled = claudeMdContent.includes('vault-memory') || claudeMdContent.includes('claude-vault-skill');
-      } catch {
-        // File doesn't exist — not installed
+      // Check skill installation. The active vector is ~/.claude/skills/vault-memory/SKILL.md;
+      // the legacy CLAUDE.md reference is kept as a fallback signal so users upgrading from
+      // <=0.2.0 don't see "Not installed" until they reinstall.
+      let claudeSkillInstalled = await fileExists(claudeUserSkillPath);
+      if (!claudeSkillInstalled) {
+        try {
+          const claudeMdContent = await readFile(claudeMdPath, 'utf8');
+          claudeSkillInstalled = claudeMdContent.includes('claude-vault-skill') || claudeMdContent.includes('## Vault Memory Skill');
+        } catch {
+          // File doesn't exist — not installed
+        }
       }
 
       let codexSkillInstalled = false;
@@ -2026,6 +2038,7 @@ app.whenReady().then(() => {
           skill: {
             claudeInstalled: claudeSkillInstalled,
             claudeMdPath,
+            claudeSkillPath: claudeUserSkillPath,
             codexInstalled: codexSkillInstalled,
             codexAgentsPath,
           },
@@ -2063,38 +2076,100 @@ app.whenReady().then(() => {
     }
   });
 
-  async function installSkillReference(
-    target: 'claude' | 'codex',
-  ): Promise<{ success: boolean; steps: ConnectStep[] }> {
+  // Claude Code: install the actual skill file at ~/.claude/skills/vault-memory/SKILL.md.
+  // The CLI only loads skills from that location — appending a doc reference to CLAUDE.md
+  // (the previous behavior) made the install look successful while leaving the skill inert.
+  async function installClaudeSkill(): Promise<{ success: boolean; steps: ConnectStep[] }> {
     const steps: ConnectStep[] = [];
-    const skillPath = target === 'claude' ? claudeSkillPath : codexSkillPath;
-    const instructionPath = target === 'claude' ? claudeMdPath : codexAgentsPath;
-    const instructionLabel = target === 'claude' ? 'CLAUDE.md' : 'AGENTS.md';
-    const referenceToken = target === 'claude' ? 'claude-vault-skill' : 'codex-vault-skill';
-    const skillSection = target === 'claude'
-      ? [
-          '',
-          '',
-          '## Vault Memory Skill',
-          '',
-          `The Vault memory skill file is located at \`${claudeSkillPath}\`.`,
-          'Reference this file when working with Vault memory tools (vault_save_memory, vault_recall_context, etc.).',
-          'It teaches the agent when to recall, when to save, and how to structure memory items.',
-          '',
-        ].join('\n')
-      : [
-          '',
-          '',
-          '## Vault Memory Skill',
-          '',
-          `Codex should use the Vault memory skill at \`${codexSkillPath}\` when working in this repository.`,
-          'Use Vault MCP when the `vault-memory` server is attached, and use the skill file as the operating guide for recall/save behavior.',
-          'Keep the skill path stable so Codex setup prompts and future sessions can reference it directly.',
-          '',
-        ].join('\n');
 
-    const skillExists = await fileExists(skillPath);
-    if (!skillExists) {
+    if (!(await fileExists(claudeSkillPath))) {
+      steps.push({ id: 'locate-skill', label: 'Locate bundled skill', status: 'fail', detail: `Not found: ${claudeSkillPath}` });
+      steps.push({ id: 'prepare-dir', label: 'Prepare skill directory', status: 'skipped' });
+      steps.push({ id: 'write-skill', label: 'Write SKILL.md', status: 'skipped' });
+      steps.push({ id: 'verify', label: 'Verify installation', status: 'skipped' });
+      return { success: false, steps };
+    }
+    steps.push({ id: 'locate-skill', label: 'Locate bundled skill', status: 'success', detail: claudeSkillPath });
+
+    let skillContent: string;
+    try {
+      skillContent = await readFile(claudeSkillPath, 'utf8');
+    } catch (err: any) {
+      steps.push({ id: 'prepare-dir', label: 'Prepare skill directory', status: 'fail', detail: err.message });
+      steps.push({ id: 'write-skill', label: 'Write SKILL.md', status: 'skipped' });
+      steps.push({ id: 'verify', label: 'Verify installation', status: 'skipped' });
+      return { success: false, steps };
+    }
+
+    try {
+      await mkdir(claudeUserSkillDir, { recursive: true });
+      steps.push({ id: 'prepare-dir', label: 'Prepare skill directory', status: 'success', detail: claudeUserSkillDir });
+    } catch (err: any) {
+      steps.push({ id: 'prepare-dir', label: 'Prepare skill directory', status: 'fail', detail: err.message });
+      steps.push({ id: 'write-skill', label: 'Write SKILL.md', status: 'skipped' });
+      steps.push({ id: 'verify', label: 'Verify installation', status: 'skipped' });
+      return { success: false, steps };
+    }
+
+    // If a SKILL.md is already present, back it up before overwriting so we don't blow away
+    // hand-edited skills the user may have customised.
+    if (await fileExists(claudeUserSkillPath)) {
+      try {
+        const existing = await readFile(claudeUserSkillPath, 'utf8');
+        if (existing.trim() === skillContent.trim()) {
+          steps.push({ id: 'write-skill', label: 'Write SKILL.md', status: 'skipped', detail: 'Already up-to-date' });
+          steps.push({ id: 'verify', label: 'Verify installation', status: 'success', detail: claudeUserSkillPath });
+          return { success: true, steps };
+        }
+        await copyFile(claudeUserSkillPath, `${claudeUserSkillPath}.vault-backup-${Date.now()}`);
+      } catch {
+        // Best-effort backup; don't fail the install if the backup write fails.
+      }
+    }
+
+    try {
+      await writeFile(claudeUserSkillPath, skillContent, 'utf8');
+      steps.push({ id: 'write-skill', label: 'Write SKILL.md', status: 'success', detail: claudeUserSkillPath });
+    } catch (err: any) {
+      steps.push({ id: 'write-skill', label: 'Write SKILL.md', status: 'fail', detail: err.message });
+      steps.push({ id: 'verify', label: 'Verify installation', status: 'skipped' });
+      return { success: false, steps };
+    }
+
+    try {
+      const written = await readFile(claudeUserSkillPath, 'utf8');
+      if (written.trim() === skillContent.trim()) {
+        steps.push({ id: 'verify', label: 'Verify installation', status: 'success', detail: 'SKILL.md confirmed on disk' });
+        return { success: true, steps };
+      }
+      steps.push({ id: 'verify', label: 'Verify installation', status: 'fail', detail: 'Content mismatch after write' });
+      return { success: false, steps };
+    } catch (err: any) {
+      steps.push({ id: 'verify', label: 'Verify installation', status: 'fail', detail: err.message });
+      return { success: false, steps };
+    }
+  }
+
+  // Codex: append a reference into ~/.codex/AGENTS.md. Codex actually reads AGENTS.md so this
+  // is the right install vector for Codex (unlike Claude Code, which needs a real SKILL.md).
+  async function installCodexSkillReference(): Promise<{ success: boolean; steps: ConnectStep[] }> {
+    const steps: ConnectStep[] = [];
+    const skillPath = codexSkillPath;
+    const instructionPath = codexAgentsPath;
+    const instructionLabel = 'AGENTS.md';
+    const referenceToken = 'codex-vault-skill';
+    const skillSection = [
+      '',
+      '',
+      '## Vault Memory Skill',
+      '',
+      `Codex should use the Vault memory skill at \`${codexSkillPath}\` when working in this repository.`,
+      'Use Vault MCP when the `vault-memory` server is attached, and use the skill file as the operating guide for recall/save behavior.',
+      'Keep the skill path stable so Codex setup prompts and future sessions can reference it directly.',
+      '',
+    ].join('\n');
+
+    if (!(await fileExists(skillPath))) {
       steps.push({ id: 'locate-skill', label: 'Locate skill file', status: 'fail', detail: `Not found: ${skillPath}` });
       steps.push({ id: 'read-instructions', label: `Read ${instructionLabel}`, status: 'skipped' });
       steps.push({ id: 'check-existing', label: 'Check existing reference', status: 'skipped' });
@@ -2156,7 +2231,10 @@ app.whenReady().then(() => {
   ipcMain.handle('vault:installSkillFile', async (_, target) => {
     try {
       const normalizedTarget = target === 'codex' ? 'codex' : 'claude';
-      return { success: true, data: await installSkillReference(normalizedTarget) };
+      const data = normalizedTarget === 'codex'
+        ? await installCodexSkillReference()
+        : await installClaudeSkill();
+      return { success: true, data };
     } catch (e: any) {
       return { success: false, error: e.message };
     }
@@ -2339,6 +2417,22 @@ app.whenReady().then(() => {
     const steps: ConnectStep[] = [];
     const instructionPath = target === 'claude' ? claudeMdPath : codexAgentsPath;
     const instructionLabel = target === 'claude' ? 'CLAUDE.md' : 'AGENTS.md';
+
+    // Claude Code: also delete the active SKILL.md. Without this, the previous install path
+    // (~/.claude/skills/vault-memory/SKILL.md) keeps the skill loaded after "uninstall."
+    if (target === 'claude') {
+      if (await fileExists(claudeUserSkillPath)) {
+        try {
+          const { unlink } = await import('node:fs/promises');
+          await unlink(claudeUserSkillPath);
+          steps.push({ id: 'remove-skill-file', label: 'Remove SKILL.md', status: 'success', detail: claudeUserSkillPath });
+        } catch (err: any) {
+          steps.push({ id: 'remove-skill-file', label: 'Remove SKILL.md', status: 'fail', detail: err.message });
+        }
+      } else {
+        steps.push({ id: 'remove-skill-file', label: 'Remove SKILL.md', status: 'skipped', detail: 'No SKILL.md found' });
+      }
+    }
 
     let instructionContent = '';
     try {

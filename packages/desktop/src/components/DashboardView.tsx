@@ -678,6 +678,12 @@ const OPEN_LOOP_BUCKET_LABELS: Record<VaultOpenLoopBucket, { label: string; emoj
 
 const OPEN_LOOP_BUCKET_ORDER: VaultOpenLoopBucket[] = ['high', 'medium', 'low'];
 
+const OPEN_LOOP_BUCKET_DEFAULT_LIMIT: Record<VaultOpenLoopBucket, number> = {
+  high: 5,
+  medium: 5,
+  low: 3,
+};
+
 function OpenLoopsSection({
   loops,
   activeTagFilter,
@@ -713,6 +719,16 @@ function OpenLoopsSection({
     }
     return groups;
   }, [filteredLoops]);
+
+  const [expandedBuckets, setExpandedBuckets] = useState<Record<VaultOpenLoopBucket, boolean>>({
+    high: false,
+    medium: false,
+    low: false,
+  });
+
+  function toggleBucket(bucket: VaultOpenLoopBucket) {
+    setExpandedBuckets((prev) => ({ ...prev, [bucket]: !prev[bucket] }));
+  }
 
   return (
     <section className="panel open-loops-panel">
@@ -768,6 +784,10 @@ function OpenLoopsSection({
                 const items = bucketed[bucket];
                 if (items.length === 0) return null;
                 const meta = OPEN_LOOP_BUCKET_LABELS[bucket];
+                const limit = OPEN_LOOP_BUCKET_DEFAULT_LIMIT[bucket];
+                const expanded = expandedBuckets[bucket];
+                const hiddenCount = Math.max(0, items.length - limit);
+                const visibleItems = expanded ? items : items.slice(0, limit);
                 return (
                   <div key={bucket} className={`open-loops-bucket open-loops-bucket-${bucket}`}>
                     <div className="open-loops-bucket-header">
@@ -776,10 +796,19 @@ function OpenLoopsSection({
                       <span className="open-loops-bucket-count">{items.length}</span>
                     </div>
                     <ul className="open-loops-list">
-                      {items.map((loop) => (
+                      {visibleItems.map((loop) => (
                         <OpenLoopRow key={loop.itemUid} loop={loop} />
                       ))}
                     </ul>
+                    {hiddenCount > 0 ? (
+                      <button
+                        type="button"
+                        className="open-loops-bucket-toggle"
+                        onClick={() => toggleBucket(bucket)}
+                      >
+                        {expanded ? 'Show less' : `Show ${hiddenCount} more`}
+                      </button>
+                    ) : null}
                   </div>
                 );
               })}

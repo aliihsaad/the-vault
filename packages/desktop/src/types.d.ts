@@ -563,6 +563,7 @@ declare global {
     skill: {
       claudeInstalled: boolean;
       claudeMdPath: string;
+      claudeSkillPath: string;
       codexInstalled: boolean;
       codexAgentsPath: string;
     };
