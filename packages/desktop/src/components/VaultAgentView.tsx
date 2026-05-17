@@ -409,6 +409,20 @@ export function VaultAgentView() {
     () => tasks.find((task) => task.taskUid === selectedTaskUid) || tasks[0] || null,
     [tasks, selectedTaskUid],
   );
+  const activeTask = useMemo(
+    () => tasks.find((task) => task.taskUid === executorStatus?.activeTaskUid)
+      || tasks.find((task) => task.status === 'running')
+      || null,
+    [executorStatus?.activeTaskUid, tasks],
+  );
+  const queueTypeBreakdown = useMemo(
+    () => executorStatus?.queue.byType
+      ? Object.entries(executorStatus.queue.byType)
+        .filter(([, count]) => count > 0)
+        .sort((left, right) => right[1] - left[1] || left[0].localeCompare(right[0]))
+      : [],
+    [executorStatus?.queue.byType],
+  );
   const selectedTaskSavedMemoryUid = useMemo(
     () => getSavedTaskMemoryUid(selectedTask),
     [selectedTask],
@@ -1084,17 +1098,45 @@ export function VaultAgentView() {
             <Clock3 size={18} className="panel-icon" />
           </div>
 
-          <div className="detail-stack">
-            <div className="chip-row">
-              <span className="chip">pending {pendingTasks}</span>
-              <span className="chip">running {runningTasks}</span>
-              <span className="chip">completed {completedTasks}</span>
-              <span className="chip">failed {failedTasks}</span>
+          <div className="queue-overview-stack">
+            <div className="queue-health-grid" aria-label="Queue status summary">
+              <div className="queue-health-card queue-health-card-pending">
+                <span className="queue-health-label">Pending</span>
+                <strong>{pendingTasks}</strong>
+              </div>
+              <div className="queue-health-card queue-health-card-running">
+                <span className="queue-health-label">Running</span>
+                <strong>{runningTasks}</strong>
+              </div>
+              <div className="queue-health-card queue-health-card-completed">
+                <span className="queue-health-label">Completed</span>
+                <strong>{completedTasks}</strong>
+              </div>
+              <div className="queue-health-card queue-health-card-failed">
+                <span className="queue-health-label">Failed</span>
+                <strong>{failedTasks}</strong>
+              </div>
             </div>
 
-            {executorStatus?.queue.byType && Object.keys(executorStatus.queue.byType).length > 0 ? (
-              <div className="chip-row">
-                {Object.entries(executorStatus.queue.byType).map(([type, count]) => (
+            <div className={`queue-now-card ${executorStatus?.running ? 'queue-now-card-running' : ''}`}>
+              <div>
+                <span className="queue-section-kicker">Executor</span>
+                <strong>{executorStatus?.running ? 'Running' : 'Stopped'}</strong>
+              </div>
+              <div className="queue-now-meta">
+                <span>Active task</span>
+                <span className="text-mono">{activeTask?.taskUid || executorStatus?.activeTaskUid || 'none'}</span>
+              </div>
+              {activeTask ? (
+                <p>{activeTask.title}</p>
+              ) : (
+                <p>No task is currently being processed.</p>
+              )}
+            </div>
+
+            {queueTypeBreakdown.length > 0 ? (
+              <div className="queue-type-strip" aria-label="Queued tasks by type">
+                {queueTypeBreakdown.map(([type, count]) => (
                   <span key={type} className="chip chip-muted">
                     {type} {count}
                   </span>
@@ -1102,72 +1144,89 @@ export function VaultAgentView() {
               </div>
             ) : null}
 
-            {tasks.length === 0 ? (
-              <div className="empty-state">No delegated tasks have been queued yet.</div>
-            ) : (
-              <DayGroupedList
-                items={tasks}
-                getDate={(task) => task.updatedAt}
-                getKey={(task) => task.taskUid}
-                emptyMessage="No delegated tasks have been queued yet."
-                renderItem={(task) => (
-                  <button
-                    type="button"
-                    className={`log-entry log-entry-button ${selectedTask?.taskUid === task.taskUid ? 'log-entry-active' : ''}`}
-                    onClick={() => setSelectedTaskUid(task.taskUid)}
-                  >
-                    <div className={`badge ${getTaskBadgeClass(task.status)}`}>{task.status}</div>
-                    <div className="log-entry-main">
-                      <div className="log-entry-message">{task.title}</div>
-                      <div className="log-entry-meta">
-                        <span>{task.project || 'global'}</span>
-                        <span>{task.taskType}</span>
-                        <span>{task.priority}</span>
-                        <span>{task.retryCount}/{task.maxRetries} retries</span>
-                      </div>
-                    </div>
-                    <div className="log-entry-time">
-                      <Clock3 size={14} />
-                      <span>{formatRelativeTimestamp(task.updatedAt)}</span>
-                    </div>
-                  </button>
-                )}
-              />
-            )}
+            <div className="queue-overview-section">
+              <div className="queue-section-header">
+                <div>
+                  <span className="queue-section-kicker">Recent tasks</span>
+                  <strong>{tasks.length} shown</strong>
+                </div>
+                <span>{selectedTask ? 'Select a row for detail' : 'No task selected'}</span>
+              </div>
+
+              {tasks.length === 0 ? (
+                <div className="empty-state">No delegated tasks have been queued yet.</div>
+              ) : (
+                <DayGroupedList
+                  items={tasks}
+                  getDate={(task) => task.updatedAt}
+                  getKey={(task) => task.taskUid}
+                  emptyMessage="No delegated tasks have been queued yet."
+                  defaultOpenCount={1}
+                  renderItem={(task) => (
+                    <button
+                      type="button"
+                      className={`queue-task-row ${selectedTask?.taskUid === task.taskUid ? 'queue-task-row-active' : ''}`}
+                      onClick={() => setSelectedTaskUid(task.taskUid)}
+                    >
+                      <span className={`queue-status-rail ${getTaskStatusRailClass(task.status)}`} />
+                      <span className="queue-task-main">
+                        <span className="queue-task-title-row">
+                          <span className="queue-task-title">{task.title}</span>
+                          <span className={`badge ${getTaskBadgeClass(task.status)}`}>{task.status}</span>
+                        </span>
+                        <span className="queue-task-meta">
+                          <span>{task.project || 'global'}</span>
+                          <span>{task.taskType}</span>
+                          <span>{task.priority}</span>
+                          <span>{task.retryCount}/{task.maxRetries} retries</span>
+                        </span>
+                      </span>
+                      <span className="queue-task-age">
+                        <Clock3 size={13} />
+                        <span>{formatRelativeTimestamp(task.updatedAt)}</span>
+                      </span>
+                    </button>
+                  )}
+                />
+              )}
+            </div>
 
             {selectedTask ? (
-              <div className="detail-stack">
-                <div className="detail-headline">
-                  <span className={`badge ${getTaskBadgeClass(selectedTask.status)}`}>{selectedTask.status}</span>
-                  <h3>{selectedTask.title}</h3>
-                  <p>{selectedTask.taskUid}</p>
-                </div>
-
-                <div className="detail-grid">
-                  <div className="detail-block">
-                    <span className="detail-label">Task type</span>
+              <div className="queue-overview-section queue-selected-task">
+                <div className="queue-section-header">
+                  <div>
+                    <span className="queue-section-kicker">Selected task</span>
                     <strong>{selectedTask.taskType}</strong>
                   </div>
-                  <div className="detail-block">
-                    <span className="detail-label">Priority</span>
+                  <span className={`badge ${getTaskBadgeClass(selectedTask.status)}`}>{selectedTask.status}</span>
+                </div>
+
+                <div className="queue-selected-headline">
+                  <h3>{selectedTask.title}</h3>
+                  <p className="text-mono">{selectedTask.taskUid}</p>
+                </div>
+
+                <div className="queue-selected-meta-grid">
+                  <span>
+                    <span>Priority</span>
                     <strong>{selectedTask.priority}</strong>
-                  </div>
-                  <div className="detail-block">
-                    <span className="detail-label">Routed model</span>
-                    <strong className="text-mono">{selectedTask.routedModel || 'unresolved'}</strong>
-                  </div>
-                  <div className="detail-block">
-                    <span className="detail-label">Project</span>
+                  </span>
+                  <span>
+                    <span>Project</span>
                     <strong>{selectedTask.project || 'global'}</strong>
-                  </div>
-                  <div className="detail-block">
-                    <span className="detail-label">Created</span>
+                  </span>
+                  <span>
+                    <span>Created</span>
                     <strong>{formatTimestamp(selectedTask.createdAt)}</strong>
-                  </div>
-                  <div className="detail-block">
-                    <span className="detail-label">Completed</span>
+                  </span>
+                  <span>
+                    <span>Completed</span>
                     <strong>{formatTimestamp(selectedTask.completedAt)}</strong>
-                  </div>
+                  </span>
+                  <span className="queue-selected-meta-wide">
+                    <span>Routed model</span>
+                    <strong className="text-mono">{selectedTask.routedModel || 'unresolved'}</strong>
+                  </span>
                 </div>
 
                 <div className="detail-section">
@@ -1293,10 +1352,13 @@ export function VaultAgentView() {
               </div>
             ) : null}
 
-            <div className="detail-section">
-              <div className="detail-section-title">
+            <div className="queue-overview-section">
+              <div className="queue-section-header">
+                <div>
+                  <span className="queue-section-kicker">Live events</span>
+                  <strong>{taskEvents.length} received</strong>
+                </div>
                 <Activity size={16} />
-                <span>Live executor events</span>
               </div>
 
               {taskEvents.length === 0 ? (
@@ -1546,6 +1608,22 @@ function getTaskBadgeClass(status: VaultTaskStatus): string {
     case 'pending':
     default:
       return 'badge-task-pending';
+  }
+}
+
+function getTaskStatusRailClass(status: VaultTaskStatus): string {
+  switch (status) {
+    case 'completed':
+      return 'queue-status-rail-completed';
+    case 'failed':
+      return 'queue-status-rail-failed';
+    case 'running':
+      return 'queue-status-rail-running';
+    case 'cancelled':
+      return 'queue-status-rail-cancelled';
+    case 'pending':
+    default:
+      return 'queue-status-rail-pending';
   }
 }
 
