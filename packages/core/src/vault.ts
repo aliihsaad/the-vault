@@ -72,6 +72,13 @@ import {
   decideProjectProposal,
 } from './services/proposal.service.js';
 import {
+  getProjectWorkspace,
+  listProjectWorkspaces,
+  removeProjectWorkspace,
+  setProjectWorkspace,
+  validateWorkspacePath,
+} from './services/workspace-registry.service.js';
+import {
   setEnrichmentClient as setGlobalEnrichmentClient,
   isEnrichmentAvailable as checkEnrichmentAvailable,
 } from './services/enrichment.service.js';
@@ -94,6 +101,10 @@ import type {
   OpenLoop,
   Project,
   ProjectMomentum,
+  ProjectWorkspaceConfig,
+  ProjectWorkspaceRegistry,
+  SetProjectWorkspaceInput,
+  WorkspaceValidationResult,
   ActivityLogEntry,
   CreateTaskInput,
   FindTaskQuery,
@@ -349,6 +360,48 @@ export class Vault {
   getAllSettings(): Record<string, unknown> {
     this.ensureInitialized();
     return getAllSettings(this.db);
+  }
+
+  listProjectWorkspaces(): ProjectWorkspaceConfig[] {
+    this.ensureInitialized();
+    return listProjectWorkspaces(this.getSetting('project_workspace_registry') as ProjectWorkspaceRegistry | undefined);
+  }
+
+  getProjectWorkspace(project: string): ProjectWorkspaceConfig | null {
+    this.ensureInitialized();
+    return getProjectWorkspace(
+      this.getSetting('project_workspace_registry') as ProjectWorkspaceRegistry | undefined,
+      project,
+    );
+  }
+
+  validateWorkspacePath(workspacePath: string): WorkspaceValidationResult {
+    this.ensureInitialized();
+    return validateWorkspacePath(workspacePath);
+  }
+
+  setProjectWorkspace(input: SetProjectWorkspaceInput): ProjectWorkspaceConfig {
+    this.ensureInitialized();
+    const nextRegistry = setProjectWorkspace(
+      this.getSetting('project_workspace_registry') as ProjectWorkspaceRegistry | undefined,
+      input,
+    );
+    this.setSetting('project_workspace_registry', nextRegistry);
+    const workspace = getProjectWorkspace(nextRegistry, input.project);
+    if (!workspace) {
+      throw new Error('Workspace was not stored.');
+    }
+    return workspace;
+  }
+
+  removeProjectWorkspace(project: string): ProjectWorkspaceConfig[] {
+    this.ensureInitialized();
+    const nextRegistry = removeProjectWorkspace(
+      this.getSetting('project_workspace_registry') as ProjectWorkspaceRegistry | undefined,
+      project,
+    );
+    this.setSetting('project_workspace_registry', nextRegistry);
+    return listProjectWorkspaces(nextRegistry);
   }
 
   // =========================================================================

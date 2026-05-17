@@ -213,6 +213,36 @@ export interface ProjectMomentum {
   lastActivityAt: string | null;
 }
 
+// ---------------------------------------------------------------------------
+// Project Workspace Registry
+// ---------------------------------------------------------------------------
+export interface ProjectWorkspaceConfig {
+  project: string;
+  workspacePath: string;
+  trusted: boolean;
+  gitRootDetected: boolean;
+  lastValidatedAt: string;
+  notes: string | null;
+}
+
+export type ProjectWorkspaceRegistry = Record<string, ProjectWorkspaceConfig>;
+
+export interface SetProjectWorkspaceInput {
+  project: string;
+  workspacePath: string;
+  trusted?: boolean;
+  notes?: string | null;
+}
+
+export interface WorkspaceValidationResult {
+  ok: boolean;
+  workspacePath: string;
+  exists: boolean;
+  isDirectory: boolean;
+  gitRootDetected: boolean;
+  message: string;
+}
+
 /**
  * Open-loops panel surfacing — derived bucket from the deterministic
  * scoring formula in retrieve.service.ts (priority + days_open*2 +

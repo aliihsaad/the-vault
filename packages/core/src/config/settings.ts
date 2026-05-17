@@ -43,6 +43,8 @@ const DEFAULT_SETTINGS: Record<string, unknown> = {
   local_adapter_runtime_state: {},
   local_adapter_task_sessions: {},
   local_adapter_active_task_key: '',
+  project_workspace_registry: {},
+  local_workbench_recent_runs: [],
   // Project maintenance duty (Layer 2 step 3)
   'agent.project_maintenance.enabled': false,
   'agent.project_maintenance.cooldown_days': 7,
