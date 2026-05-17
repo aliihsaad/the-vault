@@ -78,6 +78,7 @@ import {
   setProjectWorkspace,
   validateWorkspacePath,
 } from './services/workspace-registry.service.js';
+import { buildProjectContextPack } from './services/project-context-pack.service.js';
 import {
   setEnrichmentClient as setGlobalEnrichmentClient,
   isEnrichmentAvailable as checkEnrichmentAvailable,
@@ -103,6 +104,8 @@ import type {
   ProjectMomentum,
   ProjectWorkspaceConfig,
   ProjectWorkspaceRegistry,
+  ProjectContextPack,
+  ProjectContextPackInput,
   SetProjectWorkspaceInput,
   WorkspaceValidationResult,
   ActivityLogEntry,
@@ -207,6 +210,11 @@ export class Vault {
   async recallContext(query: RecallQuery): Promise<MemoryPack> {
     this.ensureInitialized();
     return recallContext(this.db, this.logsPath, query);
+  }
+
+  async buildProjectContextPack(input: ProjectContextPackInput): Promise<ProjectContextPack> {
+    this.ensureInitialized();
+    return buildProjectContextPack(this, input);
   }
 
   /**

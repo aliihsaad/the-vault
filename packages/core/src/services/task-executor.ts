@@ -1,14 +1,14 @@
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { OpenRouterClient, type GeneratedImage } from './openrouter-client.js';
-import type { ActivityLogEntry, MemoryItem, ModelRouteConfig, VaultTask } from '../types/index.js';
+import { buildProjectContextPack } from './project-context-pack.service.js';
+import type { ModelRouteConfig, VaultTask } from '../types/index.js';
 import type { TaskType } from '../rules/controlled-values.js';
 import type { Vault } from '../vault.js';
 
 const PROJECT_CONTEXT_RECENT_MEMORIES = 6;
 const PROJECT_CONTEXT_RECENT_LOGS = 25;
 const PROJECT_CONTEXT_RECALL_LIMIT = 8;
-const PROJECT_CONTEXT_SUMMARY_CHARS = 320;
 const NO_SIDE_EFFECTS_NOTE = [
   'Executor note: No Vault mutations, file edits, or external actions were applied by this text task executor.',
   'Treat any requested merge/update/delete/archive/promote/save operation below as analysis or a recommendation unless separate tool metadata confirms it was applied.',
@@ -351,74 +351,20 @@ export class TaskExecutor {
 
   private async buildProjectContextBlock(task: VaultTask): Promise<string> {
     const project = task.project?.trim();
-    if (!project) {
+    if (!project || task.context?.skipProjectContext === true) {
       return '';
     }
 
-    const skipFlag = task.context?.skipProjectContext;
-    if (skipFlag === true) {
-      return '';
-    }
+    const pack = await buildProjectContextPack(this.vault, {
+      project,
+      title: task.title,
+      prompt: task.prompt,
+      maxRecall: PROJECT_CONTEXT_RECALL_LIMIT,
+      maxLatest: PROJECT_CONTEXT_RECENT_MEMORIES,
+      maxLogs: PROJECT_CONTEXT_RECENT_LOGS,
+    });
 
-    const queryText = [task.title, task.prompt].filter(Boolean).join(' ').slice(0, 800);
-
-    let recallSection = '';
-    try {
-      const pack = await this.vault.recallContext({
-        project,
-        queryText,
-        limit: PROJECT_CONTEXT_RECALL_LIMIT,
-      });
-      const matches = pack.topMatches ?? [];
-      if (matches.length > 0) {
-        const lines = matches.slice(0, PROJECT_CONTEXT_RECALL_LIMIT).map((match) => formatMemoryLine(match.item));
-        recallSection = `Top recalled items (ranked):\n${lines.join('\n')}`;
-      }
-    } catch {
-      // recall failure is non-fatal — continue without that section
-    }
-
-    let latestSection = '';
-    try {
-      const latest = this.vault.getLatest(project, PROJECT_CONTEXT_RECENT_MEMORIES);
-      if (latest.length > 0) {
-        const lines = latest.map(formatMemoryLine);
-        latestSection = `Most recent memories:\n${lines.join('\n')}`;
-      }
-    } catch {
-      // ignore
-    }
-
-    let activitySection = '';
-    try {
-      const logs = this.vault.getRecentLogs(PROJECT_CONTEXT_RECENT_LOGS, { project });
-      if (logs.length > 0) {
-        activitySection = `Recent activity (newest first):\n${summarizeLogs(logs)}`;
-      }
-    } catch {
-      // ignore
-    }
-
-    let descriptionSection = '';
-    try {
-      const projects = this.vault.listProjects();
-      const entry = projects.find((proj) => proj.name === project);
-      if (entry?.description) {
-        descriptionSection = `Project description: ${entry.description.trim()}`;
-      }
-    } catch {
-      // ignore
-    }
-
-    const sections = [descriptionSection, recallSection, latestSection, activitySection].filter(Boolean);
-    if (sections.length === 0) {
-      return '';
-    }
-
-    return [
-      `Project context (${project}) — pulled from the Vault registry. Use this as ground truth before asking for more material:`,
-      ...sections,
-    ].join('\n\n');
+    return pack.markdown;
   }
 
   private getEffectiveRoute(task: VaultTask): ModelRouteConfig {
@@ -542,35 +488,6 @@ function shouldAnnotateNoSideEffects(task: VaultTask): boolean {
   const contextText = JSON.stringify(stripInternalContextKeys(task.context));
   const taskText = [task.title, task.prompt, contextText].filter(Boolean).join('\n');
   return MUTATING_ACTION_PATTERN.test(taskText);
-}
-
-function formatMemoryLine(item: MemoryItem): string {
-  const summary = item.summary ? truncate(item.summary, PROJECT_CONTEXT_SUMMARY_CHARS) : '';
-  const date = item.createdAt ? new Date(item.createdAt).toISOString().slice(0, 10) : '';
-  const head = `- [${item.memoryType}] ${item.title}`;
-  const tail = [date, item.itemUid].filter(Boolean).join(' · ');
-  return summary
-    ? `${head} (${tail})\n  ${summary}`
-    : `${head} (${tail})`;
-}
-
-function summarizeLogs(logs: ActivityLogEntry[]): string {
-  return logs
-    .slice(0, PROJECT_CONTEXT_RECENT_LOGS)
-    .map((log) => {
-      const time = log.timestamp ? new Date(log.timestamp).toISOString().slice(0, 19).replace('T', ' ') : 'unknown';
-      const message = log.message ? truncate(log.message, 160) : '';
-      return `- ${time} · ${log.actionType}${message ? ` · ${message}` : ''}`;
-    })
-    .join('\n');
-}
-
-function truncate(text: string, max: number): string {
-  if (!text) {
-    return '';
-  }
-  const compact = text.replace(/\s+/g, ' ').trim();
-  return compact.length > max ? `${compact.slice(0, max - 1)}…` : compact;
 }
 
 function buildImagePrompt(task: VaultTask): string {

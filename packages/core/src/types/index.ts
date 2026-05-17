@@ -243,6 +243,34 @@ export interface WorkspaceValidationResult {
   message: string;
 }
 
+// ---------------------------------------------------------------------------
+// Project Context Pack
+// ---------------------------------------------------------------------------
+export type ProjectContextPackSectionKind = 'description' | 'recall' | 'latest' | 'activity';
+
+export interface ProjectContextPackSection {
+  kind: ProjectContextPackSectionKind;
+  title: string;
+  content: string;
+}
+
+export interface ProjectContextPackInput {
+  project: string;
+  title?: string;
+  prompt?: string;
+  maxRecall?: number;
+  maxLatest?: number;
+  maxLogs?: number;
+}
+
+export interface ProjectContextPack {
+  project: string;
+  queryText: string;
+  markdown: string;
+  sections: ProjectContextPackSection[];
+  generatedAt: string;
+}
+
 /**
  * Open-loops panel surfacing — derived bucket from the deterministic
  * scoring formula in retrieve.service.ts (priority + days_open*2 +
