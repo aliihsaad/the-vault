@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Activity, Bot, Clock3, Play, RefreshCw, Save, SendHorizonal, Sparkles, Square, Workflow } from 'lucide-react';
+import { Activity, Bot, Clock3, Play, RefreshCw, Save, SendHorizonal, Sparkles, Square, Terminal, Workflow } from 'lucide-react';
 import { formatDistanceToNow } from 'date-fns';
 import { DayGroupedList } from './DayGroupedList.js';
+import { AgentWorkbenchView } from './AgentWorkbenchView.js';
 
 const VAULT_AGENT_ROUTING_PRESETS: Array<{
   id: 'cost_saver' | 'balanced' | 'high_reasoning';
@@ -65,7 +66,7 @@ const VAULT_AGENT_ROUTING_PRESETS: Array<{
   },
 ];
 
-type VaultAgentSection = 'runtime' | 'queue' | 'activity';
+type VaultAgentSection = 'runtime' | 'queue' | 'workbench' | 'activity';
 
 export function VaultAgentView() {
   const [taskProjects, setTaskProjects] = useState<string[]>([]);
@@ -543,6 +544,7 @@ export function VaultAgentView() {
         <div className="section-intro-meta">
           <span className="section-intro-chip">runtime controls</span>
           <span className="section-intro-chip">grouped task queue</span>
+          <span className="section-intro-chip">local workbench</span>
           <span className="section-intro-chip">executor events</span>
         </div>
       </section>
@@ -609,6 +611,18 @@ export function VaultAgentView() {
             <span className="page-mode-meta">{pendingTasks + runningTasks} active</span>
           </div>
           <span className="page-mode-description">Task submission, executor lifecycle, queued work, and live executor events.</span>
+        </button>
+
+        <button
+          type="button"
+          className={`page-mode-button ${activeSection === 'workbench' ? 'page-mode-button-active' : ''}`}
+          onClick={() => setActiveSection('workbench')}
+        >
+          <div className="page-mode-heading">
+            <span className="page-mode-label">Workbench</span>
+            <span className="page-mode-meta"><Terminal size={14} /> local</span>
+          </div>
+          <span className="page-mode-description">Map projects to repos, preview Vault context, and prepare local Codex or Claude launches.</span>
         </button>
 
         <button
@@ -1385,6 +1399,13 @@ export function VaultAgentView() {
           </div>
         </aside>
         </div>
+      ) : null}
+
+      {activeSection === 'workbench' ? (
+        <AgentWorkbenchView
+          projects={taskProjects}
+          adapterConfig={adapterConfig}
+        />
       ) : null}
 
       {activeSection === 'activity' ? (
