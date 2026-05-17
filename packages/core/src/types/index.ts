@@ -271,6 +271,29 @@ export interface ProjectContextPack {
   generatedAt: string;
 }
 
+// ---------------------------------------------------------------------------
+// Local Workbench Launch
+// ---------------------------------------------------------------------------
+export type LocalWorkbenchAdapterType = 'claude_local' | 'codex_local';
+
+export interface LocalWorkbenchLaunchInput {
+  adapterType: LocalWorkbenchAdapterType;
+  workspacePath: string;
+  contextPackPath: string;
+  model?: string;
+  effort?: string;
+  prompt: string;
+}
+
+export interface LocalWorkbenchLaunchSpec {
+  adapterType: LocalWorkbenchAdapterType;
+  command: string;
+  args: string[];
+  workspacePath: string;
+  contextPackPath: string;
+  displayCommand: string;
+}
+
 /**
  * Open-loops panel surfacing — derived bucket from the deterministic
  * scoring formula in retrieve.service.ts (priority + days_open*2 +

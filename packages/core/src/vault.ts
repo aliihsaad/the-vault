@@ -79,6 +79,7 @@ import {
   validateWorkspacePath,
 } from './services/workspace-registry.service.js';
 import { buildProjectContextPack } from './services/project-context-pack.service.js';
+import { buildLocalWorkbenchLaunch } from './services/local-workbench-launch.service.js';
 import {
   setEnrichmentClient as setGlobalEnrichmentClient,
   isEnrichmentAvailable as checkEnrichmentAvailable,
@@ -106,6 +107,8 @@ import type {
   ProjectWorkspaceRegistry,
   ProjectContextPack,
   ProjectContextPackInput,
+  LocalWorkbenchLaunchInput,
+  LocalWorkbenchLaunchSpec,
   SetProjectWorkspaceInput,
   WorkspaceValidationResult,
   ActivityLogEntry,
@@ -410,6 +413,11 @@ export class Vault {
     );
     this.setSetting('project_workspace_registry', nextRegistry);
     return listProjectWorkspaces(nextRegistry);
+  }
+
+  buildLocalWorkbenchLaunch(input: LocalWorkbenchLaunchInput): LocalWorkbenchLaunchSpec {
+    this.ensureInitialized();
+    return buildLocalWorkbenchLaunch(input);
   }
 
   // =========================================================================
