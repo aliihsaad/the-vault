@@ -147,13 +147,15 @@ export function AgentWorkbenchView({ projects, adapterConfig }: Props) {
       summary: resultSummary.trim(),
       content: [
         `Local workbench run: ${preparedRun.runId}`,
+        `Adapter: ${resultAdapter}`,
         `Workspace: ${preparedRun.workspace.workspacePath}`,
         `Context pack: ${preparedRun.contextPackPath}`,
+        `Launch: ${preparedRun.launch.displayCommand}`,
         '',
         resultSummary.trim(),
       ].join('\n'),
       sourceApp: 'manual',
-      keywords: ['local-workbench', resultAdapter, preparedRun.project],
+      keywords: ['local-workbench', resultAdapter, preparedRun.project, preparedRun.runId],
       relatedFiles: [preparedRun.workspace.workspacePath, preparedRun.contextPackPath],
     });
 

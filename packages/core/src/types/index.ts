@@ -294,6 +294,16 @@ export interface LocalWorkbenchLaunchSpec {
   displayCommand: string;
 }
 
+export interface LocalWorkbenchRecentRun {
+  runId: string;
+  project: string;
+  title: string;
+  adapterType: LocalWorkbenchAdapterType;
+  workspacePath: string;
+  contextPackPath: string;
+  createdAt: string;
+}
+
 /**
  * Open-loops panel surfacing — derived bucket from the deterministic
  * scoring formula in retrieve.service.ts (priority + days_open*2 +

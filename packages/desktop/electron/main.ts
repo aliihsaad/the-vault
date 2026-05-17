@@ -800,6 +800,22 @@ async function prepareLocalWorkbenchRun(input: PrepareLocalWorkbenchRunInput) {
     effort,
     prompt,
   });
+  const recentRuns = Array.isArray(vault.getSetting('local_workbench_recent_runs'))
+    ? vault.getSetting('local_workbench_recent_runs') as unknown[]
+    : [];
+  const nextRecentRuns = [
+    {
+      runId,
+      project,
+      title,
+      adapterType,
+      workspacePath: workspace.workspacePath,
+      contextPackPath,
+      createdAt,
+    },
+    ...recentRuns,
+  ].slice(0, 20);
+  vault.setSetting('local_workbench_recent_runs', nextRecentRuns);
 
   return {
     runId,
