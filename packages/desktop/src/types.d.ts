@@ -332,6 +332,8 @@ declare global {
     local_adapter_runtime_state?: LocalAdapterRuntimeState;
     local_adapter_task_sessions?: LocalAdapterTaskSessions;
     local_adapter_active_task_key?: string;
+    project_workspace_registry?: Record<string, ProjectWorkspaceConfig>;
+    local_workbench_recent_runs?: LocalWorkbenchRecentRun[];
     [key: string]: unknown;
   }
 
@@ -451,6 +453,92 @@ declare global {
 
   type LocalAdapterRuntimeState = Partial<Record<LocalAdapterType, LocalAdapterRuntimeSession | null>>;
   type LocalAdapterTaskSessions = Partial<Record<LocalAdapterType, Record<string, LocalAdapterRuntimeSession>>>;
+
+  interface ProjectWorkspaceConfig {
+    project: string;
+    workspacePath: string;
+    trusted: boolean;
+    gitRootDetected: boolean;
+    lastValidatedAt: string;
+    notes: string | null;
+  }
+
+  interface SetProjectWorkspaceInput {
+    project: string;
+    workspacePath: string;
+    trusted?: boolean;
+    notes?: string | null;
+  }
+
+  interface WorkspaceValidationResult {
+    ok: boolean;
+    workspacePath: string;
+    exists: boolean;
+    isDirectory: boolean;
+    gitRootDetected: boolean;
+    message: string;
+  }
+
+  interface ProjectContextPackInput {
+    project: string;
+    title?: string;
+    prompt?: string;
+    maxRecall?: number;
+    maxLatest?: number;
+    maxLogs?: number;
+  }
+
+  interface ProjectContextPackSection {
+    kind: 'description' | 'recall' | 'latest' | 'activity';
+    title: string;
+    content: string;
+  }
+
+  interface ProjectContextPack {
+    project: string;
+    queryText: string;
+    markdown: string;
+    sections: ProjectContextPackSection[];
+    generatedAt: string;
+  }
+
+  interface PrepareLocalWorkbenchRunInput {
+    project: string;
+    title: string;
+    prompt: string;
+    adapterType: LocalAdapterType;
+    model?: string;
+    effort?: string;
+  }
+
+  interface PreparedLocalWorkbenchRun {
+    runId: string;
+    project: string;
+    title: string;
+    prompt: string;
+    workspace: ProjectWorkspaceConfig;
+    contextPack: ProjectContextPack;
+    contextPackPath: string;
+    launch: {
+      adapterType: LocalAdapterType;
+      command: string;
+      args: string[];
+      workspacePath: string;
+      contextPackPath: string;
+      displayCommand: string;
+    };
+    createdAt: string;
+  }
+
+  interface LocalWorkbenchRecentRun {
+    runId: string;
+    project: string;
+    title: string;
+    adapterType: LocalAdapterType;
+    workspacePath: string;
+    contextPackPath: string;
+    createdAt: string;
+  }
 
   interface OpenRouterModelSummary {
     id: string;
@@ -600,6 +688,13 @@ declare global {
       relatedLimit?: number;
       proactiveLimit?: number;
     }) => Promise<VaultResponse<VaultRecallMemoryContext>>;
+    listProjectWorkspaces: () => Promise<VaultResponse<ProjectWorkspaceConfig[]>>;
+    getProjectWorkspace: (project: string) => Promise<VaultResponse<ProjectWorkspaceConfig | null>>;
+    setProjectWorkspace: (input: SetProjectWorkspaceInput) => Promise<VaultResponse<ProjectWorkspaceConfig>>;
+    removeProjectWorkspace: (project: string) => Promise<VaultResponse<ProjectWorkspaceConfig[]>>;
+    validateWorkspacePath: (workspacePath: string) => Promise<VaultResponse<WorkspaceValidationResult>>;
+    buildProjectContextPack: (input: ProjectContextPackInput) => Promise<VaultResponse<ProjectContextPack>>;
+    prepareLocalWorkbenchRun: (input: PrepareLocalWorkbenchRunInput) => Promise<VaultResponse<PreparedLocalWorkbenchRun>>;
     getLatest: (project?: string, limit?: number) => Promise<VaultResponse<VaultMemory[]>>;
     getMemoryDetail: (uid: string) => Promise<VaultResponse<VaultMemoryDetail | null>>;
     suggestSavePath: (project: string, memoryType: VaultMemoryType, title: string) => Promise<VaultResponse<string>>;

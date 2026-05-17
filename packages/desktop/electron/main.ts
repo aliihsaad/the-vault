@@ -1,6 +1,6 @@
 // electron/main.ts
 import { app, BrowserWindow, ipcMain, safeStorage } from 'electron';
-import { createCipheriv, createDecipheriv, createHash, randomBytes, scryptSync } from 'node:crypto';
+import { createCipheriv, createDecipheriv, createHash, randomBytes, randomUUID, scryptSync } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { access, copyFile, mkdir, readFile, readdir, stat, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
@@ -151,6 +151,15 @@ type StoredLocalAdapterConfig = {
 
 type StoredLocalAdapterRuntimeState = Partial<Record<LocalAdapterType, LocalAdapterRuntimeSession | null>>;
 type StoredLocalAdapterTaskSessions = Partial<Record<LocalAdapterType, Record<string, LocalAdapterRuntimeSession>>>;
+
+type PrepareLocalWorkbenchRunInput = {
+  project?: unknown;
+  title?: unknown;
+  prompt?: unknown;
+  adapterType?: unknown;
+  model?: unknown;
+  effort?: unknown;
+};
 
 function createWindow() {
   win = new BrowserWindow({
@@ -717,6 +726,94 @@ async function buildRecallMemoryContext(input: RecallMemoryContextInput): Promis
   };
 }
 
+async function prepareLocalWorkbenchRun(input: PrepareLocalWorkbenchRunInput) {
+  const project = typeof input?.project === 'string' ? input.project.trim() : '';
+  const title = typeof input?.title === 'string' ? input.title.trim() : '';
+  const prompt = typeof input?.prompt === 'string' ? input.prompt.trim() : '';
+  const adapterType: LocalAdapterType | null =
+    input?.adapterType === 'claude_local' || input?.adapterType === 'codex_local'
+      ? input.adapterType
+      : null;
+  const model = typeof input?.model === 'string' ? input.model.trim() : '';
+  const effort = typeof input?.effort === 'string' ? input.effort.trim() : '';
+
+  if (!project) {
+    throw new Error('Project is required.');
+  }
+  if (!title) {
+    throw new Error('Task title is required.');
+  }
+  if (!prompt) {
+    throw new Error('Task prompt is required.');
+  }
+  if (!adapterType) {
+    throw new Error('Choose Claude Code or Codex CLI.');
+  }
+
+  const workspace = vault.getProjectWorkspace(project);
+  if (!workspace) {
+    throw new Error('Add a workspace path for this project before preparing a local run.');
+  }
+  if (!workspace.trusted) {
+    throw new Error('Mark the workspace as trusted before preparing a local run.');
+  }
+
+  const validation = vault.validateWorkspacePath(workspace.workspacePath);
+  if (!validation.ok) {
+    throw new Error(validation.message);
+  }
+
+  const contextPack = await vault.buildProjectContextPack({
+    project,
+    title,
+    prompt,
+    maxRecall: 4,
+    maxLatest: 4,
+    maxLogs: 4,
+  });
+  const runId = randomUUID();
+  const createdAt = new Date().toISOString();
+  const workbenchDir = join(vault.getVaultRoot(), '.workbench-runs', runId);
+  await mkdir(workbenchDir, { recursive: true });
+  const contextPackPath = join(workbenchDir, 'context-pack.md');
+  const contextFile = [
+    `# ${title}`,
+    '',
+    `Project: ${project}`,
+    `Created: ${createdAt}`,
+    '',
+    '## User Request',
+    '',
+    prompt,
+    '',
+    '## Vault Context',
+    '',
+    contextPack.markdown || 'No Vault context matched this request.',
+  ].join('\n');
+  await writeFile(contextPackPath, contextFile, 'utf8');
+
+  const launch = vault.buildLocalWorkbenchLaunch({
+    adapterType,
+    workspacePath: workspace.workspacePath,
+    contextPackPath,
+    model,
+    effort,
+    prompt,
+  });
+
+  return {
+    runId,
+    project,
+    title,
+    prompt,
+    workspace,
+    contextPack,
+    contextPackPath,
+    launch,
+    createdAt,
+  };
+}
+
 function formatCompactRecallContext(
   pack: MemoryPack,
   details: Map<string, MemoryItemDetail>,
@@ -1163,6 +1260,62 @@ app.whenReady().then(() => {
   ipcMain.handle('vault:buildRecallMemoryContext', async (_, input) => {
     try {
       return { success: true, data: await buildRecallMemoryContext(input) };
+    } catch (e: any) {
+      return { success: false, error: e.message };
+    }
+  });
+
+  ipcMain.handle('vault:listProjectWorkspaces', () => {
+    try {
+      return { success: true, data: vault.listProjectWorkspaces() };
+    } catch (e: any) {
+      return { success: false, error: e.message };
+    }
+  });
+
+  ipcMain.handle('vault:getProjectWorkspace', (_, project) => {
+    try {
+      return { success: true, data: vault.getProjectWorkspace(String(project || '')) };
+    } catch (e: any) {
+      return { success: false, error: e.message };
+    }
+  });
+
+  ipcMain.handle('vault:setProjectWorkspace', (_, input) => {
+    try {
+      return { success: true, data: vault.setProjectWorkspace(input) };
+    } catch (e: any) {
+      return { success: false, error: e.message };
+    }
+  });
+
+  ipcMain.handle('vault:removeProjectWorkspace', (_, project) => {
+    try {
+      return { success: true, data: vault.removeProjectWorkspace(String(project || '')) };
+    } catch (e: any) {
+      return { success: false, error: e.message };
+    }
+  });
+
+  ipcMain.handle('vault:validateWorkspacePath', (_, workspacePath) => {
+    try {
+      return { success: true, data: vault.validateWorkspacePath(String(workspacePath || '')) };
+    } catch (e: any) {
+      return { success: false, error: e.message };
+    }
+  });
+
+  ipcMain.handle('vault:buildProjectContextPack', async (_, input) => {
+    try {
+      return { success: true, data: await vault.buildProjectContextPack(input) };
+    } catch (e: any) {
+      return { success: false, error: e.message };
+    }
+  });
+
+  ipcMain.handle('vault:prepareLocalWorkbenchRun', async (_, input) => {
+    try {
+      return { success: true, data: await prepareLocalWorkbenchRun(input) };
     } catch (e: any) {
       return { success: false, error: e.message };
     }
