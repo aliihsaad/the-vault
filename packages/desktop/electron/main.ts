@@ -1,12 +1,24 @@
 // electron/main.ts
 import { app, BrowserWindow, ipcMain, safeStorage } from 'electron';
+import { spawn } from 'node:child_process';
 import { createCipheriv, createDecipheriv, createHash, randomBytes, randomUUID, scryptSync } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { access, copyFile, mkdir, readFile, readdir, stat, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { basename, dirname, extname, isAbsolute, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { detectDuplicates, OpenRouterClient, portableDecrypt, portableEncrypt, Vault } from '@the-vault/core';
+import {
+  detectDuplicates,
+  getLocalWorkbenchRun,
+  listLocalWorkbenchRuns,
+  markLocalWorkbenchRunCompleted,
+  markLocalWorkbenchRunLaunched,
+  OpenRouterClient,
+  portableDecrypt,
+  portableEncrypt,
+  upsertLocalWorkbenchRun,
+  Vault,
+} from '@the-vault/core';
 import type { MemoryItemDetail, MemoryPack, ModelRoutingTable, RecallQuery } from '@the-vault/core';
 import {
   detectLocalAdapterModel,
@@ -159,6 +171,15 @@ type PrepareLocalWorkbenchRunInput = {
   adapterType?: unknown;
   model?: unknown;
   effort?: unknown;
+};
+
+type LaunchLocalWorkbenchRunInput = {
+  runId?: unknown;
+};
+
+type SaveLocalWorkbenchRunResultInput = {
+  runId?: unknown;
+  summary?: unknown;
 };
 
 function createWindow() {
@@ -803,18 +824,26 @@ async function prepareLocalWorkbenchRun(input: PrepareLocalWorkbenchRunInput) {
   const recentRuns = Array.isArray(vault.getSetting('local_workbench_recent_runs'))
     ? vault.getSetting('local_workbench_recent_runs') as unknown[]
     : [];
-  const nextRecentRuns = [
-    {
-      runId,
-      project,
-      title,
-      adapterType,
-      workspacePath: workspace.workspacePath,
-      contextPackPath,
-      createdAt,
-    },
-    ...recentRuns,
-  ].slice(0, 20);
+  const nextRecentRuns = upsertLocalWorkbenchRun(recentRuns, {
+    runId,
+    project,
+    title,
+    prompt,
+    adapterType,
+    workspacePath: workspace.workspacePath,
+    contextPackPath,
+    displayCommand: launch.displayCommand,
+    model,
+    effort,
+    status: 'prepared',
+    createdAt,
+    updatedAt: createdAt,
+    launchedAt: null,
+    completedAt: null,
+    terminalPid: null,
+    resultMemoryUid: null,
+    resultSummary: null,
+  });
   vault.setSetting('local_workbench_recent_runs', nextRecentRuns);
 
   return {
@@ -828,6 +857,118 @@ async function prepareLocalWorkbenchRun(input: PrepareLocalWorkbenchRunInput) {
     launch,
     createdAt,
   };
+}
+
+function getStoredLocalWorkbenchRuns() {
+  return listLocalWorkbenchRuns(vault.getSetting('local_workbench_recent_runs'));
+}
+
+async function launchLocalWorkbenchRun(input: LaunchLocalWorkbenchRunInput) {
+  const runId = typeof input?.runId === 'string' ? input.runId.trim() : '';
+  if (!runId) {
+    throw new Error('Local agent run is required.');
+  }
+
+  const runs = getStoredLocalWorkbenchRuns();
+  const run = getLocalWorkbenchRun(runs, runId);
+  if (!run) {
+    throw new Error('Local agent run was not found.');
+  }
+  if (!run.displayCommand) {
+    throw new Error('Local agent run has no launch command. Prepare it again.');
+  }
+
+  await access(run.workspacePath);
+  await access(run.contextPackPath);
+
+  const terminalPid = launchLocalAgentTerminal(run.displayCommand);
+  const launchedAt = new Date().toISOString();
+  const nextRuns = markLocalWorkbenchRunLaunched(runs, runId, launchedAt, terminalPid);
+  vault.setSetting('local_workbench_recent_runs', nextRuns);
+
+  return getLocalWorkbenchRun(nextRuns, runId);
+}
+
+function saveLocalWorkbenchRunResult(input: SaveLocalWorkbenchRunResultInput) {
+  const runId = typeof input?.runId === 'string' ? input.runId.trim() : '';
+  const summary = typeof input?.summary === 'string' ? input.summary.trim() : '';
+
+  if (!runId) {
+    throw new Error('Local agent run is required.');
+  }
+  if (!summary) {
+    throw new Error('Result summary is required.');
+  }
+
+  const runs = getStoredLocalWorkbenchRuns();
+  const run = getLocalWorkbenchRun(runs, runId);
+  if (!run) {
+    throw new Error('Local agent run was not found.');
+  }
+
+  const adapterLabel = run.adapterType === 'codex_local' ? 'Codex' : 'Claude';
+  const result = vault.saveMemory({
+    project: run.project,
+    title: `${run.title} - local ${adapterLabel} result`,
+    memoryType: 'session',
+    subject: run.title,
+    summary,
+    content: [
+      `Local agent run: ${run.runId}`,
+      `Adapter: ${run.adapterType}`,
+      `Workspace: ${run.workspacePath}`,
+      `Context pack: ${run.contextPackPath}`,
+      run.displayCommand ? `Launch: ${run.displayCommand}` : '',
+      '',
+      summary,
+    ].filter(Boolean).join('\n'),
+    sourceApp: 'manual',
+    keywords: ['local-agents', run.adapterType, run.project, run.runId],
+    relatedFiles: [run.workspacePath, run.contextPackPath],
+  });
+
+  const completedAt = new Date().toISOString();
+  const nextRuns = markLocalWorkbenchRunCompleted(runs, runId, completedAt, result.item.itemUid, summary);
+  vault.setSetting('local_workbench_recent_runs', nextRuns);
+
+  return {
+    run: getLocalWorkbenchRun(nextRuns, runId),
+    memory: result,
+  };
+}
+
+function launchLocalAgentTerminal(displayCommand: string): number | null {
+  const child = process.platform === 'win32'
+    ? spawn('powershell.exe', [
+      '-NoProfile',
+      '-ExecutionPolicy',
+      'Bypass',
+      '-Command',
+      `Start-Process -FilePath powershell.exe -ArgumentList @('-NoExit','-ExecutionPolicy','Bypass','-Command',${quotePowerShellString(displayCommand)})`,
+    ], { detached: true, stdio: 'ignore', windowsHide: false })
+    : process.platform === 'darwin'
+      ? spawn('osascript', [
+        '-e',
+        `tell application "Terminal" to do script ${JSON.stringify(displayCommand)}`,
+        '-e',
+        'tell application "Terminal" to activate',
+      ], { detached: true, stdio: 'ignore' })
+      : spawn('x-terminal-emulator', [
+        '-e',
+        'bash',
+        '-lc',
+        `${displayCommand}; echo; read -p "The Vault local agent finished. Press Enter to close."`,
+      ], { detached: true, stdio: 'ignore' });
+
+  child.once('error', (error) => {
+    console.error('[vault] failed to launch local agent terminal:', error instanceof Error ? error.message : String(error));
+  });
+  child.unref();
+  return typeof child.pid === 'number' ? child.pid : null;
+}
+
+function quotePowerShellString(value: string): string {
+  return `'${value.replace(/'/g, "''")}'`;
 }
 
 function formatCompactRecallContext(
@@ -1332,6 +1473,30 @@ app.whenReady().then(() => {
   ipcMain.handle('vault:prepareLocalWorkbenchRun', async (_, input) => {
     try {
       return { success: true, data: await prepareLocalWorkbenchRun(input) };
+    } catch (e: any) {
+      return { success: false, error: e.message };
+    }
+  });
+
+  ipcMain.handle('vault:listLocalWorkbenchRuns', () => {
+    try {
+      return { success: true, data: getStoredLocalWorkbenchRuns() };
+    } catch (e: any) {
+      return { success: false, error: e.message };
+    }
+  });
+
+  ipcMain.handle('vault:launchLocalWorkbenchRun', async (_, input) => {
+    try {
+      return { success: true, data: await launchLocalWorkbenchRun(input) };
+    } catch (e: any) {
+      return { success: false, error: e.message };
+    }
+  });
+
+  ipcMain.handle('vault:saveLocalWorkbenchRunResult', (_, input) => {
+    try {
+      return { success: true, data: saveLocalWorkbenchRunResult(input) };
     } catch (e: any) {
       return { success: false, error: e.message };
     }

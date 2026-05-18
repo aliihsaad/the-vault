@@ -48,6 +48,11 @@ export type {
   OpenLoop,
   OpenLoopBucket,
   ResolveLoopInput,
+  LocalWorkbenchAdapterType,
+  LocalWorkbenchLaunchInput,
+  LocalWorkbenchLaunchSpec,
+  LocalWorkbenchRecentRun,
+  LocalWorkbenchRunStatus,
 } from './types/index.js';
 
 // Controlled values
@@ -115,6 +120,13 @@ export { DEFAULT_VAULT_ROOT } from './config/vault-root.js';
 export { detectDuplicates } from './services/enrichment.service.js';
 export { OpenRouterClient, EnrichmentError } from './services/openrouter-client.js';
 export { TaskExecutor } from './services/task-executor.js';
+export {
+  getLocalWorkbenchRun,
+  listLocalWorkbenchRuns,
+  markLocalWorkbenchRunCompleted,
+  markLocalWorkbenchRunLaunched,
+  upsertLocalWorkbenchRun,
+} from './services/local-workbench-runs.service.js';
 export type {
   TaskExecutorEvent,
   TaskExecutorEventType,

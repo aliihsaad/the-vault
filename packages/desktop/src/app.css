@@ -2247,6 +2247,31 @@ select.text-input optgroup {
   background: rgba(255, 95, 95, 0.06);
 }
 
+.local-agent-run-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.local-agent-run-row {
+  display: grid;
+  grid-template-columns: 4px minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: center;
+  padding: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.065);
+  border-radius: 14px;
+  background: rgba(8, 12, 18, 0.46);
+}
+
+.local-agent-run-row-compact {
+  grid-template-columns: 4px minmax(0, 1fr);
+}
+
+.local-agent-run-main {
+  min-width: 0;
+}
+
 @media (max-width: 980px) {
   .agent-workbench-grid,
   .agent-workbench-form-grid {

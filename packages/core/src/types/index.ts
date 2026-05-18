@@ -275,6 +275,7 @@ export interface ProjectContextPack {
 // Local Workbench Launch
 // ---------------------------------------------------------------------------
 export type LocalWorkbenchAdapterType = 'claude_local' | 'codex_local';
+export type LocalWorkbenchRunStatus = 'prepared' | 'launched' | 'completed';
 
 export interface LocalWorkbenchLaunchInput {
   adapterType: LocalWorkbenchAdapterType;
@@ -302,6 +303,17 @@ export interface LocalWorkbenchRecentRun {
   workspacePath: string;
   contextPackPath: string;
   createdAt: string;
+  updatedAt?: string;
+  status?: LocalWorkbenchRunStatus;
+  prompt?: string;
+  displayCommand?: string;
+  model?: string;
+  effort?: string;
+  launchedAt?: string | null;
+  completedAt?: string | null;
+  terminalPid?: number | null;
+  resultMemoryUid?: string | null;
+  resultSummary?: string | null;
 }
 
 /**

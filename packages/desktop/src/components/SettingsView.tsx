@@ -200,7 +200,7 @@ const SETTINGS_TABS: Array<{ id: SettingsTabId; label: string; description: stri
 const LOCAL_BACKEND_STEPS = [
   'Choose Claude Code or Codex in Local AI backend.',
   'Pick a model, run Test now, then save the backend profile.',
-  'Natural chat in Recall console will use that local CLI, while /recall and /save still target Vault memory directly.',
+  'Local Agents can use that profile when launching Codex or Claude terminal runs.',
 ].join('\n');
 
 const SKILL_ENTRIES: SkillEntry[] = [
@@ -1295,7 +1295,7 @@ export function SettingsView({ vaultStatus }: { vaultStatus: VaultStatus | null 
 
             <div className="note-card">
               <p>For cost control, keep lightweight flows like organize, enrich, and summarize on cheaper models. Reserve the heavier models for coding and analysis only when the quality difference is worth it.</p>
-              <p>The Recall console chat model still comes from the enrichment/OpenRouter model selector above. This routing section is specifically for delegated tasks and the background executor.</p>
+              <p>The local chat model still comes from the enrichment/OpenRouter model selector above. This routing section is specifically for delegated tasks and the background executor.</p>
             </div>
           </section>
 
@@ -1381,7 +1381,7 @@ export function SettingsView({ vaultStatus }: { vaultStatus: VaultStatus | null 
             </div>
 
             <div className="note-card">
-              <p>Natural chat in Recall console can use a tested local Claude Code or Codex backend.</p>
+              <p>Local Agents can use a tested local Claude Code or Codex backend.</p>
               <p>Vault still owns recall, save, session persistence, pathing, and memory state. The CLI only performs inference and returns its native session metadata.</p>
               <p>Session thread keys are coarse continuity labels for CLI resume. They are not a full task board or multi-agent orchestration object.</p>
             </div>

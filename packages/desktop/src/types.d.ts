@@ -530,6 +530,8 @@ declare global {
     createdAt: string;
   }
 
+  type LocalWorkbenchRunStatus = 'prepared' | 'launched' | 'completed';
+
   interface LocalWorkbenchRecentRun {
     runId: string;
     project: string;
@@ -538,6 +540,17 @@ declare global {
     workspacePath: string;
     contextPackPath: string;
     createdAt: string;
+    updatedAt?: string;
+    status?: LocalWorkbenchRunStatus;
+    prompt?: string;
+    displayCommand?: string;
+    model?: string;
+    effort?: string;
+    launchedAt?: string | null;
+    completedAt?: string | null;
+    terminalPid?: number | null;
+    resultMemoryUid?: string | null;
+    resultSummary?: string | null;
   }
 
   interface OpenRouterModelSummary {
@@ -695,6 +708,15 @@ declare global {
     validateWorkspacePath: (workspacePath: string) => Promise<VaultResponse<WorkspaceValidationResult>>;
     buildProjectContextPack: (input: ProjectContextPackInput) => Promise<VaultResponse<ProjectContextPack>>;
     prepareLocalWorkbenchRun: (input: PrepareLocalWorkbenchRunInput) => Promise<VaultResponse<PreparedLocalWorkbenchRun>>;
+    listLocalWorkbenchRuns: () => Promise<VaultResponse<LocalWorkbenchRecentRun[]>>;
+    launchLocalWorkbenchRun: (input: { runId: string }) => Promise<VaultResponse<LocalWorkbenchRecentRun>>;
+    saveLocalWorkbenchRunResult: (input: {
+      runId: string;
+      summary: string;
+    }) => Promise<VaultResponse<{
+      run: LocalWorkbenchRecentRun;
+      memory: VaultSaveResult;
+    }>>;
     getLatest: (project?: string, limit?: number) => Promise<VaultResponse<VaultMemory[]>>;
     getMemoryDetail: (uid: string) => Promise<VaultResponse<VaultMemoryDetail | null>>;
     suggestSavePath: (project: string, memoryType: VaultMemoryType, title: string) => Promise<VaultResponse<string>>;

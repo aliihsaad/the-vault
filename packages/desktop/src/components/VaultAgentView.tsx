@@ -394,6 +394,12 @@ export function VaultAgentView() {
     ? taskSessions?.[activeAdapterType as LocalAdapterType]?.[activeWorkThread] || null
     : null;
   const knownThreads = activeAdapterType ? Object.entries(taskSessions?.[activeAdapterType as LocalAdapterType] || {}) : [];
+  const localAgentRuns = useMemo(
+    () => [...(settings?.local_workbench_recent_runs || [])]
+      .sort((left, right) => Date.parse(right.updatedAt || right.createdAt) - Date.parse(left.updatedAt || left.createdAt)),
+    [settings?.local_workbench_recent_runs],
+  );
+  const activeLocalAgentRuns = localAgentRuns.filter((run) => run.status === 'launched').length;
   const recentErrors = logs.filter((log) => log.actionType === 'error').length;
   const recentRecalls = logs.filter((log) => log.actionType === 'recall').length;
   const recentSaves = logs.filter((log) => log.actionType === 'save').length;
@@ -544,7 +550,7 @@ export function VaultAgentView() {
         <div className="section-intro-meta">
           <span className="section-intro-chip">runtime controls</span>
           <span className="section-intro-chip">grouped task queue</span>
-          <span className="section-intro-chip">local workbench</span>
+          <span className="section-intro-chip">local agents</span>
           <span className="section-intro-chip">executor events</span>
         </div>
       </section>
@@ -586,6 +592,10 @@ export function VaultAgentView() {
           <span className="stat-label">Running tasks</span>
           <strong className="stat-value">{runningTasks}</strong>
         </div>
+        <div className="stat-chip">
+          <span className="stat-label">Local agents</span>
+          <strong className="stat-value">{activeLocalAgentRuns}</strong>
+        </div>
       </div>
 
       <div className="page-mode-strip">
@@ -619,10 +629,10 @@ export function VaultAgentView() {
           onClick={() => setActiveSection('workbench')}
         >
           <div className="page-mode-heading">
-            <span className="page-mode-label">Workbench</span>
-            <span className="page-mode-meta"><Terminal size={14} /> local</span>
+            <span className="page-mode-label">Local Agents</span>
+            <span className="page-mode-meta"><Terminal size={14} /> {activeLocalAgentRuns} active</span>
           </div>
-          <span className="page-mode-description">Map projects to repos, preview Vault context, and prepare local Codex or Claude launches.</span>
+          <span className="page-mode-description">Map projects to repos, prepare context, start Codex or Claude terminals, and save results.</span>
         </button>
 
         <button
@@ -672,7 +682,7 @@ export function VaultAgentView() {
                 <option value="api">OpenRouter API</option>
                 <option value="local">Local CLI</option>
               </select>
-              <span className="field-help">This controls plain-text chat in the Recall console. `/recall` and `/save` stay direct Vault operations either way.</span>
+              <span className="field-help">This controls the legacy plain-text Vault agent backend. Direct recall and save operations stay Vault-native.</span>
             </label>
 
             <label className="toggle-row">
@@ -884,7 +894,7 @@ export function VaultAgentView() {
               {!localReady ? (
                 <div className="note-card">
                   <p>The local backend is selected, but the saved environment test has not passed yet.</p>
-                  <p>Run `Test now` in Settings before expecting the Recall console to route plain text through the local CLI.</p>
+                  <p>Run `Test now` in Settings before expecting the legacy local-chat backend to route plain text through the local CLI.</p>
                 </div>
               ) : null}
             </div>
@@ -1161,6 +1171,39 @@ export function VaultAgentView() {
             <div className="queue-overview-section">
               <div className="queue-section-header">
                 <div>
+                  <span className="queue-section-kicker">Local agent runs</span>
+                  <strong>{localAgentRuns.length} tracked</strong>
+                </div>
+                <span>{activeLocalAgentRuns} active</span>
+              </div>
+
+              {localAgentRuns.length === 0 ? (
+                <div className="empty-state">No Codex or Claude terminal runs have been prepared yet.</div>
+              ) : (
+                <div className="local-agent-run-list">
+                  {localAgentRuns.slice(0, 6).map((run) => (
+                    <div key={run.runId} className="local-agent-run-row local-agent-run-row-compact">
+                      <span className={`queue-status-rail ${getLocalRunStatusRailClass(run.status)}`} />
+                      <span className="queue-task-main">
+                        <span className="queue-task-title-row">
+                          <span className="queue-task-title">{run.title}</span>
+                          <span className={`badge ${getLocalRunBadgeClass(run.status)}`}>{run.status || 'prepared'}</span>
+                        </span>
+                        <span className="queue-task-meta">
+                          <span>{run.project}</span>
+                          <span>{getAdapterLabel(run.adapterType)}</span>
+                          <span>{formatRelativeTimestamp(run.updatedAt || run.createdAt)}</span>
+                        </span>
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            <div className="queue-overview-section">
+              <div className="queue-section-header">
+                <div>
                   <span className="queue-section-kicker">Recent tasks</span>
                   <strong>{tasks.length} shown</strong>
                 </div>
@@ -1405,6 +1448,7 @@ export function VaultAgentView() {
         <AgentWorkbenchView
           projects={taskProjects}
           adapterConfig={adapterConfig}
+          onRunsChanged={() => void loadAgentData()}
         />
       ) : null}
 
@@ -1643,6 +1687,30 @@ function getTaskStatusRailClass(status: VaultTaskStatus): string {
     case 'cancelled':
       return 'queue-status-rail-cancelled';
     case 'pending':
+    default:
+      return 'queue-status-rail-pending';
+  }
+}
+
+function getLocalRunBadgeClass(status: LocalWorkbenchRunStatus | undefined): string {
+  switch (status) {
+    case 'completed':
+      return 'badge-task-complete';
+    case 'launched':
+      return 'badge-task-running';
+    case 'prepared':
+    default:
+      return 'badge-task-pending';
+  }
+}
+
+function getLocalRunStatusRailClass(status: LocalWorkbenchRunStatus | undefined): string {
+  switch (status) {
+    case 'completed':
+      return 'queue-status-rail-completed';
+    case 'launched':
+      return 'queue-status-rail-running';
+    case 'prepared':
     default:
       return 'queue-status-rail-pending';
   }

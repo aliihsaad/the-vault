@@ -799,7 +799,7 @@ export function MemoryView({
                 rows={4}
                 value={composerDraft.relatedFilesText}
                 onChange={(event) => setComposerDraft((current) => ({ ...current, relatedFilesText: event.target.value }))}
-                placeholder={'packages/desktop/src/components/ChatView.tsx\npackages/core/src/services/retrieve.service.ts'}
+                placeholder={'packages/desktop/src/components/MemoryView.tsx\npackages/core/src/services/retrieve.service.ts'}
               />
               <span className="field-help">Use one file per line or a comma-separated list.</span>
             </label>

@@ -6,14 +6,12 @@ import {
   Database,
   FolderTree,
   LayoutDashboard,
-  MessageSquare,
   RefreshCw,
   Settings,
   TerminalSquare,
 } from 'lucide-react';
 import { ActivityLogsView } from './components/ActivityLogsView.js';
 import { AgentReviewPane, type AgentReviewTab } from './components/AgentReviewPane.js';
-import { ChatView } from './components/ChatView.js';
 import { DashboardView } from './components/DashboardView.js';
 import { MemoryView } from './components/MemoryView.js';
 import { SettingsView } from './components/SettingsView.js';
@@ -21,7 +19,7 @@ import { VaultAgentView } from './components/VaultAgentView.js';
 import { VaultStructureView } from './components/VaultStructureView.js';
 import './app.css';
 
-type AppTab = 'dashboard' | 'agent' | 'memory' | 'structure' | 'chat' | 'reviews' | 'logs' | 'settings';
+type AppTab = 'dashboard' | 'agent' | 'memory' | 'structure' | 'reviews' | 'logs' | 'settings';
 
 const NAV_ITEMS: Record<AppTab, {
   id: AppTab;
@@ -53,12 +51,6 @@ const NAV_ITEMS: Record<AppTab, {
     description: 'Browse folders and preview saved files',
     icon: FolderTree,
   },
-  chat: {
-    id: 'chat',
-    label: 'Recall Console',
-    description: 'Query and write from one surface',
-    icon: MessageSquare,
-  },
   reviews: {
     id: 'reviews',
     label: 'Agent Review',
@@ -86,7 +78,7 @@ const NAV_SECTIONS: Array<{ label: string; items: AppTab[] }> = [
   },
   {
     label: 'Workflows',
-    items: ['chat', 'memory', 'agent', 'reviews'],
+    items: ['memory', 'agent', 'reviews'],
   },
   {
     label: 'Inspect',
@@ -114,10 +106,6 @@ const TAB_META: Record<AppTab, { title: string; description: string }> = {
   structure: {
     title: 'Vault files',
     description: 'Inspect the on-disk vault structure and preview the files that hold your saved memory.',
-  },
-  chat: {
-    title: 'Recall console',
-    description: 'Plain text, /recall, and /save each follow a distinct Vault workflow.',
   },
   reviews: {
     title: 'Agent review',
@@ -312,7 +300,6 @@ function App() {
                 />
               ) : null}
               {activeTab === 'structure' ? <VaultStructureView /> : null}
-              {activeTab === 'chat' ? <ChatView onPrefillMemoryDraft={openMemoryComposerPrefill} /> : null}
               {activeTab === 'logs' ? <ActivityLogsView onPrefillMemoryDraft={openMemoryComposerPrefill} /> : null}
               {activeTab === 'settings' ? <SettingsView vaultStatus={vaultStatus} /> : null}
             </div>

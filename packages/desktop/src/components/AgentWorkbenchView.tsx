@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import {
   CheckCircle2,
+  Clock3,
   Clipboard,
   Database,
   FolderGit2,
@@ -15,10 +16,12 @@ import {
 type Props = {
   projects: string[];
   adapterConfig?: LocalAdapterConfig;
+  onRunsChanged?: () => void;
 };
 
-export function AgentWorkbenchView({ projects, adapterConfig }: Props) {
+export function AgentWorkbenchView({ projects, adapterConfig, onRunsChanged }: Props) {
   const [workspaces, setWorkspaces] = useState<ProjectWorkspaceConfig[]>([]);
+  const [recentRuns, setRecentRuns] = useState<LocalWorkbenchRecentRun[]>([]);
   const [project, setProject] = useState(projects[0] || '');
   const [workspacePath, setWorkspacePath] = useState('');
   const [trusted, setTrusted] = useState(false);
@@ -40,6 +43,7 @@ export function AgentWorkbenchView({ projects, adapterConfig }: Props) {
 
   useEffect(() => {
     void refreshWorkspaces();
+    void refreshLocalRuns();
   }, []);
 
   useEffect(() => {
@@ -67,6 +71,15 @@ export function AgentWorkbenchView({ projects, adapterConfig }: Props) {
       return;
     }
     setWorkspaces(response.data);
+  }
+
+  async function refreshLocalRuns() {
+    const response = await window.vaultAPI.listLocalWorkbenchRuns();
+    if (!response.success || !response.data) {
+      setMessage(response.error || 'Failed to load local agent runs.');
+      return;
+    }
+    setRecentRuns(response.data);
   }
 
   async function saveWorkspace() {
@@ -115,9 +128,34 @@ export function AgentWorkbenchView({ projects, adapterConfig }: Props) {
         throw new Error(response.error || 'Failed to prepare local run.');
       }
       setPreparedRun(response.data);
-      setMessage('Local run prepared.');
+      setMessage('Local agent run prepared.');
+      await refreshLocalRuns();
+      onRunsChanged?.();
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : 'Failed to prepare local run.');
+      setMessage(error instanceof Error ? error.message : 'Failed to prepare local agent run.');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function launchPreparedRun() {
+    if (!preparedRun) {
+      setMessage('Prepare a local agent run before launching a terminal.');
+      return;
+    }
+
+    setBusy(true);
+    try {
+      const response = await window.vaultAPI.launchLocalWorkbenchRun({ runId: preparedRun.runId });
+      if (!response.success || !response.data) {
+        throw new Error(response.error || 'Failed to launch local agent terminal.');
+      }
+
+      setMessage(`Started ${getAdapterLabel(response.data.adapterType)} in an external terminal.`);
+      await refreshLocalRuns();
+      onRunsChanged?.();
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : 'Failed to launch local agent terminal.');
     } finally {
       setBusy(false);
     }
@@ -138,25 +176,9 @@ export function AgentWorkbenchView({ projects, adapterConfig }: Props) {
       return;
     }
 
-    const resultAdapter = preparedRun.launch.adapterType;
-    const response = await window.vaultAPI.saveMemory({
-      project: preparedRun.project,
-      title: `${preparedRun.title} - local ${resultAdapter === 'codex_local' ? 'Codex' : 'Claude'} result`,
-      memoryType: 'session',
-      subject: preparedRun.title,
+    const response = await window.vaultAPI.saveLocalWorkbenchRunResult({
+      runId: preparedRun.runId,
       summary: resultSummary.trim(),
-      content: [
-        `Local workbench run: ${preparedRun.runId}`,
-        `Adapter: ${resultAdapter}`,
-        `Workspace: ${preparedRun.workspace.workspacePath}`,
-        `Context pack: ${preparedRun.contextPackPath}`,
-        `Launch: ${preparedRun.launch.displayCommand}`,
-        '',
-        resultSummary.trim(),
-      ].join('\n'),
-      sourceApp: 'manual',
-      keywords: ['local-workbench', resultAdapter, preparedRun.project, preparedRun.runId],
-      relatedFiles: [preparedRun.workspace.workspacePath, preparedRun.contextPackPath],
     });
 
     if (!response.success || !response.data) {
@@ -164,11 +186,16 @@ export function AgentWorkbenchView({ projects, adapterConfig }: Props) {
       return;
     }
 
-    setMessage(`Saved result memory ${response.data.item.itemUid}.`);
+    setMessage(`Saved result memory ${response.data.memory.item.itemUid}.`);
     setResultSummary('');
+    await refreshLocalRuns();
+    onRunsChanged?.();
   }
 
   const messageLooksBad = message.toLowerCase().includes('failed') || message.toLowerCase().includes('required');
+  const currentRunState = preparedRun
+    ? recentRuns.find((run) => run.runId === preparedRun.runId) || null
+    : null;
 
   return (
     <div className="agent-workbench-grid">
@@ -176,7 +203,7 @@ export function AgentWorkbenchView({ projects, adapterConfig }: Props) {
         <div className="panel-header">
           <div>
             <div className="panel-title">Project workspace</div>
-            <div className="panel-subtitle">A trusted absolute repo path tells Codex or Claude where to work.</div>
+            <div className="panel-subtitle">A trusted absolute repo path tells Codex or Claude where the terminal should start.</div>
           </div>
           <FolderGit2 size={18} />
         </div>
@@ -234,7 +261,7 @@ export function AgentWorkbenchView({ projects, adapterConfig }: Props) {
         <div className="panel-header">
           <div>
             <div className="panel-title">Local run setup</div>
-            <div className="panel-subtitle">Prepare one context pack and one command for the selected local client.</div>
+            <div className="panel-subtitle">Prepare Vault context, then start the selected local client in its own terminal.</div>
           </div>
           <Terminal size={18} />
         </div>
@@ -245,7 +272,7 @@ export function AgentWorkbenchView({ projects, adapterConfig }: Props) {
             className="text-input"
             value={title}
             onChange={(event) => setTitle(event.target.value)}
-            placeholder="Plan the local client workbench"
+            placeholder="Tighten the local agent workflow"
           />
         </label>
 
@@ -256,7 +283,7 @@ export function AgentWorkbenchView({ projects, adapterConfig }: Props) {
             value={prompt}
             onChange={(event) => setPrompt(event.target.value)}
             rows={6}
-            placeholder="Describe the task for Codex or Claude..."
+            placeholder="Describe the task for Codex or Claude. Vault will prepend the project context pack."
           />
         </label>
 
@@ -288,7 +315,7 @@ export function AgentWorkbenchView({ projects, adapterConfig }: Props) {
 
         <button type="button" className="primary-button" onClick={() => void prepareRun()} disabled={busy}>
           <Play size={14} />
-          <span>{busy ? 'Preparing...' : 'Prepare local run'}</span>
+          <span>{busy ? 'Preparing...' : 'Prepare agent run'}</span>
         </button>
       </section>
 
@@ -296,7 +323,7 @@ export function AgentWorkbenchView({ projects, adapterConfig }: Props) {
         <div className="panel-header">
           <div>
             <div className="panel-title">Prepared context</div>
-            <div className="panel-subtitle">Review what Vault will give the local client before launching it.</div>
+            <div className="panel-subtitle">Review what Vault will give the local client, then start the terminal run.</div>
           </div>
           {preparedRun ? <CheckCircle2 size={18} /> : <Database size={18} />}
         </div>
@@ -307,9 +334,14 @@ export function AgentWorkbenchView({ projects, adapterConfig }: Props) {
               <span><span className="detail-label">Run</span><strong>{preparedRun.runId}</strong></span>
               <span><span className="detail-label">Workspace</span><strong>{preparedRun.workspace.workspacePath}</strong></span>
               <span><span className="detail-label">Context file</span><strong>{preparedRun.contextPackPath}</strong></span>
+              <span><span className="detail-label">Status</span><strong>{currentRunState?.status || 'prepared'}</strong></span>
             </div>
             <pre className="agent-workbench-preview">{preparedRun.contextPack.markdown || 'No Vault context matched this request.'}</pre>
             <div className="inline-actions">
+              <button type="button" className="primary-button" onClick={() => void launchPreparedRun()} disabled={busy}>
+                <Play size={14} />
+                <span>{busy ? 'Starting...' : `Start ${getAdapterLabel(preparedRun.launch.adapterType)}`}</span>
+              </button>
               <button type="button" className="header-button" onClick={() => void copyText(preparedRun.contextPack.markdown || 'No Vault context matched this request.', 'Context copied.')}>
                 <Clipboard size={14} />
                 <span>Copy context</span>
@@ -321,7 +353,45 @@ export function AgentWorkbenchView({ projects, adapterConfig }: Props) {
             </div>
           </>
         ) : (
-          <div className="empty-state">Prepare a local run to preview the context pack and command.</div>
+          <div className="empty-state">Prepare a local agent run to preview the context pack and start command.</div>
+        )}
+      </section>
+
+      <section className="panel agent-workbench-panel agent-workbench-wide">
+        <div className="panel-header">
+          <div>
+            <div className="panel-title">Local agent runs</div>
+            <div className="panel-subtitle">Prepared, launched, and completed Codex or Claude terminal runs.</div>
+          </div>
+          <Clock3 size={18} />
+        </div>
+
+        {recentRuns.length === 0 ? (
+          <div className="empty-state">No local agent runs have been prepared yet.</div>
+        ) : (
+          <div className="local-agent-run-list">
+            {recentRuns.map((run) => (
+              <div key={run.runId} className="local-agent-run-row">
+                <span className={`queue-status-rail ${getRunStatusRailClass(run.status)}`} />
+                <div className="local-agent-run-main">
+                  <div className="queue-task-title-row">
+                    <span className="queue-task-title">{run.title}</span>
+                    <span className={`badge ${getRunBadgeClass(run.status)}`}>{run.status || 'prepared'}</span>
+                  </div>
+                  <div className="queue-task-meta">
+                    <span>{run.project}</span>
+                    <span>{getAdapterLabel(run.adapterType)}</span>
+                    <span>{formatRunTime(run.updatedAt || run.createdAt)}</span>
+                    {run.resultMemoryUid ? <span>{run.resultMemoryUid}</span> : null}
+                  </div>
+                </div>
+                <button type="button" className="header-button" onClick={() => void copyText(run.displayCommand || '', 'Launch command copied.')} disabled={!run.displayCommand}>
+                  <Clipboard size={14} />
+                  <span>Command</span>
+                </button>
+              </div>
+            ))}
+          </div>
         )}
       </section>
 
@@ -329,7 +399,7 @@ export function AgentWorkbenchView({ projects, adapterConfig }: Props) {
         <div className="panel-header">
           <div>
             <div className="panel-title">Capture result</div>
-            <div className="panel-subtitle">Paste the local client outcome back into Vault when the terminal run finishes.</div>
+            <div className="panel-subtitle">Paste the terminal outcome back into Vault when the local agent run finishes.</div>
           </div>
           <Save size={18} />
         </div>
@@ -338,7 +408,7 @@ export function AgentWorkbenchView({ projects, adapterConfig }: Props) {
           value={resultSummary}
           onChange={(event) => setResultSummary(event.target.value)}
           rows={5}
-          placeholder="Paste the completed local-agent result or handoff summary..."
+          placeholder="Paste the completed local agent result or handoff summary..."
         />
         <div className="inline-actions">
           <button type="button" className="primary-button" onClick={() => void saveResultMemory()} disabled={!preparedRun || !resultSummary.trim()}>
@@ -355,4 +425,40 @@ export function AgentWorkbenchView({ projects, adapterConfig }: Props) {
       </section>
     </div>
   );
+}
+
+function getAdapterLabel(type: LocalAdapterType): string {
+  return type === 'claude_local' ? 'Claude Code' : 'Codex CLI';
+}
+
+function getRunBadgeClass(status: LocalWorkbenchRunStatus | undefined): string {
+  switch (status) {
+    case 'completed':
+      return 'badge-task-complete';
+    case 'launched':
+      return 'badge-task-running';
+    case 'prepared':
+    default:
+      return 'badge-task-pending';
+  }
+}
+
+function getRunStatusRailClass(status: LocalWorkbenchRunStatus | undefined): string {
+  switch (status) {
+    case 'completed':
+      return 'queue-status-rail-completed';
+    case 'launched':
+      return 'queue-status-rail-running';
+    case 'prepared':
+    default:
+      return 'queue-status-rail-pending';
+  }
+}
+
+function formatRunTime(value: string | null | undefined): string {
+  if (!value) {
+    return 'n/a';
+  }
+
+  return new Date(value).toLocaleString();
 }
