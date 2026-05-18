@@ -465,8 +465,8 @@ The root build:
 Release builds are created by GitHub Actions when a version tag is pushed:
 
 ```powershell
-git tag -a v0.2.6 -m "v0.2.6"
-git push origin v0.2.6
+git tag -a v0.2.7 -m "v0.2.7"
+git push origin v0.2.7
 ```
 
 The workflow typechecks the repo, builds the installer, verifies the bundled MCP sidecar, uploads artifacts, and publishes a GitHub Release.
