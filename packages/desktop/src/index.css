@@ -1,22 +1,28 @@
 @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=Space+Grotesk:wght@400;500;700&display=swap');
 
 :root {
-  --bg-primary: #070b11;
-  --bg-secondary: #0d121b;
-  --bg-tertiary: #121a26;
-  --text-primary: #f4f7fb;
-  --text-secondary: #a8b4c6;
-  --text-muted: #708097;
-  --accent-primary: #5ce0e6;
-  --accent-secondary: #ff944d;
+  --bg-primary: #030711;
+  --bg-secondary: #08101c;
+  --bg-tertiary: #0d1725;
+  --surface-glass: rgba(8, 16, 28, 0.78);
+  --surface-glass-strong: rgba(10, 20, 34, 0.9);
+  --text-primary: #f4f8ff;
+  --text-secondary: #a8b7cc;
+  --text-muted: #71839d;
+  --accent-primary: #38dfff;
+  --accent-secondary: #8b7cff;
+  --accent-warning: #f5a524;
   --alert-success: #33d691;
   --alert-error: #ff6a6a;
-  --border-color: rgba(148, 166, 198, 0.22);
-  --border-subtle: rgba(148, 166, 198, 0.1);
+  --border-color: rgba(141, 174, 214, 0.22);
+  --border-subtle: rgba(141, 174, 214, 0.11);
   --font-sans: 'Space Grotesk', 'Segoe UI', sans-serif;
   --font-mono: 'IBM Plex Mono', 'SFMono-Regular', monospace;
-  --panel-shadow: 0 24px 48px rgba(0, 0, 0, 0.32), 0 4px 12px rgba(0, 0, 0, 0.18);
-  --panel-glow: 0 0 0 1px rgba(92, 224, 230, 0.06);
+  --panel-shadow: 0 24px 52px rgba(0, 0, 0, 0.34), 0 4px 14px rgba(0, 0, 0, 0.22);
+  --panel-glow: 0 0 0 1px rgba(56, 223, 255, 0.07);
+  --radius-panel: 12px;
+  --radius-control: 10px;
+  --radius-compact: 8px;
   --transition-fast: 180ms ease;
 }
 

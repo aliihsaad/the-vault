@@ -35,6 +35,7 @@ import {
   shouldAutoInstallClaudeSkill,
 } from './connection-migration.js';
 import { TaskExecutor } from './task-executor.js';
+import { getDirectorySizeSummary } from './vault-directory-size.js';
 
 // Recreate __dirname for ESM
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -1355,13 +1356,23 @@ app.whenReady().then(() => {
 
   // IPC Handlers — Expose Vault methods
   
-  ipcMain.handle('vault:status', () => {
+  ipcMain.handle('vault:status', async () => {
+    const vaultRoot = vault.getVaultRoot();
+    let directorySize = null;
+
+    try {
+      directorySize = await getDirectorySizeSummary(vaultRoot);
+    } catch (err) {
+      console.warn('[vault] directory size unavailable:', err instanceof Error ? err.message : String(err));
+    }
+
     return {
       initialized: vault.isInitialized(),
-      root: vault.getVaultRoot(),
+      root: vaultRoot,
       workspaceRoot: process.cwd(),
       projects: vault.listProjects(),
       appVersion: app.getVersion(),
+      directorySize,
     };
   });
 

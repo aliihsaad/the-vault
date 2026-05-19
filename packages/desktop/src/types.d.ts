@@ -312,6 +312,12 @@ declare global {
     workspaceRoot?: string;
     projects: VaultProject[];
     appVersion?: string;
+    directorySize?: {
+      bytes: number;
+      files: number;
+      directories: number;
+      displaySize: string;
+    } | null;
   }
 
   interface VaultSettings {

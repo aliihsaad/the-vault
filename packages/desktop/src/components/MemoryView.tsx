@@ -53,11 +53,13 @@ type MemoryViewMode = 'browse' | 'create';
 export function MemoryView({
   composerPrefill,
   initialSelection,
+  searchSeed,
   onComposerPrefillConsumed,
   onInitialSelectionConsumed,
 }: {
   composerPrefill?: { draft: Partial<VaultMemoryComposerDraft>; nonce: number } | null;
   initialSelection?: { itemUid: string; nonce: number } | null;
+  searchSeed?: { query: string; nonce: number } | null;
   onComposerPrefillConsumed?: () => void;
   onInitialSelectionConsumed?: () => void;
 }) {
@@ -180,6 +182,15 @@ export function MemoryView({
     setError(null);
     onComposerPrefillConsumed?.();
   }, [composerPrefill, onComposerPrefillConsumed]);
+
+  useEffect(() => {
+    if (!searchSeed) {
+      return;
+    }
+
+    setActiveMode('browse');
+    setSearch(searchSeed.query);
+  }, [searchSeed?.nonce]);
 
   useEffect(() => {
     if (composerDraft.project.trim()) {

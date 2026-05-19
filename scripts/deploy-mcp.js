@@ -42,7 +42,7 @@ const pkg = {
   dependencies: {
     // From @the-vault/core
     'better-sqlite3': '^12.0.0',
-    'drizzle-orm': '^0.39.0',
+    'drizzle-orm': '^0.45.2',
     'nanoid': '^5.1.0',
     'zod': '^3.24.0',
     'gray-matter': '^4.0.3',

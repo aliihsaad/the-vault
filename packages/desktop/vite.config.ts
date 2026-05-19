@@ -8,12 +8,48 @@ export default defineConfig({
   build: {
     outDir: 'dist-renderer',
     emptyOutDir: true,
+    rollupOptions: {
+      output: {
+        manualChunks(id) {
+          const normalizedId = id.replace(/\\/g, '/');
+
+          if (!normalizedId.includes('node_modules')) {
+            return undefined;
+          }
+
+          if (normalizedId.includes('/node_modules/lucide-react/')) {
+            return 'vendor-icons';
+          }
+
+          if (
+            normalizedId.includes('/node_modules/react/') ||
+            normalizedId.includes('/node_modules/react-dom/') ||
+            normalizedId.includes('/node_modules/scheduler/')
+          ) {
+            return 'vendor-react';
+          }
+
+          if (normalizedId.includes('/node_modules/recharts/') || normalizedId.includes('/node_modules/d3-')) {
+            return 'vendor-charts';
+          }
+
+          if (normalizedId.includes('/node_modules/date-fns/')) {
+            return 'vendor-date';
+          }
+
+          return undefined;
+        },
+      },
+    },
   },
   plugins: [
     react(),
     electron({
       main: {
         entry: 'electron/main.ts',
+        onstart({ startup }) {
+          return startup(['.', '--no-sandbox', '--disable-gpu']);
+        },
         vite: {
           build: {
             rollupOptions: {

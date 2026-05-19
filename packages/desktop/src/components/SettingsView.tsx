@@ -189,12 +189,18 @@ const ROUTING_PRESETS: Array<{
   },
 ];
 
-const SETTINGS_TABS: Array<{ id: SettingsTabId; label: string; description: string; group: string }> = [
-  { id: 'overview', label: 'Runtime', description: 'Runtime behavior and enrichment defaults', group: 'Operate' },
-  { id: 'local-backend', label: 'Local chat', description: 'Vault launches local Codex or Claude CLIs itself', group: 'Operate' },
-  { id: 'connections', label: 'Client setup', description: 'Connect Codex, Claude Desktop, or another MCP client', group: 'Install' },
-  { id: 'skills', label: 'Install guides', description: 'Copy or download the full client guidance files', group: 'Reference' },
-  { id: 'prompts', label: 'Prompt library', description: 'Reusable recall, save, and setup prompts', group: 'Reference' },
+const SETTINGS_TABS: Array<{
+  id: SettingsTabId;
+  label: string;
+  description: string;
+  group: string;
+  icon: typeof Bot;
+}> = [
+  { id: 'overview', label: 'Runtime', description: 'Runtime behavior and enrichment defaults', group: 'Operate', icon: Gauge },
+  { id: 'local-backend', label: 'Local chat', description: 'Vault launches local Codex or Claude CLIs itself', group: 'Operate', icon: Bot },
+  { id: 'connections', label: 'Client setup', description: 'Connect Codex, Claude Desktop, or another MCP client', group: 'Install', icon: Wifi },
+  { id: 'skills', label: 'Install guides', description: 'Copy or download the full client guidance files', group: 'Reference', icon: BookCopy },
+  { id: 'prompts', label: 'Prompt library', description: 'Reusable recall, save, and setup prompts', group: 'Reference', icon: ScrollText },
 ];
 
 const LOCAL_BACKEND_STEPS = [
@@ -1648,6 +1654,10 @@ export function SettingsView({ vaultStatus }: { vaultStatus: VaultStatus | null 
   }
 
   const activeTabMeta = SETTINGS_TABS.find((tab) => tab.id === activeTab) || SETTINGS_TABS[0];
+  const activeTabIndex = SETTINGS_TABS.findIndex((tab) => tab.id === activeTab);
+  const ActiveTabIcon = activeTabMeta.icon;
+  const runtimeStatus = vaultStatus?.initialized ? 'Online' : loading ? 'Connecting' : 'Offline';
+  const projectCount = vaultStatus?.projects.length || 0;
   const tabGroups = SETTINGS_TABS.reduce<Array<{ label: string; tabs: Array<(typeof SETTINGS_TABS)[number]> }>>((groups, tab) => {
     const existingGroup = groups.find((group) => group.label === tab.group);
     if (existingGroup) {
@@ -1663,30 +1673,54 @@ export function SettingsView({ vaultStatus }: { vaultStatus: VaultStatus | null 
   }, []);
 
   return (
-    <div className="settings-layout">
+    <div className="settings-layout settings-cockpit">
+      <section className="settings-cockpit-header panel">
+        <div className="settings-cockpit-copy">
+          <span className="cockpit-kicker">Local configuration</span>
+          <h2>Settings control surface</h2>
+          <p>
+            Configure local runtime behavior, client wiring, skill installs, prompt templates,
+            and model routing without leaving the cockpit layout.
+          </p>
+        </div>
+
+        <div className="settings-cockpit-metrics">
+          <div className="settings-cockpit-metric">
+            <span>Runtime</span>
+            <strong>{runtimeStatus}</strong>
+          </div>
+          <div className="settings-cockpit-metric">
+            <span>Projects</span>
+            <strong>{projectCount}</strong>
+          </div>
+          <div className="settings-cockpit-metric">
+            <span>Active tab</span>
+            <strong>{activeTabMeta.label}</strong>
+          </div>
+        </div>
+      </section>
+
       <div className="settings-shell">
         <aside className="settings-rail">
-          <div className="panel settings-context-card">
-            <span className="header-eyebrow">Settings workspace</span>
-            <div className="panel-title">{activeTabMeta.label}</div>
-            <div className="panel-subtitle">{activeTabMeta.description}</div>
-          </div>
-
-          <div className="save-bar panel settings-save-panel">
+          <div className="panel settings-rail-card">
             <div>
-              <div className="panel-title">Settings</div>
-              <div className="panel-subtitle">Move between tabs from here. Save is only needed for the Runtime controls tab.</div>
+              <span className="header-eyebrow">Settings workspace</span>
+              <div className="panel-title">Local cockpit controls</div>
+              <div className="panel-subtitle">Tabs are grouped by the actual Vault surfaces they configure.</div>
             </div>
-
-            <div className="save-actions settings-save-actions">
-              {message ? <span className="success-text">{message}</span> : null}
-              {error ? <span className="error-text">{error}</span> : null}
-              {activeTab === 'overview' ? (
-                <button type="button" className="primary-button" onClick={() => void saveSettings()} disabled={loading || saving}>
-                  <Save size={16} />
-                  <span>{saving ? 'Saving...' : 'Save runtime settings'}</span>
-                </button>
-              ) : null}
+            <div className="settings-rail-status-grid">
+              <div className="settings-rail-status-row">
+                <span>Mode</span>
+                <strong>Dark local</strong>
+              </div>
+              <div className="settings-rail-status-row">
+                <span>Vault root</span>
+                <strong>{vaultStatus?.root ? 'Connected' : 'Unavailable'}</strong>
+              </div>
+              <div className="settings-rail-status-row">
+                <span>Save scope</span>
+                <strong>{activeTab === 'overview' ? 'Runtime' : 'Reference'}</strong>
+              </div>
             </div>
           </div>
 
@@ -1696,15 +1730,28 @@ export function SettingsView({ vaultStatus }: { vaultStatus: VaultStatus | null 
                 <span className="settings-tab-group-label">{group.label}</span>
                 <div className="settings-tab-group-items">
                   {group.tabs.map((tab) => (
-                    <button
-                      key={tab.id}
-                      type="button"
-                      className={`settings-tab-button ${activeTab === tab.id ? 'settings-tab-button-active' : ''}`}
-                      onClick={() => setActiveTab(tab.id)}
-                    >
-                      <span className="settings-tab-label">{tab.label}</span>
-                      <span className="settings-tab-description">{tab.description}</span>
-                    </button>
+                    (() => {
+                      const TabIcon = tab.icon;
+                      const tabIndex = SETTINGS_TABS.findIndex((item) => item.id === tab.id) + 1;
+
+                      return (
+                        <button
+                          key={tab.id}
+                          type="button"
+                          className={`settings-tab-button ${activeTab === tab.id ? 'settings-tab-button-active' : ''}`}
+                          onClick={() => setActiveTab(tab.id)}
+                        >
+                          <span className="settings-tab-icon">
+                            <TabIcon size={16} />
+                          </span>
+                          <span className="settings-tab-copy">
+                            <span className="settings-tab-label">{tab.label}</span>
+                            <span className="settings-tab-description">{tab.description}</span>
+                          </span>
+                          <span className="settings-tab-index">{String(tabIndex).padStart(2, '0')}</span>
+                        </button>
+                      );
+                    })()
                   ))}
                 </div>
               </div>
@@ -1713,6 +1760,29 @@ export function SettingsView({ vaultStatus }: { vaultStatus: VaultStatus | null 
         </aside>
 
         <div className="settings-main">
+          <section className="settings-active-panel panel">
+            <span className="settings-active-icon">
+              <ActiveTabIcon size={20} />
+            </span>
+            <div className="settings-active-copy">
+              <span className="settings-active-eyebrow">Settings / {activeTabMeta.group} / {String(activeTabIndex + 1).padStart(2, '0')}</span>
+              <strong>{activeTabMeta.label}</strong>
+              <span>{activeTabMeta.description}</span>
+            </div>
+            <div className="settings-active-actions">
+              {message ? <span className="success-text">{message}</span> : null}
+              {error ? <span className="error-text">{error}</span> : null}
+              {activeTab === 'overview' ? (
+                <button type="button" className="primary-button" onClick={() => void saveSettings()} disabled={loading || saving}>
+                  <Save size={16} />
+                  <span>{saving ? 'Saving...' : 'Save runtime settings'}</span>
+                </button>
+              ) : (
+                <span className="settings-save-hint">No runtime save needed on this tab</span>
+              )}
+            </div>
+          </section>
+
           {loading ? (
             <div className="panel empty-state">Loading settings...</div>
           ) : (
