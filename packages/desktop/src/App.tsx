@@ -68,7 +68,7 @@ const PRIMARY_NAV: Array<NavItem<PrimaryTab>> = [
   { id: 'graph', label: 'Graph', description: 'Relationship preview', icon: Network },
   { id: 'recall', label: 'Recall', description: 'Recall efficiency and logs', icon: Search },
   { id: 'analytics', label: 'Analytics', description: 'Operational telemetry', icon: BrainCircuit },
-  { id: 'agent', label: 'Agent', description: 'Runtime, queue, local agents', icon: Bot },
+  { id: 'agent', label: 'Agent', description: 'Runtime, queue, executor', icon: Bot },
   { id: 'settings', label: 'Settings', description: 'Local configuration', icon: Settings },
 ];
 
@@ -117,11 +117,11 @@ const TAB_META: Record<AppTab, { title: string; description: string }> = {
   },
   agent: {
     title: 'Agent',
-    description: 'Control Vault agent runtime, queue, local workbench runs, and executor activity.',
+    description: 'Control Vault agent runtime, queue, and executor activity.',
   },
   settings: {
     title: 'Settings',
-    description: 'Configure local runtime behavior, integrations, skills, and model routing.',
+    description: 'Configure runtime behavior, MCP integrations, skills, and model routing.',
   },
   activity: {
     title: 'Activity',

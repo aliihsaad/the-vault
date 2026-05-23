@@ -33,6 +33,17 @@ export type RecallDayMetric = {
   reductionRatio: number;
 };
 
+export type RecallSummaryMetric = {
+  recallCount: number;
+  todayRecallCount: number;
+  totalCandidates: number;
+  totalReturned: number;
+  tokensSaved14d: number;
+  candidateReductionRatio: number;
+  averageTopScore: number;
+  latestTimestamp: string | null;
+};
+
 export type MemoryTypeMetric = {
   type: VaultMemoryType;
   count: number;
@@ -41,6 +52,18 @@ export type MemoryTypeMetric = {
 export type StatusMetric = {
   status: VaultStatusValue;
   count: number;
+};
+
+export type MemoryWorkspaceSummary = {
+  total: number;
+  promotedCount: number;
+  withNextSteps: number;
+  projectCount: number;
+  activeCount: number;
+  resolvedCount: number;
+  highPriorityCount: number;
+  recentCount: number;
+  latestTimestamp: string | null;
 };
 
 export type ProjectCockpitRow = {
@@ -184,6 +207,40 @@ export function buildRecallTrend(
   return trend;
 }
 
+export function buildRecallSummary(
+  logs: VaultLogEntry[],
+  recallPacking: RecallPackingSettings = DEFAULT_RECALL_PACKING,
+  referenceDate: Date = new Date(),
+): RecallSummaryMetric {
+  const recallLogs = logs.filter((log) => log.actionType === 'recall');
+  const totalCandidates = recallLogs.reduce((sum, log) => sum + extractTotalCandidates(log), 0);
+  const totalReturned = recallLogs.reduce((sum, log) => sum + extractResultCount(log), 0);
+  const tokensSaved14d = buildRecallTrend(recallLogs, 14, recallPacking, referenceDate)
+    .reduce((sum, day) => sum + day.tokensSaved, 0);
+  const latestTimestamp = recallLogs.reduce<string | null>((latest, log) => {
+    if (!log.timestamp) {
+      return latest;
+    }
+    if (!latest || new Date(log.timestamp).getTime() > new Date(latest).getTime()) {
+      return log.timestamp;
+    }
+    return latest;
+  }, null);
+
+  return {
+    recallCount: recallLogs.length,
+    todayRecallCount: recallLogs.filter((log) => isSameLocalDay(log.timestamp, referenceDate)).length,
+    totalCandidates,
+    totalReturned,
+    tokensSaved14d,
+    candidateReductionRatio: totalCandidates > 0 ? clampRatio(1 - totalReturned / totalCandidates) : 0,
+    averageTopScore: recallLogs.length > 0
+      ? recallLogs.reduce((sum, log) => sum + extractTopScore(log), 0) / recallLogs.length
+      : 0,
+    latestTimestamp,
+  };
+}
+
 export function buildMemoryTypeMetrics(memories: VaultMemory[]): MemoryTypeMetric[] {
   return MEMORY_TYPE_ORDER.map((type) => ({
     type,
@@ -200,6 +257,36 @@ export function buildStatusMetrics(memories: VaultMemory[]): StatusMetric[] {
   return Array.from(map.entries())
     .map(([status, count]) => ({ status, count }))
     .sort((left, right) => right.count - left.count || left.status.localeCompare(right.status));
+}
+
+export function buildMemoryWorkspaceSummary(
+  memories: VaultMemory[],
+  referenceDate: Date = new Date(),
+): MemoryWorkspaceSummary {
+  const recentCutoff = new Date(referenceDate);
+  recentCutoff.setDate(referenceDate.getDate() - 7);
+
+  const latestMemory = memories.reduce<VaultMemory | null>((latest, memory) => {
+    const latestTime = latest ? getMemoryUpdatedTime(latest) : Number.NEGATIVE_INFINITY;
+    return getMemoryUpdatedTime(memory) > latestTime ? memory : latest;
+  }, null);
+
+  return {
+    total: memories.length,
+    promotedCount: memories.filter((memory) => memory.promoted).length,
+    withNextSteps: memories.filter((memory) => memory.nextSteps.length > 0).length,
+    projectCount: new Set(memories.map((memory) => memory.project).filter(Boolean)).size,
+    activeCount: memories.filter((memory) => memory.status === 'active').length,
+    resolvedCount: memories.filter((memory) => memory.status === 'resolved').length,
+    highPriorityCount: memories.filter((memory) => memory.priority === 'high' || memory.priority === 'critical').length,
+    recentCount: memories.filter((memory) => {
+      const updatedTime = getMemoryUpdatedTime(memory);
+      return Number.isFinite(updatedTime)
+        && updatedTime >= recentCutoff.getTime()
+        && updatedTime <= referenceDate.getTime();
+    }).length,
+    latestTimestamp: latestMemory?.updatedAt || latestMemory?.createdAt || null,
+  };
 }
 
 export function buildActivitySeries(
@@ -404,6 +491,16 @@ function clampRatio(value: number): number {
   }
 
   return Math.max(0, Math.min(1, value));
+}
+
+function getMemoryUpdatedTime(memory: VaultMemory): number {
+  const timestamp = memory.updatedAt || memory.createdAt;
+  if (!timestamp) {
+    return Number.NEGATIVE_INFINITY;
+  }
+
+  const time = new Date(timestamp).getTime();
+  return Number.isNaN(time) ? Number.NEGATIVE_INFINITY : time;
 }
 
 function countBy<T>(items: T[], getKey: (item: T) => string): Map<string, number> {

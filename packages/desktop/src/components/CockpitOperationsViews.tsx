@@ -40,11 +40,14 @@ import {
 import {
   buildActivitySeries,
   buildMemoryTypeMetrics,
+  buildMemoryWorkspaceSummary,
   buildProjectCockpitRows,
+  buildRecallSummary,
   buildRecallTrend,
   buildRelationshipGraphPreview,
   buildStatusMetrics,
   extractResultCount,
+  extractTopScore,
   extractTotalCandidates,
   formatCompactNumber,
   getRecallPackingSettings,
@@ -189,8 +192,81 @@ export function FilteredMemoryWorkspaceView({
       && (projectFilter === 'all' || memory.project === projectFilter)
       && (statusFilter === 'all' || memory.status === statusFilter);
   });
-  const promotedCount = memories.filter((memory) => memory.promoted).length;
-  const withNextSteps = memories.filter((memory) => memory.nextSteps.length > 0).length;
+  const summary = useMemo(() => buildMemoryWorkspaceSummary(memories), [memories]);
+  const visibleSummary = useMemo(() => buildMemoryWorkspaceSummary(visible), [visible]);
+  const isDecisionWorkspace = memoryType === 'decision';
+  const workspaceAccent = isDecisionWorkspace ? 'violet' : 'green';
+  const latestLabel = formatRelativeTime(summary.latestTimestamp);
+  const ctaCards = isDecisionWorkspace ? [
+    {
+      icon: <ShieldCheck size={18} />,
+      label: 'Recorded decisions',
+      value: formatCompactNumber(summary.total),
+      detail: `${formatCompactNumber(visibleSummary.total)} visible after filters across ${formatCompactNumber(summary.projectCount)} projects.`,
+      tone: 'primary' as const,
+    },
+    {
+      icon: <Target size={18} />,
+      label: 'Promoted constraints',
+      value: formatCompactNumber(summary.promotedCount),
+      detail: `${formatCompactNumber(summary.highPriorityCount)} high-priority decision records need extra attention.`,
+      tone: 'violet' as const,
+    },
+    {
+      icon: <Database size={18} />,
+      label: 'Projects covered',
+      value: formatCompactNumber(summary.projectCount),
+      detail: `${formatCompactNumber(summary.activeCount)} active, ${formatCompactNumber(summary.resolvedCount)} resolved decisions loaded.`,
+      tone: 'cyan' as const,
+    },
+    {
+      icon: <Clock3 size={18} />,
+      label: 'Recently updated',
+      value: formatCompactNumber(summary.recentCount),
+      detail: `Latest decision changed ${latestLabel}.`,
+      tone: 'green' as const,
+    },
+  ] : [
+    {
+      icon: <FileText size={18} />,
+      label: 'Transfer notes',
+      value: formatCompactNumber(summary.total),
+      detail: `${formatCompactNumber(visibleSummary.total)} visible after filters across ${formatCompactNumber(summary.projectCount)} projects.`,
+      tone: 'primary' as const,
+    },
+    {
+      icon: <ListChecks size={18} />,
+      label: 'Open next steps',
+      value: formatCompactNumber(summary.withNextSteps),
+      detail: `${formatCompactNumber(summary.activeCount)} active handoffs are still in motion.`,
+      tone: 'green' as const,
+    },
+    {
+      icon: <Database size={18} />,
+      label: 'Projects covered',
+      value: formatCompactNumber(summary.projectCount),
+      detail: `${formatCompactNumber(summary.highPriorityCount)} high-priority handoff records in the loaded set.`,
+      tone: 'cyan' as const,
+    },
+    {
+      icon: <Clock3 size={18} />,
+      label: 'Recently updated',
+      value: formatCompactNumber(summary.recentCount),
+      detail: `Latest handoff changed ${latestLabel}.`,
+      tone: 'violet' as const,
+    },
+  ];
+  const insightRows = isDecisionWorkspace ? [
+    { label: 'Promoted constraints', value: summary.promotedCount, detail: 'Canonical choices agents should preserve' },
+    { label: 'Active decisions', value: summary.activeCount, detail: 'Still relevant in current project work' },
+    { label: 'Resolved decisions', value: summary.resolvedCount, detail: 'Closed or superseded decision records' },
+    { label: 'High priority', value: summary.highPriorityCount, detail: 'Marked high or critical' },
+  ] : [
+    { label: 'Open next steps', value: summary.withNextSteps, detail: 'Transfer notes with follow-up work' },
+    { label: 'Active transfers', value: summary.activeCount, detail: 'Handoffs still available to continue' },
+    { label: 'Recent handoffs', value: summary.recentCount, detail: 'Updated in the last seven days' },
+    { label: 'High priority', value: summary.highPriorityCount, detail: 'Marked high or critical' },
+  ];
 
   return (
     <div className="ops-layout">
@@ -198,38 +274,73 @@ export function FilteredMemoryWorkspaceView({
         label={label}
         title={title}
         text={text}
-        chips={[`${memories.length} total`, `${promotedCount} promoted`, `${withNextSteps} with next steps`]}
+        chips={[
+          `${summary.total} total`,
+          `${summary.projectCount} projects`,
+          isDecisionWorkspace ? `${summary.promotedCount} promoted` : `${summary.withNextSteps} with next steps`,
+          `${summary.recentCount} recent`,
+        ]}
         onRefresh={() => void hydrate()}
         loading={loading}
       />
 
+      <section className="workspace-cta-grid" aria-label={`${label} workspace highlights`}>
+        {ctaCards.map((card) => (
+          <WorkspaceCtaCard
+            key={card.label}
+            icon={card.icon}
+            label={card.label}
+            value={card.value}
+            detail={card.detail}
+            tone={card.tone}
+          />
+        ))}
+      </section>
+
       <section className="ops-workspace-grid">
-        <div className="panel ops-filter-panel">
-          <PanelHeader icon={<Filter size={18} />} title="Filters" subtitle={`Narrow ${memoryType} memories by project, status, and text.`} />
-          <div className="toolbar-row toolbar-row-vertical">
-            <label className="search-field">
-              <Search size={16} />
-              <input value={search} onChange={(event) => setSearch(event.target.value)} placeholder={`Search ${memoryType} memories`} />
-            </label>
-            <label className="select-field">
-              <Database size={16} />
-              <select value={projectFilter} onChange={(event) => setProjectFilter(event.target.value)}>
-                <option value="all">All projects</option>
-                {projects.map((project) => <option key={project} value={project}>{project}</option>)}
-              </select>
-            </label>
-            <label className="select-field">
-              <ShieldCheck size={16} />
-              <select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value as 'all' | VaultStatusValue)}>
-                <option value="all">All statuses</option>
-                <option value="active">active</option>
-                <option value="resolved">resolved</option>
-                <option value="draft">draft</option>
-                <option value="promoted">promoted</option>
-                <option value="archived">archived</option>
-                <option value="stale">stale</option>
-              </select>
-            </label>
+        <div className="workspace-control-stack">
+          <div className="panel ops-filter-panel">
+            <PanelHeader icon={<Filter size={18} />} title="Filters" subtitle={`Narrow ${memoryType} memories by project, status, and text.`} />
+            <div className="toolbar-row toolbar-row-vertical">
+              <label className="search-field">
+                <Search size={16} />
+                <input value={search} onChange={(event) => setSearch(event.target.value)} placeholder={`Search ${memoryType} memories`} />
+              </label>
+              <label className="select-field">
+                <Database size={16} />
+                <select value={projectFilter} onChange={(event) => setProjectFilter(event.target.value)}>
+                  <option value="all">All projects</option>
+                  {projects.map((project) => <option key={project} value={project}>{project}</option>)}
+                </select>
+              </label>
+              <label className="select-field">
+                <ShieldCheck size={16} />
+                <select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value as 'all' | VaultStatusValue)}>
+                  <option value="all">All statuses</option>
+                  <option value="active">active</option>
+                  <option value="resolved">resolved</option>
+                  <option value="draft">draft</option>
+                  <option value="promoted">promoted</option>
+                  <option value="archived">archived</option>
+                  <option value="stale">stale</option>
+                </select>
+              </label>
+            </div>
+            <div className="workspace-filter-foot">
+              <span>{visibleSummary.total} visible</span>
+              <strong>{visibleSummary.projectCount} projects</strong>
+            </div>
+          </div>
+
+          <div className={`panel workspace-insight-panel workspace-insight-panel-${workspaceAccent}`}>
+            <PanelHeader
+              icon={isDecisionWorkspace ? <ShieldCheck size={18} /> : <ListChecks size={18} />}
+              title={isDecisionWorkspace ? 'Decision quality' : 'Handoff readiness'}
+              subtitle={isDecisionWorkspace ? 'Promoted, active, and high-priority decision signals.' : 'Transfer notes ranked by follow-up pressure.'}
+            />
+            <div className="workspace-insight-list">
+              {insightRows.map((row) => <WorkspaceInsightRow key={row.label} row={row} />)}
+            </div>
           </div>
         </div>
 
@@ -238,19 +349,7 @@ export function FilteredMemoryWorkspaceView({
             <div className="panel empty-state">Loading {memoryType} memories...</div>
           ) : visible.length === 0 ? (
             <div className="panel empty-state">No {memoryType} memories match the current filters.</div>
-          ) : visible.map((memory) => (
-            <button key={memory.itemUid} type="button" className="ops-memory-row" onClick={() => onOpenMemory?.(memory.itemUid)}>
-              <span className={`badge badge-${memory.memoryType}`}>{memory.memoryType}</span>
-              <span className="ops-memory-copy">
-                <strong>{memory.title}</strong>
-                <span>{memory.summary}</span>
-              </span>
-              <span className="ops-memory-meta">
-                <span>{memory.project}</span>
-                <span>{memory.updatedAt ? formatDistanceToNow(new Date(memory.updatedAt)) : 'unknown'} ago</span>
-              </span>
-            </button>
-          ))}
+          ) : visible.map((memory) => <WorkspaceMemoryRow key={memory.itemUid} memory={memory} onOpenMemory={onOpenMemory} />)}
         </div>
       </section>
     </div>
@@ -678,34 +777,68 @@ export function RecallOperationsView() {
     }
   }
 
-  const recallPacking = getRecallPackingSettings(settings);
+  const recallPacking = useMemo(() => getRecallPackingSettings(settings), [settings]);
   const trend = useMemo(() => buildRecallTrend(logs, 14, recallPacking), [logs, recallPacking]);
-  const trendTokensSaved = trend.reduce((sum, day) => sum + day.tokensSaved, 0);
-  const totalCandidates = logs.reduce((sum, log) => sum + extractTotalCandidates(log), 0);
-  const totalReturned = logs.reduce((sum, log) => sum + extractResultCount(log), 0);
-  const avgTopScore = logs.length > 0
-    ? logs.reduce((sum, log) => sum + (typeof log.metadata?.topScore === 'number' ? log.metadata.topScore : 0), 0) / logs.length
-    : 0;
+  const summary = useMemo(() => buildRecallSummary(logs, recallPacking), [logs, recallPacking]);
+  const candidateReduction = formatPercent(summary.candidateReductionRatio);
+  const latestLabel = formatRelativeTime(summary.latestTimestamp);
+  const packedLimitLabel = `${recallPacking.topMatchLimit} compact / ${recallPacking.detailExpansionLimit} expanded`;
 
   return (
     <div className="ops-layout">
       <OpsIntro
         label="Recall"
         title="Recall efficiency"
-        text="Recall health is derived from persisted recall logs and the configured prompt-packing strategy."
+        text="Recall health is measured as work avoided: candidates scanned, matches returned, and prompt context kept out of the agent window."
         chips={[
-          `${logs.length} recalls`,
-          `${totalReturned}/${totalCandidates || 0} surfaced`,
-          `${formatCompactNumber(trendTokensSaved)} tokens avoided / 14d`,
-          `avg top score ${avgTopScore.toFixed(1)}`,
+          `${summary.recallCount} recalls`,
+          `${formatCompactNumber(summary.tokensSaved14d)} tokens saved / 14d`,
+          `${candidateReduction} candidates pruned`,
+          `packing ${packedLimitLabel}`,
         ]}
         onRefresh={() => void hydrate()}
         loading={loading}
       />
 
+      <section className="recall-cta-grid" aria-label="Recall efficiency highlights">
+        <RecallCtaCard
+          tone="primary"
+          icon={<Target size={18} />}
+          label="Estimated tokens saved"
+          value={formatCompactNumber(summary.tokensSaved14d)}
+          detail={`14-day estimate after pruning ${formatCompactNumber(summary.totalCandidates)} candidates to ${formatCompactNumber(summary.totalReturned)} returned matches.`}
+        />
+        <RecallCtaCard
+          tone="cyan"
+          icon={<Search size={18} />}
+          label="Candidate reduction"
+          value={candidateReduction}
+          detail={`${formatCompactNumber(Math.max(summary.totalCandidates - summary.totalReturned, 0))} candidates skipped before prompt packing.`}
+        />
+        <RecallCtaCard
+          tone="green"
+          icon={<Clock3 size={18} />}
+          label="Recall volume"
+          value={`${summary.todayRecallCount} today`}
+          detail={`${summary.recallCount} loaded recall events, latest ${latestLabel}.`}
+        />
+        <RecallCtaCard
+          tone="violet"
+          icon={<Gauge size={18} />}
+          label="Signal strength"
+          value={summary.averageTopScore.toFixed(1)}
+          detail={`Average top score with ${packedLimitLabel} packing limits.`}
+        />
+      </section>
+
       <section className="ops-two-column">
         <div className="panel">
-          <PanelHeader icon={<Search size={18} />} title="Candidate reduction" subtitle="Fourteen-day estimated context avoided." />
+          <PanelHeader icon={<Search size={18} />} title="Candidate reduction" subtitle="Daily estimated tokens avoided from candidate pruning." />
+          <div className="recall-chart-strip" aria-label="Recall chart totals">
+            <span><strong>{formatCompactNumber(summary.totalCandidates)}</strong> candidates scanned</span>
+            <span><strong>{formatCompactNumber(summary.totalReturned)}</strong> matches surfaced</span>
+            <span><strong>{packedLimitLabel}</strong> current packing</span>
+          </div>
           <div className="ops-chart-tall">
             <ResponsiveContainer width="100%" height="100%" minWidth={1} minHeight={1}>
               <AreaChart data={trend} margin={{ top: 12, right: 20, bottom: 6, left: -12 }}>
@@ -726,15 +859,21 @@ export function RecallOperationsView() {
         </div>
 
         <div className="panel">
-          <PanelHeader icon={<Database size={18} />} title="Recall log detail" subtitle="Most recent recall operations." />
-          <div className="ops-side-list">
+          <PanelHeader icon={<Database size={18} />} title="Compact recall log" subtitle="Latest recall signals only. Activity keeps full event detail." />
+          <div className="recall-compact-list">
             {loading ? <div className="empty-state">Loading recall logs...</div> : logs.length === 0 ? <div className="empty-state">No recall logs found.</div> : logs.slice(0, 16).map((log) => (
-              <div key={`${log.id ?? log.timestamp}-${log.message}`} className="ops-side-row ops-side-row-static">
-                <strong>{log.message || 'Recall event'}</strong>
-                <span>
-                  {extractResultCount(log)} returned from {extractTotalCandidates(log)} candidates
-                  {log.project ? ` · ${log.project}` : ''}
-                </span>
+              <div key={`${log.id ?? log.timestamp}-${log.message}`} className="recall-compact-row" title={log.message || 'Recall event'}>
+                <div className="recall-compact-main">
+                  <span className="recall-compact-time">{formatRelativeTime(log.timestamp)}</span>
+                  <strong>{log.project || 'Unscoped recall'}</strong>
+                  <span>{log.sourceClient || 'unknown client'} · {log.status || 'logged'}</span>
+                </div>
+                <div className="recall-compact-stats">
+                  <span>{extractResultCount(log)}/{extractTotalCandidates(log) || 0}</span>
+                  <span>{formatPercent(getRecallReductionRatio(log))} pruned</span>
+                  {extractTopScore(log) > 0 ? <span>score {extractTopScore(log).toFixed(1)}</span> : null}
+                  {typeof log.latencyMs === 'number' ? <span>{formatLatency(log.latencyMs)}</span> : null}
+                </div>
               </div>
             ))}
           </div>
@@ -927,6 +1066,113 @@ function Metric({ label, value }: { label: string; value: number }) {
   );
 }
 
+function WorkspaceCtaCard({
+  icon,
+  label,
+  value,
+  detail,
+  tone,
+}: {
+  icon: ReactNode;
+  label: string;
+  value: string;
+  detail: string;
+  tone: 'primary' | 'cyan' | 'green' | 'violet';
+}) {
+  return (
+    <article className={`workspace-cta-card workspace-cta-card-${tone}`}>
+      <div className="workspace-cta-head">
+        <span className="workspace-cta-icon">{icon}</span>
+        <span>{label}</span>
+      </div>
+      <strong>{value}</strong>
+      <p>{detail}</p>
+    </article>
+  );
+}
+
+function WorkspaceInsightRow({
+  row,
+}: {
+  row: { label: string; value: number; detail: string };
+}) {
+  return (
+    <div className="workspace-insight-row">
+      <span>
+        <strong>{formatCompactNumber(row.value)}</strong>
+        <span>{row.label}</span>
+      </span>
+      <p>{row.detail}</p>
+    </div>
+  );
+}
+
+function WorkspaceMemoryRow({
+  memory,
+  onOpenMemory,
+}: {
+  memory: VaultMemory;
+  onOpenMemory?: (itemUid: string) => void;
+}) {
+  const chips = [...memory.tags, ...memory.keywords].filter(Boolean).slice(0, 5);
+  const age = formatRelativeTime(memory.updatedAt || memory.createdAt);
+
+  return (
+    <button
+      key={memory.itemUid}
+      type="button"
+      className={`workspace-memory-row workspace-memory-row-${memory.memoryType}`}
+      onClick={() => onOpenMemory?.(memory.itemUid)}
+    >
+      <span className={`workspace-memory-icon workspace-memory-icon-${memory.memoryType}`}>
+        {memory.memoryType === 'decision' ? <ShieldCheck size={16} /> : <FileText size={16} />}
+      </span>
+      <span className="workspace-memory-main">
+        <span className="workspace-memory-head">
+          <strong>{memory.title}</strong>
+          <span>{memory.project}</span>
+        </span>
+        <span className="workspace-memory-summary">{memory.summary}</span>
+        <span className="workspace-chip-row">
+          {chips.map((chip, index) => <i key={`${chip}-${index}`}>{chip}</i>)}
+          {memory.nextSteps.length > 0 ? <i>{memory.nextSteps.length} next steps</i> : null}
+          {memory.promoted ? <i>promoted</i> : null}
+        </span>
+      </span>
+      <span className="workspace-memory-meta">
+        <span>{memory.status}</span>
+        <span>{memory.priority}</span>
+        <span>{age}</span>
+      </span>
+    </button>
+  );
+}
+
+function RecallCtaCard({
+  icon,
+  label,
+  value,
+  detail,
+  tone,
+}: {
+  icon: ReactNode;
+  label: string;
+  value: string;
+  detail: string;
+  tone: 'primary' | 'cyan' | 'green' | 'violet';
+}) {
+  return (
+    <article className={`recall-cta-card recall-cta-card-${tone}`}>
+      <div className="recall-cta-head">
+        <span className="recall-cta-icon">{icon}</span>
+        <span>{label}</span>
+      </div>
+      <strong>{value}</strong>
+      <p>{detail}</p>
+    </article>
+  );
+}
+
 function Donut({ data }: { data: Array<{ name: string; value: number }> }) {
   if (data.length === 0) {
     return <div className="empty-state">No memory sample loaded.</div>;
@@ -985,6 +1231,37 @@ function formatDateTick(value: string | number): string {
   return Number.isNaN(date.getTime())
     ? String(value)
     : date.toLocaleDateString(undefined, { weekday: 'short' });
+}
+
+function formatPercent(value: number): string {
+  const clamped = Math.max(0, Math.min(1, Number.isFinite(value) ? value : 0));
+  return `${Math.round(clamped * 100)}%`;
+}
+
+function getRecallReductionRatio(log: VaultLogEntry): number {
+  const candidates = extractTotalCandidates(log);
+  return candidates > 0 ? 1 - extractResultCount(log) / candidates : 0;
+}
+
+function formatLatency(latencyMs: number): string {
+  if (!Number.isFinite(latencyMs)) {
+    return 'n/a';
+  }
+
+  return latencyMs >= 1000
+    ? `${(latencyMs / 1000).toFixed(1)}s`
+    : `${Math.max(Math.round(latencyMs), 0)}ms`;
+}
+
+function formatRelativeTime(timestamp: string | null | undefined): string {
+  if (!timestamp) {
+    return 'not recorded';
+  }
+
+  const date = new Date(timestamp);
+  return Number.isNaN(date.getTime())
+    ? 'not recorded'
+    : `${formatDistanceToNow(date)} ago`;
 }
 
 function formatChartLabel(value: string | undefined): string {

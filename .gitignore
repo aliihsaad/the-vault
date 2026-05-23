@@ -8,7 +8,7 @@ dist-electron/
 .env.*
 !.env.example
 
-# Local agent/client state
+# Local client state
 .agent/
 .claude/settings.local.json
 
@@ -21,6 +21,7 @@ dist-electron/
 # OS
 .DS_Store
 Thumbs.db
+desktop.ini
 
 # Build artifacts
 *.js.map

@@ -885,7 +885,7 @@ export function ConnectPanel({ copyText, copiedToken }: ConnectPanelProps) {
 
             <div className="note-card">
               <p>MCP means the external client stays the model and Vault stays the memory tool server.</p>
-              <p>This is separate from the Local backend tab, where Vault itself launches a CLI for desktop chat.</p>
+              <p>Vault does not need to launch Codex or Claude itself; connected clients call Vault tools directly.</p>
             </div>
           </>
         ) : null}

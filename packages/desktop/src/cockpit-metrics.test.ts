@@ -2,7 +2,9 @@ import { describe, expect, it } from 'vitest';
 
 import {
   buildActivitySeries,
+  buildMemoryWorkspaceSummary,
   buildProjectCockpitRows,
+  buildRecallSummary,
   buildRecallTrend,
   buildRelationshipGraphPreview,
   estimateTokensSaved,
@@ -78,6 +80,73 @@ describe('cockpit metrics', () => {
     expect(trend[0]).toMatchObject({ isoDate: '2026-05-17', recallCount: 1, candidates: 10, returned: 2 });
     expect(trend[1]).toMatchObject({ isoDate: '2026-05-18', recallCount: 1, candidates: 20, returned: 4 });
     expect(trend[1].tokensSaved).toBe(estimateTokensSaved(20, 4, { topMatchLimit: 4, detailExpansionLimit: 2 }));
+  });
+
+  it('summarizes recall efficiency for the CTA band', () => {
+    const summary = buildRecallSummary(
+      [
+        log({ timestamp: '2026-05-17T10:00:00.000Z', metadata: { totalCandidates: 10, resultCount: 2, topScore: 61 } }),
+        log({ timestamp: '2026-05-18T10:00:00.000Z', metadata: { totalCandidates: 20, resultCount: 4, topScore: 89 } }),
+        log({ actionType: 'save', timestamp: '2026-05-18T11:00:00.000Z', metadata: { totalCandidates: 100, resultCount: 100, topScore: 100 } }),
+      ],
+      { topMatchLimit: 4, detailExpansionLimit: 2 },
+      new Date('2026-05-18T12:00:00.000Z'),
+    );
+
+    expect(summary).toMatchObject({
+      recallCount: 2,
+      todayRecallCount: 1,
+      totalCandidates: 30,
+      totalReturned: 6,
+      candidateReductionRatio: 0.8,
+      averageTopScore: 75,
+      latestTimestamp: '2026-05-18T10:00:00.000Z',
+    });
+    expect(summary.tokensSaved14d).toBe(
+      estimateTokensSaved(10, 2, { topMatchLimit: 4, detailExpansionLimit: 2 })
+      + estimateTokensSaved(20, 4, { topMatchLimit: 4, detailExpansionLimit: 2 }),
+    );
+  });
+
+  it('summarizes filtered memory workspaces for Handoffs and Decisions CTAs', () => {
+    const summary = buildMemoryWorkspaceSummary(
+      [
+        memory({
+          project: 'the-vault',
+          promoted: true,
+          priority: 'high',
+          status: 'active',
+          nextSteps: ['Ship release'],
+          updatedAt: '2026-05-18T12:00:00.000Z',
+        }),
+        memory({
+          project: 'the-vault',
+          status: 'resolved',
+          nextSteps: [],
+          updatedAt: '2026-05-10T12:00:00.000Z',
+        }),
+        memory({
+          project: 'other',
+          priority: 'critical',
+          status: 'draft',
+          nextSteps: ['Review'],
+          updatedAt: '2026-05-16T12:00:00.000Z',
+        }),
+      ],
+      new Date('2026-05-18T12:00:00.000Z'),
+    );
+
+    expect(summary).toMatchObject({
+      total: 3,
+      promotedCount: 1,
+      withNextSteps: 2,
+      projectCount: 2,
+      activeCount: 1,
+      resolvedCount: 1,
+      highPriorityCount: 2,
+      recentCount: 2,
+      latestTimestamp: '2026-05-18T12:00:00.000Z',
+    });
   });
 
   it('uses unique activity keys even when weekday labels repeat', () => {

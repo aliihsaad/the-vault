@@ -243,7 +243,7 @@ Status: `deferred`
 
 Reason:
 
-- This repo has some local-adapter/session groundwork, but the full company/multi-agent control plane should stay out of the critical path until the memory product feels complete.
+- Vault now treats MCP as the integration path for Codex, Claude, and other clients. A company/multi-agent control plane should stay out of the critical path until the memory product feels complete.
 
 ## Recommended Next Stages
 

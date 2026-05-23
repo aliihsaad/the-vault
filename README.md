@@ -1,5 +1,7 @@
 # The Vault
 
+<img src="assets/screenshots/readme-header.png" alt="The Vault - Operational Memory OS for AI Agents" width="100%" />
+
 [![Windows Installer Release](https://github.com/aliihsaad/the-vault/actions/workflows/release-windows.yml/badge.svg)](https://github.com/aliihsaad/the-vault/actions/workflows/release-windows.yml)
 ![Node](https://img.shields.io/badge/node-22%2B-339933)
 ![pnpm](https://img.shields.io/badge/pnpm-workspace-F69220)
@@ -11,14 +13,13 @@ The Vault is a local-first memory operating system for AI-assisted work. It give
 
 It ships as a TypeScript workspace with a shared core engine, command-line interface, MCP server, and Electron desktop console. Windows releases also bundle their own `vault-memory` MCP runtime, so installed users can connect Codex, Claude Desktop, or Claude Code without keeping the source repo on disk.
 
-![The Vault desktop overview showing project momentum, recall efficiency, and memory status](assets/screenshots/vault-overview.png)
-
 ## The 60-Second Version
 
 - AI agents forget between sessions, even when the project has a long history.
 - The Vault stores project memory outside the model, on your machine.
 - Agents ask the Vault MCP server for relevant context instead of reading the whole memory store.
 - Work can continue later from Codex, Claude Desktop, Claude Code, or another MCP client.
+- Vault does not launch local Codex or Claude terminal agents; those clients stay external and connect through MCP.
 - You stay in control because memory is local, inspectable, and important cleanup changes are reviewable.
 
 ## How It Feels To Use
@@ -157,6 +158,7 @@ The Vault is not:
 - a replacement for GitHub issues or documentation
 - memory locked inside one model provider
 - a dump of every saved note into every prompt
+- a local Codex or Claude terminal launcher
 
 The Vault is:
 
@@ -194,7 +196,7 @@ The Vault is:
 | --- | --- |
 | Structured memory | Saves typed records with project, subject, summary, tags, keywords, priority, status, related files, and next steps. |
 | Smart recall | Returns ranked memory packs using project match, keywords, tags, memory type, recency, promoted decisions, and related context. |
-| Desktop console | Electron app with dashboard, recall console, memory browser, activity logs, settings, agent controls, and client setup. |
+| Desktop console | Electron app with overview, memory browser, recall, loops, graph, analytics, Vault task runtime, settings, and client setup. |
 | MCP integration | `vault-memory` MCP server for external agents and clients. |
 | One-click client setup | Desktop Settings -> Client setup can connect Codex, Claude Desktop, and Claude Code to the bundled runtime. |
 | CLI access | Command-line entry point over the same core APIs. |
@@ -219,27 +221,43 @@ The Vault is built around one shared core package and several thin interfaces:
 
 The desktop app currently includes:
 
-- **Overview**: project and memory status at a glance, with project momentum (week-over-week activity) and an open loops panel for unfinished work.
-- **Recall Console**: query memory and create structured saves.
+- **Overview**: local memory status, activity, recall, open loops, relationship graph, and project radar in one cockpit.
+- **Recall**: inspect recall activity, candidate pruning, prompt packing efficiency, and compact recall logs.
 - **Memory Bank**: browse and inspect saved memory items.
-- **Vault Agent**: inspect backend/task activity and local adapter state.
+- **Agent Runtime**: inspect Vault's built-in task runtime, delegated task queue, and executor events. External Codex and Claude clients stay connected through MCP.
 - **Agent Review**: review project proposals and pending-delete flows.
 - **Activity**: inspect operational logs.
 - **Vault Files**: browse saved memory files on disk.
-- **Settings**: configure enrichment, local adapters, lifecycle behavior, and client setup.
+- **Settings**: configure runtime behavior, lifecycle policy, prompt guides, model routing, and client setup.
 - **Client setup**: connect/disconnect Codex, Claude Desktop, Claude Code, install agent guide references, and troubleshoot MCP.
+
+### Operations Overview
+
+The Overview is the daily operator surface: live local status, activity, project radar, recent relationship graph, open loops, recall trends, telemetry, and review queues.
+
+![The Vault Operations Overview showing local runtime status, activity, relationship graph, project radar, open loops, recall trend, and telemetry](assets/screenshots/operations-overview.png)
 
 ### Open Loops
 
-The Overview surfaces unfinished work from saved next steps, stale debugging sessions, and recall-time loop closure. Operators can resolve, snooze, or open items directly from the dashboard.
+The Loops page turns unfinished work into an explicit queue. Operators can filter by project, routine, and tag, inspect the selected loop, then open, snooze, or resolve it.
 
-![The Vault Open Loops panel with today focus, priority buckets, tag filters, and inline resolve/snooze/open actions](assets/screenshots/open-loops.png)
+![The Vault Open Loops page showing priority metrics, filters, ranked loop queue, selected loop detail, and resolve/snooze actions](assets/screenshots/open-loops.png)
+
+### Recall Efficiency
+
+Recall shows how much prompt context Vault avoided sending to the agent window: estimated tokens saved, candidate pruning, recall volume, signal strength, and a compact signal log.
+
+![The Vault Recall page showing estimated tokens saved, candidate reduction, recall volume, signal strength, a pruning trend chart, and compact recall log](assets/screenshots/recall-efficiency.png)
+
+### Relationship Graph
+
+The Graph page previews loaded relationships between projects, memories, files, and related memory IDs so operators can see whether the memory store is connected or drifting.
+
+![The Vault Graph page showing a relationship map and linked memory records](assets/screenshots/relationship-graph.png)
 
 ### Memory Bank
 
 The Memory Bank is the main inspection surface for saved project context: search, filter, select a record, inspect metadata, and review the full saved summary without leaving the desktop console.
-
-![The Vault Memory Bank showing saved memories, a selected handoff, metadata, tags, and next steps](assets/screenshots/memory-bank.png)
 
 ## Install For Normal Use
 
@@ -305,7 +323,7 @@ resources/mcp/dist/index.js
 
 Use **Settings -> Client setup** in the desktop app. The UI writes only the Vault-specific MCP entry and keeps other client config entries intact. It also shows connection status and includes a troubleshooting panel.
 
-![The Vault Client setup screen showing connected MCP clients, bundled runtime path, and troubleshooting details](assets/screenshots/client-MCP-setup.png)
+![The Vault Client setup screen showing the bundled MCP runtime, all-client connection status, and troubleshooting details](assets/screenshots/client-setup.png)
 
 ### Source Checkout
 
@@ -465,8 +483,8 @@ The root build:
 Release builds are created by GitHub Actions when a version tag is pushed:
 
 ```powershell
-git tag -a v0.2.7 -m "v0.2.7"
-git push origin v0.2.7
+git tag -a v0.2.9 -m "v0.2.9"
+git push origin v0.2.9
 ```
 
 The workflow typechecks the repo, builds the installer, verifies the bundled MCP sidecar, uploads artifacts, and publishes a GitHub Release.
@@ -481,8 +499,6 @@ The Vault is local-first:
 - client config writes are local machine changes
 - generated build output and local vault data should not be committed
 
-![The Vault Files screen showing the local vault directory tree, file counts, and a selected file preview](assets/screenshots/vault-files.png)
-
 Secrets and machine-specific files should stay out of Git:
 
 - `.env*`
@@ -490,7 +506,7 @@ Secrets and machine-specific files should stay out of Git:
 - generated `dist/` folders
 - generated `mcp-standalone/`
 - client-local settings
-- API keys and adapter state
+- API keys and runtime state
 
 ## Troubleshooting
 

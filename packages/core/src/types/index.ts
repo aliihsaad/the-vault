@@ -271,51 +271,6 @@ export interface ProjectContextPack {
   generatedAt: string;
 }
 
-// ---------------------------------------------------------------------------
-// Local Workbench Launch
-// ---------------------------------------------------------------------------
-export type LocalWorkbenchAdapterType = 'claude_local' | 'codex_local';
-export type LocalWorkbenchRunStatus = 'prepared' | 'launched' | 'completed';
-
-export interface LocalWorkbenchLaunchInput {
-  adapterType: LocalWorkbenchAdapterType;
-  workspacePath: string;
-  contextPackPath: string;
-  model?: string;
-  effort?: string;
-  prompt: string;
-}
-
-export interface LocalWorkbenchLaunchSpec {
-  adapterType: LocalWorkbenchAdapterType;
-  command: string;
-  args: string[];
-  workspacePath: string;
-  contextPackPath: string;
-  displayCommand: string;
-}
-
-export interface LocalWorkbenchRecentRun {
-  runId: string;
-  project: string;
-  title: string;
-  adapterType: LocalWorkbenchAdapterType;
-  workspacePath: string;
-  contextPackPath: string;
-  createdAt: string;
-  updatedAt?: string;
-  status?: LocalWorkbenchRunStatus;
-  prompt?: string;
-  displayCommand?: string;
-  model?: string;
-  effort?: string;
-  launchedAt?: string | null;
-  completedAt?: string | null;
-  terminalPid?: number | null;
-  resultMemoryUid?: string | null;
-  resultSummary?: string | null;
-}
-
 /**
  * Open-loops panel surfacing — derived bucket from the deterministic
  * scoring formula in retrieve.service.ts (priority + days_open*2 +
@@ -682,7 +637,6 @@ export interface VaultSettings {
   openrouter_api_key: string;
   enrichment_model: string;
   enrichment_enabled: boolean;
-  vault_agent_backend?: 'api' | 'local';
   recall_max_results: number;
   recall_compact_limit?: number;
   recall_top_match_limit?: number;

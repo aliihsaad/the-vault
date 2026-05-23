@@ -324,7 +324,6 @@ declare global {
     vault_root: string;
     enrichment_model: string;
     enrichment_enabled: boolean;
-    vault_agent_backend?: VaultAgentBackend;
     recall_max_results: number;
     recall_compact_limit?: number;
     recall_top_match_limit?: number;
@@ -333,132 +332,14 @@ declare global {
     recall_proactive_limit?: number;
     auto_log: boolean;
     model_routing_table?: Partial<ModelRoutingTable> | null;
-    local_adapter_config?: LocalAdapterConfig;
-    local_adapter_last_test?: LocalAdapterTestResult | null;
-    local_adapter_runtime_state?: LocalAdapterRuntimeState;
-    local_adapter_task_sessions?: LocalAdapterTaskSessions;
-    local_adapter_active_task_key?: string;
     project_workspace_registry?: Record<string, ProjectWorkspaceConfig>;
-    local_workbench_recent_runs?: LocalWorkbenchRecentRun[];
     [key: string]: unknown;
   }
 
-  type VaultAgentBackend = 'api' | 'local';
-
-  type LocalAdapterType = 'claude_local' | 'codex_local';
-
-  interface LocalAdapterConfig {
-    enabled: boolean;
-    type: LocalAdapterType | '';
-    cwd: string;
-    command: string;
-    model: string;
-    effort: string;
-    chrome: boolean;
-    maxTurns: number | null;
-    env?: Record<string, string>;
-  }
-
-  interface LocalAdapterDefinitionSummary {
-    type: LocalAdapterType;
-    label: string;
-    description: string;
-    defaultCommand: string;
-  }
-
-  interface LocalAdapterModelSummary {
-    id: string;
-    name: string;
-    source: 'builtin' | 'fetched';
-  }
-
-  interface LocalAdapterCheck {
-    code: string;
-    status: 'pass' | 'warn' | 'fail';
-    level: 'info' | 'warn' | 'error';
-    message: string;
-    detail?: string;
-    hint?: string;
-  }
-
-  interface LocalAdapterTestResult {
-    adapterType: LocalAdapterType;
-    recognized: boolean;
-    canProceed: boolean;
-    authMode: string | null;
-    command: string;
-    resolvedCommand: string | null;
-    cwd: string;
-    manualCommand: string;
-    checks: LocalAdapterCheck[];
-    models: LocalAdapterModelSummary[];
-    configFingerprint: string;
-    testedAt: string;
-    probe: {
-      skipped: boolean;
-      exitCode: number | null;
-      timedOut: boolean;
-      summary: string;
-      stdout: string;
-      stderr: string;
-    };
-  }
-
-  interface LocalAdapterExecutionInput {
+  interface VaultApiAgentExecutionInput {
     prompt: string;
     memoryContext?: string;
-    taskKey?: string;
   }
-
-  interface LocalAdapterExecutionResult {
-    adapterType: LocalAdapterType;
-    command: string;
-    resolvedCommand: string;
-    cwd: string;
-    model: string | null;
-    effort: string | null;
-    durationMs: number;
-    exitCode: number | null;
-    output: string;
-    stdout: string;
-    stderr: string;
-    sessionId: string | null;
-    sessionParams: Record<string, unknown> | null;
-    sessionDisplayId: string | null;
-    metadata: {
-      provider: string;
-      biller: string;
-      reusedSession: boolean;
-      rotatedSession: boolean;
-      resumeAttempted: boolean;
-      resumeFailed: boolean;
-      promptBundleVersion: string | null;
-      sessionScope: 'none' | 'adapter' | 'task';
-      taskKey: string | null;
-      tokenCounts: LocalAdapterTokenCounts | null;
-      cost: null;
-    };
-  }
-
-  interface LocalAdapterTokenCounts {
-    inputTokens: number;
-    outputTokens: number;
-    cachedInputTokens: number;
-  }
-
-  interface LocalAdapterRuntimeSession {
-    adapterType: LocalAdapterType;
-    sessionId: string;
-    sessionParams: Record<string, unknown> | null;
-    sessionDisplayId: string | null;
-    cwd: string;
-    model: string | null;
-    promptBundleVersion: string | null;
-    updatedAt: string;
-  }
-
-  type LocalAdapterRuntimeState = Partial<Record<LocalAdapterType, LocalAdapterRuntimeSession | null>>;
-  type LocalAdapterTaskSessions = Partial<Record<LocalAdapterType, Record<string, LocalAdapterRuntimeSession>>>;
 
   interface ProjectWorkspaceConfig {
     project: string;
@@ -506,57 +387,6 @@ declare global {
     markdown: string;
     sections: ProjectContextPackSection[];
     generatedAt: string;
-  }
-
-  interface PrepareLocalWorkbenchRunInput {
-    project: string;
-    title: string;
-    prompt: string;
-    adapterType: LocalAdapterType;
-    model?: string;
-    effort?: string;
-  }
-
-  interface PreparedLocalWorkbenchRun {
-    runId: string;
-    project: string;
-    title: string;
-    prompt: string;
-    workspace: ProjectWorkspaceConfig;
-    contextPack: ProjectContextPack;
-    contextPackPath: string;
-    launch: {
-      adapterType: LocalAdapterType;
-      command: string;
-      args: string[];
-      workspacePath: string;
-      contextPackPath: string;
-      displayCommand: string;
-    };
-    createdAt: string;
-  }
-
-  type LocalWorkbenchRunStatus = 'prepared' | 'launched' | 'completed';
-
-  interface LocalWorkbenchRecentRun {
-    runId: string;
-    project: string;
-    title: string;
-    adapterType: LocalAdapterType;
-    workspacePath: string;
-    contextPackPath: string;
-    createdAt: string;
-    updatedAt?: string;
-    status?: LocalWorkbenchRunStatus;
-    prompt?: string;
-    displayCommand?: string;
-    model?: string;
-    effort?: string;
-    launchedAt?: string | null;
-    completedAt?: string | null;
-    terminalPid?: number | null;
-    resultMemoryUid?: string | null;
-    resultSummary?: string | null;
   }
 
   interface OpenRouterModelSummary {
@@ -713,16 +543,6 @@ declare global {
     removeProjectWorkspace: (project: string) => Promise<VaultResponse<ProjectWorkspaceConfig[]>>;
     validateWorkspacePath: (workspacePath: string) => Promise<VaultResponse<WorkspaceValidationResult>>;
     buildProjectContextPack: (input: ProjectContextPackInput) => Promise<VaultResponse<ProjectContextPack>>;
-    prepareLocalWorkbenchRun: (input: PrepareLocalWorkbenchRunInput) => Promise<VaultResponse<PreparedLocalWorkbenchRun>>;
-    listLocalWorkbenchRuns: () => Promise<VaultResponse<LocalWorkbenchRecentRun[]>>;
-    launchLocalWorkbenchRun: (input: { runId: string }) => Promise<VaultResponse<LocalWorkbenchRecentRun>>;
-    saveLocalWorkbenchRunResult: (input: {
-      runId: string;
-      summary: string;
-    }) => Promise<VaultResponse<{
-      run: LocalWorkbenchRecentRun;
-      memory: VaultSaveResult;
-    }>>;
     getLatest: (project?: string, limit?: number) => Promise<VaultResponse<VaultMemory[]>>;
     getMemoryDetail: (uid: string) => Promise<VaultResponse<VaultMemoryDetail | null>>;
     suggestSavePath: (project: string, memoryType: VaultMemoryType, title: string) => Promise<VaultResponse<string>>;
@@ -813,17 +633,10 @@ declare global {
     setModelRoutingTable: (overrides: Partial<ModelRoutingTable>) => Promise<VaultResponse<ModelRoutingTable>>;
     getOpenRouterModels: (apiKey: string) => Promise<VaultResponse<OpenRouterModelSummary[]>>;
     testOpenRouterApiKey: (apiKey: string) => Promise<VaultResponse<OpenRouterKeyTestResult>>;
-    executeVaultApiAgent: (input: LocalAdapterExecutionInput) => Promise<VaultResponse<VaultApiAgentExecutionResult>>;
+    executeVaultApiAgent: (input: VaultApiAgentExecutionInput) => Promise<VaultResponse<VaultApiAgentExecutionResult>>;
     readSkillFile: (relativePath: string) => Promise<VaultResponse<VaultSkillFile>>;
     getVaultStructure: () => Promise<VaultResponse<VaultStructureSnapshot>>;
     readVaultFilePreview: (relativePath: string) => Promise<VaultResponse<VaultFilePreview>>;
-    getSupportedLocalAdapters: () => Promise<VaultResponse<LocalAdapterDefinitionSummary[]>>;
-    getLocalAdapterModels: (config: LocalAdapterConfig) => Promise<VaultResponse<LocalAdapterModelSummary[]>>;
-    detectLocalAdapterModel: (config: LocalAdapterConfig) => Promise<VaultResponse<string | null>>;
-    testLocalAdapterEnvironment: (config: LocalAdapterConfig) => Promise<VaultResponse<LocalAdapterTestResult>>;
-    executeEnabledLocalAdapter: (input: LocalAdapterExecutionInput) => Promise<VaultResponse<LocalAdapterExecutionResult>>;
-    clearLocalAdapterSession: (adapterType: LocalAdapterType) => Promise<VaultResponse<LocalAdapterRuntimeState>>;
-    clearLocalAdapterTaskSession: (adapterType: LocalAdapterType, taskKey: string) => Promise<VaultResponse<LocalAdapterTaskSessions>>;
     checkConnectionStatus: () => Promise<VaultResponse<ConnectionStatus>>;
     connectClaudeDesktop: () => Promise<VaultResponse<ConnectResult>>;
     connectClaudeCode: () => Promise<VaultResponse<ConnectResult>>;

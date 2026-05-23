@@ -76,7 +76,6 @@ export function OverviewCockpitView({
   const [openLoops, setOpenLoops] = useState<VaultOpenLoop[]>([]);
   const [workspaces, setWorkspaces] = useState<ProjectWorkspaceConfig[]>([]);
   const [queueStats, setQueueStats] = useState<VaultTaskQueueStats | null>(null);
-  const [localRuns, setLocalRuns] = useState<LocalWorkbenchRecentRun[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -100,7 +99,6 @@ export function OverviewCockpitView({
         openLoopsResponse,
         workspacesResponse,
         queueStatsResponse,
-        localRunsResponse,
       ] = await Promise.all([
         window.vaultAPI.getLatest(undefined, 80),
         window.vaultAPI.getRecentLogs(320),
@@ -112,7 +110,6 @@ export function OverviewCockpitView({
         window.vaultAPI.getOpenLoops(),
         window.vaultAPI.listProjectWorkspaces(),
         window.vaultAPI.getTaskQueueStats(),
-        window.vaultAPI.listLocalWorkbenchRuns(),
       ]);
 
       if (latestResponse.success) setLatest(latestResponse.data || []);
@@ -125,7 +122,6 @@ export function OverviewCockpitView({
       if (openLoopsResponse.success) setOpenLoops(openLoopsResponse.data || []);
       if (workspacesResponse.success) setWorkspaces(workspacesResponse.data || []);
       if (queueStatsResponse.success) setQueueStats(queueStatsResponse.data || null);
-      if (localRunsResponse.success) setLocalRuns(localRunsResponse.data || []);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load overview data');
     } finally {
@@ -151,7 +147,6 @@ export function OverviewCockpitView({
   const recallWindowReturned = recallTrend.reduce((sum, day) => sum + day.returned, 0);
   const recallWindowTokensSaved = recallTrend.reduce((sum, day) => sum + day.tokensSaved, 0);
   const recallEfficiency = recallWindowCandidates > 0 ? Math.round((1 - recallWindowReturned / recallWindowCandidates) * 100) : 0;
-  const activeLocalRuns = localRuns.filter((run) => run.status === 'launched').length;
   const latestCapture = latest[0]?.createdAt ? `${formatDistanceToNow(new Date(latest[0].createdAt))} ago` : 'No captures';
   const latestActivity = logs[0]?.timestamp ? `${formatDistanceToNow(new Date(logs[0].timestamp))} ago` : 'No activity';
   const unresolvedReviewCount = pendingProposalCount + pendingDeleteCount;
@@ -163,7 +158,7 @@ export function OverviewCockpitView({
           <span className="cockpit-kicker">Local memory operations</span>
           <h1>The Vault is running locally</h1>
           <p>
-            A live control surface for project memory, recall health, open loops, local agent work,
+            A live control surface for project memory, recall health, open loops, MCP-connected work,
             and review queues. Every number below is derived from this vault instance.
           </p>
         </div>
@@ -392,7 +387,7 @@ export function OverviewCockpitView({
           icon={<BrainCircuit size={18} />}
           title="Agent queue"
           value={String((queueStats?.pending || 0) + (queueStats?.running || 0))}
-          detail={`${activeLocalRuns} local agent run${activeLocalRuns === 1 ? '' : 's'} currently launched`}
+          detail={`${queueStats?.pending || 0} pending, ${queueStats?.running || 0} running`}
           onClick={() => onNavigate?.('agent')}
         />
         <SecondaryCard

@@ -62,10 +62,10 @@ utils/                — UID generation (nanoid), datetime helpers
 
 ### Desktop app architecture
 
-- **Electron main** (`packages/desktop/electron/main.ts`): Creates Vault instance, registers IPC handlers for all vault operations, manages encrypted settings (Electron safeStorage or AES-256-GCM fallback), integrates OpenRouter API for enrichment models, supports local adapter execution (Claude/Codex CLI).
+- **Electron main** (`packages/desktop/electron/main.ts`): Creates Vault instance, registers IPC handlers for vault operations, manages encrypted settings (Electron safeStorage or AES-256-GCM fallback), integrates OpenRouter API for enrichment models, and manages MCP client setup for external Codex/Claude clients.
 - **Preload** (`electron/preload.ts`): Exposes `window.vaultAPI` bridge via contextBridge.
 - **React renderer** (`src/`): Tab-based UI — Dashboard, Memory Bank, Recall Console (chat), Activity Logs, Settings. Uses lucide-react for icons.
-- Local adapter system (`electron/local-adapters.ts`, `electron/local-adapter-parsers.ts`): Manages Claude/Codex CLI sessions with session continuity and task-scoped sessions.
+- External agents should connect through the `vault-memory` MCP server; Vault does not launch Codex or Claude CLI sessions itself.
 
 ### Data flow
 

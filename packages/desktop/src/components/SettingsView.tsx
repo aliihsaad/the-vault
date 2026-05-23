@@ -15,7 +15,6 @@ import {
   Gauge,
 } from 'lucide-react';
 import { ConnectPanel } from './ConnectPanel.js';
-import { LocalAdapterSettings } from './LocalAdapterSettings.js';
 
 type EditableSettings = Pick<
   VaultSettings,
@@ -30,7 +29,7 @@ type EditableSettings = Pick<
   | 'auto_log'
 >;
 
-type SettingsTabId = 'overview' | 'connections' | 'local-backend' | 'skills' | 'prompts';
+type SettingsTabId = 'overview' | 'connections' | 'skills' | 'prompts';
 
 type AgentDutiesState = {
   projectMaintenanceEnabled: boolean;
@@ -197,17 +196,10 @@ const SETTINGS_TABS: Array<{
   icon: typeof Bot;
 }> = [
   { id: 'overview', label: 'Runtime', description: 'Runtime behavior and enrichment defaults', group: 'Operate', icon: Gauge },
-  { id: 'local-backend', label: 'Local chat', description: 'Vault launches local Codex or Claude CLIs itself', group: 'Operate', icon: Bot },
   { id: 'connections', label: 'Client setup', description: 'Connect Codex, Claude Desktop, or another MCP client', group: 'Install', icon: Wifi },
   { id: 'skills', label: 'Install guides', description: 'Copy or download the full client guidance files', group: 'Reference', icon: BookCopy },
   { id: 'prompts', label: 'Prompt library', description: 'Reusable recall, save, and setup prompts', group: 'Reference', icon: ScrollText },
 ];
-
-const LOCAL_BACKEND_STEPS = [
-  'Choose Claude Code or Codex in Local AI backend.',
-  'Pick a model, run Test now, then save the backend profile.',
-  'Local Agents can use that profile when launching Codex or Claude terminal runs.',
-].join('\n');
 
 const SKILL_ENTRIES: SkillEntry[] = [
   {
@@ -219,7 +211,7 @@ const SKILL_ENTRIES: SkillEntry[] = [
       'Best practice:',
       '- Install the full Markdown file, not just the short notes.',
       '- Keep it close to Codex project instructions or workspace guidance.',
-      '- Use it with Vault MCP tools, or as setup guidance through the Vault local backend.',
+      '- Use it with Vault MCP tools so Codex can recall and save directly.',
     ].join('\n'),
     assistantPrompt: [
       'Use the file skills/codex-vault-skill.md as the operating guide for Codex.',
@@ -793,14 +785,14 @@ export function SettingsView({ vaultStatus }: { vaultStatus: VaultStatus | null 
           <div className="panel-header">
             <div>
               <div className="panel-title">Core operating modes</div>
-              <div className="panel-subtitle">Treat Vault as the memory system first. Then choose whether an external client or Vault itself should be the AI surface.</div>
+              <div className="panel-subtitle">Treat Vault as the memory system first. External clients stay the AI surface through MCP.</div>
             </div>
             <ShieldCheck size={18} className="panel-icon" />
           </div>
 
           <div className="note-card">
             <p>The product center is local structured memory: save durable outcomes, recall them with low context cost, and keep the file-backed vault readable on disk.</p>
-            <p>The main distinction is simple: MCP means another client calls Vault tools, while Local backend means Vault launches Codex or Claude itself for natural chat.</p>
+            <p>The main distinction is simple: MCP means another client calls Vault tools, while Vault remains the local memory and workflow source of truth.</p>
           </div>
 
           <div className="settings-card-grid">
@@ -823,12 +815,12 @@ export function SettingsView({ vaultStatus }: { vaultStatus: VaultStatus | null 
               ]}
             />
             <WorkflowCard
-              title="Vault local backend"
-              description="Use this when the desktop app itself should launch Codex or Claude for natural chat."
+              title="MCP operating guide"
+              description="Use this when client agents need consistent recall and save habits."
               steps={[
-                'Vault stays the control plane and memory owner.',
-                'The local CLI only performs inference and returns native session data.',
-                'Work thread keys only control resume continuity. They do not create tasks, issues, or agents.',
+                'Install the full Codex or Claude guide in the target client.',
+                'Connect the vault-memory MCP server from Client setup.',
+                'Verify one recall at session start and one save after a meaningful outcome.',
               ]}
             />
           </div>
@@ -1301,7 +1293,7 @@ export function SettingsView({ vaultStatus }: { vaultStatus: VaultStatus | null 
 
             <div className="note-card">
               <p>For cost control, keep lightweight flows like organize, enrich, and summarize on cheaper models. Reserve the heavier models for coding and analysis only when the quality difference is worth it.</p>
-              <p>The local chat model still comes from the enrichment/OpenRouter model selector above. This routing section is specifically for delegated tasks and the background executor.</p>
+              <p>The desktop model still comes from the enrichment/OpenRouter selector above. This routing section is specifically for delegated tasks and the background executor.</p>
             </div>
           </section>
 
@@ -1346,66 +1338,6 @@ export function SettingsView({ vaultStatus }: { vaultStatus: VaultStatus | null 
     );
   }
 
-  function renderLocalBackendTab() {
-    return (
-      <div className="settings-tab-panel">
-        <section className="section-intro">
-          <div className="section-intro-copy">
-            <span className="section-intro-eyebrow">Local Backend</span>
-            <div className="section-intro-title">Use this only when Vault itself should launch Codex or Claude</div>
-            <p className="section-intro-text">This tab is separate from MCP client setup. It controls the internal desktop-chat execution path and the local CLI environment Vault resumes behind the scenes.</p>
-          </div>
-          <div className="section-intro-meta">
-            <span className="section-intro-chip">desktop-only path</span>
-            <span className="section-intro-chip">local cli runtime</span>
-            <span className="section-intro-chip">resume threads</span>
-          </div>
-        </section>
-
-        <section className="panel settings-section">
-          <div className="panel-header">
-            <div>
-              <div className="panel-title">Use Vault with a local AI backend</div>
-              <div className="panel-subtitle">This is the internal desktop-chat path. Vault launches the local CLI; the external MCP client path stays separate.</div>
-            </div>
-            <Bot size={18} className="panel-icon" />
-          </div>
-
-          <div className="settings-card-grid">
-            <div className="snippet-card">
-              <div className="snippet-head">
-                <div>
-                  <div className="field-label">Setup flow</div>
-                  <div className="field-help">Use this when Vault should talk through your local Claude Code or Codex install.</div>
-                </div>
-                <button type="button" className="header-button" onClick={() => void copyText('local-backend-steps', LOCAL_BACKEND_STEPS)}>
-                  <Copy size={16} />
-                  <span>{copiedToken === 'local-backend-steps' ? 'Copied' : 'Copy steps'}</span>
-                </button>
-              </div>
-              <pre className="snippet-block">{LOCAL_BACKEND_STEPS}</pre>
-            </div>
-
-            <div className="note-card">
-              <p>Local Agents can use a tested local Claude Code or Codex backend.</p>
-              <p>Vault still owns recall, save, session persistence, pathing, and memory state. The CLI only performs inference and returns its native session metadata.</p>
-              <p>Session thread keys are coarse continuity labels for CLI resume. They are not a full task board or multi-agent orchestration object.</p>
-            </div>
-          </div>
-        </section>
-
-        <LocalAdapterSettings
-          savedConfig={settings.local_adapter_config as LocalAdapterConfig | undefined}
-          savedLastTest={settings.local_adapter_last_test as LocalAdapterTestResult | null | undefined}
-          savedRuntimeState={settings.local_adapter_runtime_state as LocalAdapterRuntimeState | undefined}
-          savedTaskSessions={settings.local_adapter_task_sessions as LocalAdapterTaskSessions | undefined}
-          savedTaskKey={typeof settings.local_adapter_active_task_key === 'string' ? settings.local_adapter_active_task_key : ''}
-          defaultCwd={vaultStatus?.workspaceRoot || ''}
-        />
-      </div>
-    );
-  }
-
   function renderSkillsTab() {
     return (
       <div className="settings-tab-panel">
@@ -1433,7 +1365,7 @@ export function SettingsView({ vaultStatus }: { vaultStatus: VaultStatus | null 
 
           <div className="note-card">
             <p>Best practice: keep the full Markdown skill file in the target client instruction system or project guidance, and keep the file path stable so future setup prompts can reference it directly.</p>
-            <p>Vault local backend can also use these same file paths when you ask it to help configure Codex or Claude Desktop.</p>
+            <p>These guides assume the client connects to Vault through MCP and calls the memory tools directly.</p>
           </div>
         </section>
 
@@ -1466,12 +1398,12 @@ export function SettingsView({ vaultStatus }: { vaultStatus: VaultStatus | null 
               ]}
             />
             <WorkflowCard
-              title="Vault local backend"
-              description="Use this when Vault itself launches Codex or Claude as the model backend from the desktop app."
+              title="Other MCP clients"
+              description="Use this when a different stdio MCP client should access Vault memory."
               steps={[
-                'Configure the local backend in the Local backend tab and run Test now.',
-                'Use the setup prompt below if you want the backend model to help install MCP or skill files for another client.',
-                'Keep the skill file path stable so the local backend can reference it in later sessions.',
+                'Copy the generic MCP command or JSON config from Client setup.',
+                'Add the full skill guidance to the client instruction system if it supports project instructions.',
+                'Verify with vault_get_latest, then save one small test memory through that client.',
               ]}
             />
           </div>
@@ -1642,8 +1574,6 @@ export function SettingsView({ vaultStatus }: { vaultStatus: VaultStatus | null 
         return renderOverviewTab();
       case 'connections':
         return renderConnectionsTab();
-      case 'local-backend':
-        return renderLocalBackendTab();
       case 'skills':
         return renderSkillsTab();
       case 'prompts':
