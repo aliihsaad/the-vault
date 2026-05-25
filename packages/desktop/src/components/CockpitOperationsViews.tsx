@@ -14,6 +14,7 @@ import {
   Database,
   FileText,
   Filter,
+  FolderOpen,
   GitBranch,
   ListChecks,
   RefreshCw,
@@ -58,7 +59,17 @@ import {
   type LoopControlRow,
   type LoopControlRoutineFilter,
 } from '../open-loop-ui.js';
+import { requestGraphifyArtifactUrl } from '../graphify-artifact-url.js';
+import { buildGraphifyProjectGraphViewModel } from '../graphify-view-model.js';
 import { MemoryGraphCanvas } from './MemoryGraphCanvas.js';
+import type {
+  GraphifyArtifactDiscoveryResult,
+  GraphifyArtifactReportReadResult,
+  GraphifyBuildRecord,
+  GraphifyBuildMode,
+  GraphifyHtmlArtifactResult,
+  GraphifyProjectStatus,
+} from '@the-vault/core';
 
 const CHART_COLORS = ['#38dfff', '#8b7cff', '#33d691', '#f5a524', '#5f8fff', '#ec6dff', '#8ba0b8'];
 
@@ -702,53 +713,375 @@ export function GraphOperationsView({
   onOpenMemory?: (itemUid: string) => void;
 }) {
   const [memories, setMemories] = useState<VaultMemory[]>([]);
+  const [selectedProject, setSelectedProject] = useState('');
+  const [projectStatus, setProjectStatus] = useState<GraphifyProjectStatus | null>(null);
+  const [artifactDiscovery, setArtifactDiscovery] = useState<GraphifyArtifactDiscoveryResult | null>(null);
+  const [htmlArtifact, setHtmlArtifact] = useState<GraphifyHtmlArtifactResult | null>(null);
+  const [artifactUrl, setArtifactUrl] = useState<string | null>(null);
+  const [report, setReport] = useState<GraphifyArtifactReportReadResult | null>(null);
+  const [buildHistory, setBuildHistory] = useState<GraphifyBuildRecord[]>([]);
+  const [activeGraphTab, setActiveGraphTab] = useState<'graph' | 'report' | 'vault'>('graph');
+  const [graphifyError, setGraphifyError] = useState<string | null>(null);
+  const [message, setMessage] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    void hydrate();
-  }, []);
+    const firstProject = vaultStatus?.projects[0]?.name || '';
+    if (!selectedProject && firstProject) {
+      setSelectedProject(firstProject);
+    }
+  }, [selectedProject, vaultStatus?.projects]);
 
-  async function hydrate() {
+  useEffect(() => {
+    void hydrate(selectedProject);
+  }, [selectedProject]);
+
+  async function hydrate(project = selectedProject) {
     setLoading(true);
+    setGraphifyError(null);
+    setMessage(null);
     try {
-      const response = await window.vaultAPI.getLatest(undefined, 180);
-      if (response.success) setMemories(response.data || []);
+      const latestResponse = await window.vaultAPI.getLatest(undefined, 180);
+      if (latestResponse.success) setMemories(latestResponse.data || []);
+
+      if (!project) {
+        setProjectStatus(null);
+        setArtifactDiscovery(null);
+        setHtmlArtifact(null);
+        setArtifactUrl(null);
+        setReport(null);
+        setBuildHistory([]);
+        return;
+      }
+
+      const [
+        statusResponse,
+        artifactsResponse,
+        htmlResponse,
+        reportResponse,
+        historyResponse,
+      ] = await Promise.all([
+        window.vaultAPI.getGraphifyProjectStatus(project),
+        window.vaultAPI.getGraphifyArtifacts(project),
+        window.vaultAPI.getGraphifyHtmlArtifact(project),
+        window.vaultAPI.readGraphifyArtifactReport(project, { maxBytes: 256 * 1024 }),
+        window.vaultAPI.getGraphifyBuildHistory(project, 8),
+      ]);
+
+      if (!statusResponse.success || !statusResponse.data) {
+        throw new Error(statusResponse.error || 'Failed to load Graphify project status');
+      }
+
+      setProjectStatus(statusResponse.data);
+      setArtifactDiscovery(artifactsResponse.success ? artifactsResponse.data || null : null);
+      setHtmlArtifact(htmlResponse.success ? htmlResponse.data || null : null);
+      setReport(reportResponse.success ? reportResponse.data || null : null);
+      setBuildHistory(historyResponse.success ? historyResponse.data || [] : []);
+
+      if (htmlResponse.success && htmlResponse.data?.status === 'available') {
+        try {
+          setArtifactUrl(await requestGraphifyArtifactUrl(window.vaultAPI, {
+            project,
+            artifact: 'graphHtml',
+          }));
+        } catch (err) {
+          setArtifactUrl(null);
+          setGraphifyError(err instanceof Error ? err.message : 'Graphify artifact URL is unavailable');
+        }
+      } else {
+        setArtifactUrl(null);
+      }
+    } catch (err) {
+      setGraphifyError(err instanceof Error ? err.message : 'Failed to load Graphify dashboard');
     } finally {
       setLoading(false);
     }
   }
 
+  async function runBuild(buildMode: GraphifyBuildMode) {
+    if (!selectedProject) return;
+    setLoading(true);
+    setGraphifyError(null);
+    setMessage(null);
+    try {
+      const response = await window.vaultAPI.buildGraphifyProjectGraph({ project: selectedProject, buildMode });
+      if (!response.success) {
+        throw new Error(response.error || 'Graphify build failed');
+      }
+      setMessage(`Graphify ${buildMode} build finished with status ${response.data?.status || 'unknown'}.`);
+      await hydrate(selectedProject);
+    } catch (err) {
+      setGraphifyError(err instanceof Error ? err.message : 'Graphify build failed');
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function useCandidateSourceRoot() {
+    if (!selectedProject || !projectStatus?.sourceRootCandidate) return;
+    const response = await window.vaultAPI.setGraphifyProjectSourceRoot(selectedProject, projectStatus.sourceRootCandidate.path);
+    if (!response.success) {
+      setGraphifyError(response.error || 'Failed to set Graphify source root');
+      return;
+    }
+    setMessage('Graphify source root saved.');
+    await hydrate(selectedProject);
+  }
+
+  async function chooseGraphifyProjectSourceRoot() {
+    if (!selectedProject) return;
+    const response = await window.vaultAPI.chooseGraphifyProjectSourceRoot(selectedProject);
+    if (!response.success) {
+      setGraphifyError(response.error || 'Failed to choose Graphify source root');
+      return;
+    }
+    if (response.data) {
+      setMessage('Graphify source root saved.');
+      await hydrate(selectedProject);
+    }
+  }
+
+  async function setGraphifyEnabled(enabled: boolean) {
+    if (!selectedProject) return;
+    const response = await window.vaultAPI.setGraphifyProjectEnabled(selectedProject, enabled);
+    if (!response.success) {
+      setGraphifyError(response.error || 'Failed to update Graphify project state');
+      return;
+    }
+    await hydrate(selectedProject);
+  }
+
+  async function openArtifactFolder() {
+    if (!selectedProject) return;
+    const response = await window.vaultAPI.openGraphifyArtifactFolder(selectedProject);
+    if (!response.success) {
+      setGraphifyError(response.error || 'Failed to open Graphify artifact folder');
+    }
+  }
+
+  async function exportArtifacts() {
+    if (!selectedProject) return;
+    const response = await window.vaultAPI.exportGraphifyArtifacts(selectedProject);
+    if (!response.success) {
+      setGraphifyError(response.error || 'Failed to export Graphify artifacts');
+      return;
+    }
+    if (response.data) {
+      setMessage(`Exported ${response.data.copied.length} artifacts to ${response.data.targetRoot}.`);
+    }
+  }
+
   const graph = useMemo(() => buildRelationshipGraphPreview(memories, vaultStatus?.projects || [], 48), [memories, vaultStatus?.projects]);
   const linked = memories.filter((memory) => memory.relatedItemIds.length > 0 || memory.relatedFiles.length > 0);
+  const graphifyModel = projectStatus
+    ? buildGraphifyProjectGraphViewModel({
+        projectStatus,
+        artifactDiscovery,
+        htmlArtifact,
+        artifactUrl,
+        buildHistory,
+      })
+    : null;
+
+  useEffect(() => {
+    if (graphifyModel) {
+      setActiveGraphTab(graphifyModel.preferredTab);
+    }
+  }, [selectedProject, graphifyModel?.preferredTab]);
 
   return (
     <div className="ops-layout">
       <OpsIntro
         label="Graph"
-        title="Recent relationship preview"
-        text="This graph is read-only and sampled from the most recent loaded memories. It shows stored project links, related memory UIDs, and related file paths, so quiet projects may not appear until their linked memories are loaded."
-        chips={[`${graph.nodes.length} nodes`, `${graph.links.length} links`, `${linked.length} linked memories`]}
-        onRefresh={() => void hydrate()}
+        title="Graphify project graph"
+        text="Vault embeds Graphify's managed graph.html when it is available, keeps stale or failed graphs visible when safe, and preserves the memory relationship preview as a secondary Vault view."
+        chips={[
+          graphifyModel ? graphifyModel.statusLabel : 'No project selected',
+          graphifyModel?.stats ? `${graphifyModel.stats.nodes} nodes` : `${graph.nodes.length} Vault nodes`,
+          graphifyModel?.stats ? `${graphifyModel.stats.edges} edges` : `${graph.links.length} Vault links`,
+        ]}
+        onRefresh={() => void hydrate(selectedProject)}
         loading={loading}
       />
 
-      <section className="ops-graph-grid">
-        <div className="panel ops-graph-canvas">
-          <PanelHeader icon={<Waypoints size={18} />} title="Recent relationship map" subtitle="Stored links from the loaded memory sample." />
-          <MemoryGraphCanvas graph={graph} variant="full" onOpenMemory={onOpenMemory} />
-        </div>
+      <section className="panel graphify-dashboard">
+        <div className="graphify-dashboard-top">
+          <div className="toolbar-row">
+            <label className="select-field">
+              <Database size={16} />
+              <select value={selectedProject} onChange={(event) => setSelectedProject(event.target.value)}>
+                <option value="">Select a project</option>
+                {(vaultStatus?.projects || []).map((project) => (
+                  <option key={project.name} value={project.name}>{project.name}</option>
+                ))}
+              </select>
+            </label>
 
-        <div className="panel ops-graph-side">
-          <PanelHeader icon={<FileText size={18} />} title="Linked memories" subtitle="Loaded memories that already carry relationship data." />
-          <div className="ops-side-list">
-            {linked.length === 0 ? <div className="empty-state">No linked memory items found in the loaded set.</div> : linked.slice(0, 18).map((memory) => (
-              <button key={memory.itemUid} type="button" className="ops-side-row" onClick={() => onOpenMemory?.(memory.itemUid)}>
-                <strong>{memory.title}</strong>
-                <span>{memory.relatedItemIds.length} memory links · {memory.relatedFiles.length} files</span>
-              </button>
-            ))}
+            {graphifyModel ? (
+              <span className={`graphify-state-pill graphify-state-pill-${graphifyModel.state}`}>
+                {graphifyModel.statusLabel}
+              </span>
+            ) : null}
+          </div>
+
+          <div className="inline-actions">
+            <button type="button" className="header-button" onClick={() => void runBuild('fast')} disabled={!graphifyModel?.actions.rebuild.enabled}>
+              <RefreshCw size={15} />
+              <span>{graphifyModel?.actions.rebuild.label || 'Rebuild'}</span>
+            </button>
+            <button type="button" className="header-button" onClick={() => void runBuild('full')} disabled={!graphifyModel?.actions.fullRebuild.enabled}>
+              <RefreshCw size={15} />
+              <span>{graphifyModel?.actions.fullRebuild.label || 'Full rebuild'}</span>
+            </button>
+            <button type="button" className="header-button" onClick={() => void exportArtifacts()} disabled={!graphifyModel?.actions.exportArtifacts.enabled}>
+              <Archive size={15} />
+              <span>{graphifyModel?.actions.exportArtifacts.label || 'Export artifacts'}</span>
+            </button>
+            <button type="button" className="header-button" onClick={() => void openArtifactFolder()} disabled={!graphifyModel?.actions.openFolder.enabled}>
+              <FolderOpen size={15} />
+              <span>{graphifyModel?.actions.openFolder.label || 'Open folder'}</span>
+            </button>
           </div>
         </div>
+
+        {message ? <div className="success-text graphify-dashboard-message">{message}</div> : null}
+        {graphifyError ? <div className="error-text graphify-dashboard-message">{graphifyError}</div> : null}
+        {graphifyModel?.warning ? <div className="note-card note-card-warning">{graphifyModel.warning}</div> : null}
+        {graphifyModel?.failure ? (
+          <div className="note-card note-card-warning">
+            <p>{graphifyModel.failure.message}</p>
+            {graphifyModel.failure.logPath ? <p className="text-mono">{graphifyModel.failure.logPath}</p> : null}
+          </div>
+        ) : null}
+
+        {graphifyModel?.state === 'sourceRootRequired' ? (
+          <div className="graphify-source-root-panel">
+            <div>
+              <strong>Choose a source folder before building</strong>
+              <p>{projectStatus?.sourceRootCandidate?.message || projectStatus?.message}</p>
+              {projectStatus?.sourceRootCandidate ? <span className="text-mono">{projectStatus.sourceRootCandidate.path}</span> : null}
+            </div>
+            <div className="inline-actions">
+              <button
+                type="button"
+                className="primary-button"
+                onClick={() => void chooseGraphifyProjectSourceRoot()}
+              >
+                <FolderOpen size={15} />
+                Choose folder
+              </button>
+              {projectStatus?.sourceRootCandidate ? (
+                <button
+                  type="button"
+                  className="header-button"
+                  onClick={() => void useCandidateSourceRoot()}
+                >
+                  Use workspace
+                </button>
+              ) : null}
+            </div>
+          </div>
+        ) : graphifyModel?.sourceRoot && graphifyModel.state !== 'disabled' ? (
+          <div className="graphify-source-root-panel">
+            <div>
+              <strong>Change source folder</strong>
+              <p>Graphify builds from this saved folder.</p>
+              <span className="text-mono">{graphifyModel.sourceRoot}</span>
+            </div>
+            <button
+              type="button"
+              className="header-button"
+              aria-label="Change folder"
+              onClick={() => void chooseGraphifyProjectSourceRoot()}
+              disabled={!graphifyModel.actions.changeSourceRoot.enabled}
+            >
+              <FolderOpen size={15} />
+              {graphifyModel.actions.changeSourceRoot.label}
+            </button>
+          </div>
+        ) : null}
+
+        {graphifyModel?.state === 'disabled' ? (
+          <div className="graphify-source-root-panel">
+            <div>
+              <strong>Graphify is disabled for this project</strong>
+              <p>Vault memory remains available. Re-enable Graphify to build a project graph.</p>
+            </div>
+            <button type="button" className="primary-button" onClick={() => void setGraphifyEnabled(true)}>
+              Enable Graphify
+            </button>
+          </div>
+        ) : graphifyModel ? (
+          <div className="inline-actions graphify-disable-row">
+            <button type="button" className="header-button" onClick={() => void setGraphifyEnabled(false)}>
+              Disable for project
+            </button>
+          </div>
+        ) : null}
+
+        <div className="graphify-tab-strip" role="tablist" aria-label="Graphify graph views">
+          {[
+            ['graph', 'Graph'],
+            ['report', 'Report'],
+            ['vault', 'Vault links'],
+          ].map(([id, label]) => (
+            <button
+              key={id}
+              type="button"
+              role="tab"
+              aria-selected={activeGraphTab === id}
+              className={`graphify-tab ${activeGraphTab === id ? 'graphify-tab-active' : ''}`}
+              onClick={() => setActiveGraphTab(id as 'graph' | 'report' | 'vault')}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+
+        {activeGraphTab === 'graph' ? (
+          <div className="graphify-embed-frame">
+            {graphifyModel?.embedUrl ? (
+              <iframe title={`${selectedProject} Graphify graph`} src={graphifyModel.embedUrl} sandbox="allow-scripts allow-same-origin" />
+            ) : (
+              <div className="empty-state">
+                {htmlArtifact?.status === 'missing'
+                  ? htmlArtifact.message
+                  : 'Graphify graph.html is not available yet.'}
+              </div>
+            )}
+          </div>
+        ) : null}
+
+        {activeGraphTab === 'report' ? (
+          <div className="graphify-report-panel">
+            {report?.status === 'available' ? (
+              <pre className="snippet-block graphify-report-block">{report.text}</pre>
+            ) : (
+              <div className="empty-state">{report?.message || 'GRAPH_REPORT.md is not available yet.'}</div>
+            )}
+          </div>
+        ) : null}
+
+        {activeGraphTab === 'vault' ? (
+          <section className="ops-graph-grid graphify-vault-preview-grid">
+            <div className="panel ops-graph-canvas">
+              <PanelHeader icon={<Waypoints size={18} />} title="Vault relationship fallback" subtitle="Stored links from the loaded memory sample." />
+              <MemoryGraphCanvas graph={graph} variant="full" onOpenMemory={onOpenMemory} />
+            </div>
+
+            <div className="panel ops-graph-side">
+              <PanelHeader icon={<FileText size={18} />} title="Linked memories" subtitle="Loaded memories that already carry relationship data." />
+              <div className="ops-side-list">
+                {linked.length === 0 ? <div className="empty-state">No linked memory items found in the loaded set.</div> : linked.slice(0, 18).map((memory) => (
+                  <button key={memory.itemUid} type="button" className="ops-side-row" onClick={() => onOpenMemory?.(memory.itemUid)}>
+                    <strong>{memory.title}</strong>
+                    <span>{memory.relatedItemIds.length} memory links · {memory.relatedFiles.length} files</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+          </section>
+        ) : null}
       </section>
     </div>
   );

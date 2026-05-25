@@ -31,3 +31,6 @@ scripts/_oneoff_deps/
 
 # Test
 coverage/
+
+# Graphify artifacts (must never land in the repo; builds write to managed app data)
+graphify-out/

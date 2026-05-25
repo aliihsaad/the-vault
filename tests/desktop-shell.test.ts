@@ -8,6 +8,9 @@ describe('desktop shell navigation', () => {
   const operationsSource = readFileSync(join(process.cwd(), 'packages/desktop/src/components/CockpitOperationsViews.tsx'), 'utf8');
   const settingsSource = readFileSync(join(process.cwd(), 'packages/desktop/src/components/SettingsView.tsx'), 'utf8');
   const connectPanelSource = readFileSync(join(process.cwd(), 'packages/desktop/src/components/ConnectPanel.tsx'), 'utf8');
+  const electronMainSource = readFileSync(join(process.cwd(), 'packages/desktop/electron/main.ts'), 'utf8');
+  const electronPreloadSource = readFileSync(join(process.cwd(), 'packages/desktop/electron/preload.ts'), 'utf8');
+  const desktopTypesSource = readFileSync(join(process.cwd(), 'packages/desktop/src/types.d.ts'), 'utf8');
 
   it('removes Recall Console from the primary desktop shell', () => {
     expect(appSource).not.toContain('Recall Console');
@@ -80,6 +83,57 @@ describe('desktop shell navigation', () => {
     expect(settingsSource).toContain('settings-active-panel');
     expect(settingsSource).toContain('settings-tab-icon');
     expect(settingsSource).toContain('settings-tab-index');
+  });
+
+  it('keeps internal implementation phase labels out of Settings UI copy', () => {
+    expect(settingsSource).not.toMatch(/Phase\s+\d+/);
+  });
+
+  it('detects Graphify through the configured runtime command instead of PATH only', () => {
+    const handlerStart = electronMainSource.indexOf("ipcMain.handle('vault:detectGraphifyRuntime'");
+    const handlerEnd = electronMainSource.indexOf("ipcMain.handle('vault:planGraphifyInstall'", handlerStart);
+    const handlerSource = electronMainSource.slice(handlerStart, handlerEnd);
+
+    expect(handlerSource).toContain('vault.getGraphifyRuntimeConfig()');
+    expect(handlerSource).toContain('resolveGraphifyCommandForRuntimeConfig(config)');
+    expect(handlerSource).toContain('graphifyCommand:');
+  });
+
+  it('hides the Graphify install preview after the runtime is installed', () => {
+    const installPreviewIndex = settingsSource.indexOf('<div className="field-label">Install preview</div>');
+    const guardStart = settingsSource.lastIndexOf("graphifyModel.state !== 'installed'", installPreviewIndex);
+
+    expect(installPreviewIndex).toBeGreaterThan(0);
+    expect(guardStart).toBeGreaterThan(0);
+  });
+
+  it('does not ask the OS to open a missing Graphify artifact folder', () => {
+    const handlerStart = electronMainSource.indexOf("ipcMain.handle('vault:openGraphifyArtifactFolder'");
+    const handlerEnd = electronMainSource.indexOf("ipcMain.handle('vault:exportGraphifyArtifacts'", handlerStart);
+    const handlerSource = electronMainSource.slice(handlerStart, handlerEnd);
+
+    expect(handlerSource).toContain('existsSync(folder)');
+    expect(handlerSource.indexOf('existsSync(folder)')).toBeLessThan(handlerSource.indexOf('shell.openPath(folder)'));
+  });
+
+  it('offers a real folder picker for Graphify projects without a source root', () => {
+    expect(electronMainSource).toContain("ipcMain.handle('vault:chooseGraphifyProjectSourceRoot'");
+    expect(electronMainSource).toContain("properties: ['openDirectory']");
+    expect(electronPreloadSource).toContain('chooseGraphifyProjectSourceRoot');
+    expect(desktopTypesSource).toContain('chooseGraphifyProjectSourceRoot');
+    expect(operationsSource).toContain('chooseGraphifyProjectSourceRoot');
+    expect(operationsSource).toContain('Choose folder');
+  });
+
+  it('lets users change a saved Graphify source folder after initial selection', () => {
+    expect(operationsSource).toContain('Change source folder');
+    expect(operationsSource).toContain('graphifyModel.actions.changeSourceRoot.enabled');
+    expect(operationsSource).toContain('Change folder');
+  });
+
+  it('uses a large enough Graphify report budget for report-only builds', () => {
+    expect(operationsSource).toContain("window.vaultAPI.readGraphifyArtifactReport(project, { maxBytes: 256 * 1024 })");
+    expect(operationsSource).toContain('graphifyModel.preferredTab');
   });
 
   it('keeps the Overview project radar grounded in direct project counters', () => {

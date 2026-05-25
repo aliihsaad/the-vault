@@ -1,20 +1,31 @@
 import { useEffect, useState } from 'react';
 import {
+  AlertTriangle,
   Bot,
   BookCopy,
+  CheckCircle2,
   Copy,
   Download,
   FolderRoot,
   KeyRound,
   Coins,
+  Network,
+  RefreshCw,
   Save,
   ScrollText,
   ShieldCheck,
   Sparkles,
+  Terminal,
   Wifi,
   Gauge,
 } from 'lucide-react';
 import { ConnectPanel } from './ConnectPanel.js';
+import { buildGraphifySettingsViewModel } from '../graphify-view-model.js';
+import type {
+  GraphifyInstallPlan,
+  GraphifyRuntimeConfig,
+  GraphifyRuntimeStatus,
+} from '@the-vault/core';
 
 type EditableSettings = Pick<
   VaultSettings,
@@ -29,7 +40,7 @@ type EditableSettings = Pick<
   | 'auto_log'
 >;
 
-type SettingsTabId = 'overview' | 'connections' | 'skills' | 'prompts';
+type SettingsTabId = 'overview' | 'extensions' | 'connections' | 'skills' | 'prompts';
 
 type AgentDutiesState = {
   projectMaintenanceEnabled: boolean;
@@ -196,6 +207,7 @@ const SETTINGS_TABS: Array<{
   icon: typeof Bot;
 }> = [
   { id: 'overview', label: 'Runtime', description: 'Runtime behavior and enrichment defaults', group: 'Operate', icon: Gauge },
+  { id: 'extensions', label: 'Extensions', description: 'Graphify runtime and project graph controls', group: 'Operate', icon: Network },
   { id: 'connections', label: 'Client setup', description: 'Connect Codex, Claude Desktop, or another MCP client', group: 'Install', icon: Wifi },
   { id: 'skills', label: 'Install guides', description: 'Copy or download the full client guidance files', group: 'Reference', icon: BookCopy },
   { id: 'prompts', label: 'Prompt library', description: 'Reusable recall, save, and setup prompts', group: 'Reference', icon: ScrollText },
@@ -335,9 +347,15 @@ export function SettingsView({ vaultStatus }: { vaultStatus: VaultStatus | null 
   const [skillFiles, setSkillFiles] = useState<Record<string, VaultSkillFile>>({});
   const [loadingSkillId, setLoadingSkillId] = useState<string | null>(null);
   const [agentDuties, setAgentDuties] = useState<AgentDutiesState>(DEFAULT_AGENT_DUTIES);
+  const [graphifyConfig, setGraphifyConfig] = useState<GraphifyRuntimeConfig | null>(null);
+  const [graphifyRuntimeStatus, setGraphifyRuntimeStatus] = useState<GraphifyRuntimeStatus | null>(null);
+  const [graphifyInstallPlan, setGraphifyInstallPlan] = useState<GraphifyInstallPlan | null>(null);
+  const [graphifyError, setGraphifyError] = useState<string | null>(null);
+  const [loadingGraphify, setLoadingGraphify] = useState(false);
 
   useEffect(() => {
     void loadSettings();
+    void loadGraphifyExtension();
   }, []);
 
   async function loadSettings() {
@@ -403,6 +421,49 @@ export function SettingsView({ vaultStatus }: { vaultStatus: VaultStatus | null 
       setError(err instanceof Error ? err.message : 'Failed to load settings');
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function loadGraphifyExtension() {
+    setLoadingGraphify(true);
+    setGraphifyError(null);
+
+    try {
+      const configResponse = await window.vaultAPI.getGraphifyRuntimeConfig();
+      if (!configResponse.success || !configResponse.data) {
+        throw new Error(configResponse.error || 'Failed to load Graphify config');
+      }
+
+      setGraphifyConfig(configResponse.data);
+
+      const runtimeResponse = await window.vaultAPI.detectGraphifyRuntime();
+      const runtimeStatus = runtimeResponse.success && runtimeResponse.data
+        ? runtimeResponse.data
+        : null;
+      setGraphifyRuntimeStatus(runtimeStatus);
+      if (!runtimeResponse.success) {
+        setGraphifyError(runtimeResponse.error || 'Graphify detection failed');
+      }
+
+      const installPlanResponse = await window.vaultAPI.planGraphifyInstall({
+        runtimeMode: configResponse.data.runtimeMode,
+        availableTools: {
+          python: Boolean(runtimeStatus?.python.available),
+          uv: Boolean(runtimeStatus?.uv.available),
+          pipx: Boolean(runtimeStatus?.pipx.available),
+        },
+        extras: configResponse.data.installExtras,
+        localSourcePath: configResponse.data.localSourceCheckoutPath,
+      });
+      if (installPlanResponse.success && installPlanResponse.data) {
+        setGraphifyInstallPlan(installPlanResponse.data);
+      }
+    } catch (err) {
+      setGraphifyError(err instanceof Error ? err.message : 'Failed to load Graphify extension');
+      setGraphifyRuntimeStatus(null);
+      setGraphifyInstallPlan(null);
+    } finally {
+      setLoadingGraphify(false);
     }
   }
 
@@ -1317,6 +1378,146 @@ export function SettingsView({ vaultStatus }: { vaultStatus: VaultStatus | null 
     );
   }
 
+  function renderExtensionsTab() {
+    const graphifyModel = graphifyConfig
+      ? buildGraphifySettingsViewModel({
+          config: graphifyConfig,
+          runtimeStatus: graphifyRuntimeStatus,
+          installPlan: graphifyInstallPlan,
+          detectionError: graphifyError,
+        })
+      : null;
+    const GraphifyStateIcon = graphifyModel?.state === 'installed'
+      ? CheckCircle2
+      : graphifyModel?.state === 'failed'
+        ? AlertTriangle
+        : Network;
+
+    return (
+      <div className="settings-tab-panel">
+        <section className="section-intro">
+          <div className="section-intro-copy">
+            <span className="section-intro-eyebrow">Extensions</span>
+            <div className="section-intro-title">Graphify stays optional and managed by Vault</div>
+            <p className="section-intro-text">This panel detects the local Graphify runtime, shows the managed runtime plan, and keeps install/build decisions explicit.</p>
+          </div>
+          <div className="section-intro-meta">
+            <span className="section-intro-chip">optional runtime</span>
+            <span className="section-intro-chip">managed artifacts</span>
+            <button type="button" className="header-button header-button-compact" onClick={() => void loadGraphifyExtension()} disabled={loadingGraphify}>
+              <RefreshCw size={15} />
+              <span>{loadingGraphify ? 'Detecting' : 'Detect'}</span>
+            </button>
+          </div>
+        </section>
+
+        <section className="panel settings-section graphify-settings-panel">
+          <div className="panel-header">
+            <div>
+              <div className="panel-title">Graphify</div>
+              <div className="panel-subtitle">Runtime status, installer preview, and developer source mode.</div>
+            </div>
+            <GraphifyStateIcon size={18} className="panel-icon" />
+          </div>
+
+          {!graphifyConfig || !graphifyModel ? (
+            <div className="empty-state">{loadingGraphify ? 'Detecting Graphify runtime...' : 'Graphify extension status is unavailable.'}</div>
+          ) : (
+            <>
+              <div className={`graphify-status-card graphify-status-card-${graphifyModel.state}`}>
+                <div className="graphify-status-main">
+                  <span className="graphify-status-icon">
+                    <GraphifyStateIcon size={18} />
+                  </span>
+                  <div>
+                    <strong>{graphifyModel.primaryLabel}</strong>
+                    <p>{graphifyModel.detail}</p>
+                  </div>
+                </div>
+                <div className="graphify-status-meta">
+                  <span>{graphifyConfig.runtimeMode}</span>
+                  <strong>{graphifyModel.installedVersion || 'not installed'}</strong>
+                </div>
+              </div>
+
+              {graphifyModel.errorMessage ? (
+                <div className="note-card note-card-warning">
+                  <p>{graphifyModel.errorMessage}</p>
+                </div>
+              ) : null}
+
+              <div className="settings-card-grid">
+                <div className="snippet-card">
+                  <div className="snippet-head">
+                    <div>
+                      <div className="field-label">Managed runtime</div>
+                      <div className="field-help">{graphifyConfig.managedRuntimePath}</div>
+                    </div>
+                    <FolderRoot size={17} />
+                  </div>
+                  <ul className="settings-guide-list">
+                    <li>Profile: {graphifyConfig.installProfile}</li>
+                    <li>Extras: {graphifyConfig.installExtras.length > 0 ? graphifyConfig.installExtras.join(', ') : 'none'}</li>
+                    <li>Auto-build debounce: {Math.round(graphifyConfig.debounce.autoBuildDelayMs / 1000)}s</li>
+                  </ul>
+                </div>
+
+                <div className="snippet-card">
+                  <div className="snippet-head">
+                    <div>
+                      <div className="field-label">Detected tools</div>
+                      <div className="field-help">Python, uv, pipx, and graphify are detected through a safe IPC call.</div>
+                    </div>
+                    <Terminal size={17} />
+                  </div>
+                  <div className="graphify-tool-grid">
+                    {[
+                      ['Python', graphifyRuntimeStatus?.python],
+                      ['uv', graphifyRuntimeStatus?.uv],
+                      ['pipx', graphifyRuntimeStatus?.pipx],
+                      ['Graphify', graphifyRuntimeStatus?.graphify],
+                    ].map(([label, tool]) => (
+                      <div key={String(label)} className="graphify-tool-row">
+                        <span>{String(label)}</span>
+                        <strong>{tool && typeof tool === 'object' && tool.available ? tool.version || 'available' : 'missing'}</strong>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+
+              {graphifyModel.state !== 'installed' ? (
+                <div className="snippet-card">
+                  <div className="snippet-head">
+                    <div>
+                      <div className="field-label">Install preview</div>
+                      <div className="field-help">Vault shows commands before any install and never silently installs Graphify.</div>
+                    </div>
+                    <button
+                      type="button"
+                      className="header-button"
+                      onClick={() => void copyText('graphify-install-plan', graphifyModel.installCommands.join('\n'))}
+                      disabled={!graphifyModel.actions.install.enabled || graphifyModel.installCommands.length === 0}
+                      title={graphifyModel.actions.install.reason || graphifyModel.actions.install.label}
+                    >
+                      <Copy size={16} />
+                      <span>{copiedToken === 'graphify-install-plan' ? 'Copied' : graphifyModel.actions.install.label}</span>
+                    </button>
+                  </div>
+                  <pre className="snippet-block">
+                    {graphifyModel.installCommands.length > 0
+                      ? graphifyModel.installCommands.join('\n')
+                      : graphifyModel.actions.install.reason || 'No install command is available.'}
+                  </pre>
+                </div>
+              ) : null}
+            </>
+          )}
+        </section>
+      </div>
+    );
+  }
+
   function renderConnectionsTab() {
     return (
       <div className="settings-tab-panel">
@@ -1572,6 +1773,8 @@ export function SettingsView({ vaultStatus }: { vaultStatus: VaultStatus | null 
     switch (activeTab) {
       case 'overview':
         return renderOverviewTab();
+      case 'extensions':
+        return renderExtensionsTab();
       case 'connections':
         return renderConnectionsTab();
       case 'skills':

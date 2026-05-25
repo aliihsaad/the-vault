@@ -217,6 +217,56 @@ export function initializeSchema(dbPath: string): void {
     CREATE INDEX IF NOT EXISTS idx_tasks_project ON tasks(project);
     CREATE INDEX IF NOT EXISTS idx_tasks_created_at ON tasks(created_at);
     CREATE INDEX IF NOT EXISTS idx_tasks_parent_task_uid ON tasks(parent_task_uid);
+
+    CREATE TABLE IF NOT EXISTS graphify_project_state (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      project TEXT UNIQUE NOT NULL,
+      enabled INTEGER NOT NULL DEFAULT 1,
+      source_root TEXT,
+      freshness TEXT NOT NULL DEFAULT 'missing',
+      build_mode TEXT NOT NULL DEFAULT 'fast',
+      latest_build_id TEXT,
+      graph_json_path TEXT,
+      graph_html_path TEXT,
+      graph_report_path TEXT,
+      graph_svg_path TEXT,
+      node_count INTEGER,
+      edge_count INTEGER,
+      community_count INTEGER,
+      failure_count INTEGER NOT NULL DEFAULT 0,
+      last_error TEXT,
+      detected_graphify_version TEXT,
+      last_build_started_at TEXT,
+      last_build_completed_at TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_graphify_project_state_project ON graphify_project_state(project);
+    CREATE INDEX IF NOT EXISTS idx_graphify_project_state_freshness ON graphify_project_state(freshness);
+    CREATE INDEX IF NOT EXISTS idx_graphify_project_state_enabled ON graphify_project_state(enabled);
+    CREATE INDEX IF NOT EXISTS idx_graphify_project_state_latest_build_id ON graphify_project_state(latest_build_id);
+
+    CREATE TABLE IF NOT EXISTS graphify_builds (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      build_id TEXT UNIQUE NOT NULL,
+      project TEXT NOT NULL,
+      status TEXT NOT NULL,
+      build_mode TEXT NOT NULL,
+      started_at TEXT,
+      completed_at TEXT,
+      artifact_json TEXT,
+      graph_stats_json TEXT,
+      detected_graphify_version TEXT,
+      log_path TEXT,
+      error_message TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_graphify_builds_project ON graphify_builds(project);
+    CREATE INDEX IF NOT EXISTS idx_graphify_builds_status ON graphify_builds(status);
+    CREATE INDEX IF NOT EXISTS idx_graphify_builds_started_at ON graphify_builds(started_at);
   `);
 
   // Idempotent additive migrations for columns introduced after the initial

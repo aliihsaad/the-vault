@@ -8,6 +8,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
 import { Vault, OpenRouterClient, TaskExecutor, portableDecrypt, slugify, MEMORY_TYPES, ROUTINE_TYPES, STATUS_VALUES, PRIORITY_VALUES, SOURCE_APPS, TASK_TYPES, TASK_STATUSES, TASK_PRIORITIES, PROPOSAL_STATUSES, PROPOSAL_TYPES, PROJECT_LINK_TYPES, OUTCOME_VALUES } from '@the-vault/core';
+import { registerGraphifyMcpTools } from './graphify-tools.js';
 
 // Initialize Vault
 const vault = new Vault();
@@ -1197,6 +1198,8 @@ server.tool(
     }
   },
 );
+
+registerGraphifyMcpTools(server, vault);
 
 // ============================================================================
 // Helpers

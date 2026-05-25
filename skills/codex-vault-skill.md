@@ -42,6 +42,26 @@ Project & lifecycle review tools:
 - `vault_list_pending_deletes` — Items the lifecycle pipeline moved into pending_delete (excluded from recall, not yet removed)
 - `vault_confirm_delete` — Permanently drop a pending_delete or archived item (DB row + .md file). No undo. Only with explicit user OK.
 
+Project graph tools (Graphify) — code structure, dependencies, and impact:
+- `vault_recall_with_graph_context` — **Preferred when planning a code change or reviewing impact.** Combines Vault memory recall with graph context, likely files, and suggested next reads in one budgeted call
+- `vault_graphify_status` — Check whether a project's graph exists and its freshness (fresh/stale/missing/failed)
+- `vault_graphify_query` — Ask a structural question ("what connects X to Y", "where is Z used") instead of broad file search
+- `vault_graphify_get_node` — Fetch a file/symbol node by id, label, or path plus immediate neighbors
+- `vault_graphify_get_neighbors` — Expand context around a known node
+- `vault_graphify_shortest_path` — Find how two files/symbols are connected
+- `vault_graphify_explain_impact` — Estimate blast radius: likely affected files/tests for a proposed change
+- `vault_graphify_build_project_graph` — Queue or run a graph build (usually automatic; use when missing or stale)
+
+---
+
+## When to Use the Project Graph
+
+Vault memory answers **why / history / decisions / handoffs / open loops**. The project graph (Graphify) answers **where / structure / connections / impact**.
+
+Reach for the project graph tools **before broad search or large file reads** when the task involves architecture, call flow, imports/dependencies, "what connects X to Y", neighbors, shortest path, code impact / blast radius, which tests cover X, or symbol/file relationships.
+
+Use **`vault_recall_with_graph_context`** when planning a code change — it returns memory + graph context + likely files + suggested next reads in one budgeted response, narrowing file reads and cutting token use versus reading files blindly. If a project's graph is missing or stale (`vault_graphify_status`), fall back to Vault memory recall and proceed; the graph is optional.
+
 ---
 
 ## When to Recall

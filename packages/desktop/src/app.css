@@ -6770,6 +6770,225 @@ select.text-input optgroup {
   cursor: default;
 }
 
+.graphify-dashboard {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  min-height: 640px;
+}
+
+.graphify-dashboard-top,
+.graphify-source-root-panel {
+  display: flex;
+  gap: 16px;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.graphify-dashboard-top {
+  flex-wrap: wrap;
+}
+
+.graphify-dashboard-message {
+  display: inline-flex;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}
+
+.graphify-state-pill {
+  display: inline-flex;
+  align-items: center;
+  min-height: 34px;
+  padding: 0 11px;
+  border: 1px solid rgba(141, 174, 214, 0.16);
+  border-radius: var(--radius-control);
+  background: rgba(255, 255, 255, 0.035);
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+  text-transform: uppercase;
+}
+
+.graphify-state-pill-fresh {
+  border-color: rgba(51, 214, 145, 0.35);
+  color: #77f6bf;
+}
+
+.graphify-state-pill-stale,
+.graphify-state-pill-failed {
+  border-color: rgba(245, 165, 36, 0.38);
+  color: #ffd98b;
+}
+
+.graphify-state-pill-building,
+.graphify-state-pill-queued {
+  border-color: rgba(56, 223, 255, 0.34);
+  color: #8eefff;
+}
+
+.graphify-state-pill-disabled,
+.graphify-state-pill-sourceRootRequired,
+.graphify-state-pill-missing {
+  border-color: rgba(148, 166, 198, 0.22);
+  color: var(--text-muted);
+}
+
+.graphify-tab-strip {
+  display: inline-flex;
+  align-self: flex-start;
+  gap: 6px;
+  padding: 5px;
+  border: 1px solid rgba(141, 174, 214, 0.13);
+  border-radius: var(--radius-control);
+  background: rgba(255, 255, 255, 0.025);
+}
+
+.graphify-tab {
+  min-width: 92px;
+  min-height: 34px;
+  border: 0;
+  border-radius: calc(var(--radius-control) - 3px);
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 0.78rem;
+  cursor: pointer;
+}
+
+.graphify-tab-active {
+  background: rgba(56, 223, 255, 0.12);
+  color: var(--text-primary);
+}
+
+.graphify-embed-frame {
+  min-height: 560px;
+  overflow: hidden;
+  border: 1px solid rgba(141, 174, 214, 0.14);
+  border-radius: var(--radius-control);
+  background: rgba(2, 6, 14, 0.54);
+}
+
+.graphify-embed-frame iframe {
+  display: block;
+  width: 100%;
+  min-height: 560px;
+  border: 0;
+  background: #050912;
+}
+
+.graphify-report-panel {
+  min-height: 420px;
+}
+
+.graphify-report-block {
+  max-height: 560px;
+  overflow: auto;
+  white-space: pre-wrap;
+}
+
+.graphify-source-root-panel {
+  padding: 14px;
+  border: 1px solid rgba(245, 165, 36, 0.24);
+  border-radius: var(--radius-control);
+  background: rgba(245, 165, 36, 0.065);
+}
+
+.graphify-source-root-panel p {
+  margin: 4px 0;
+  color: var(--text-secondary);
+  font-size: 0.82rem;
+}
+
+.graphify-disable-row {
+  justify-content: flex-end;
+}
+
+.graphify-vault-preview-grid {
+  margin-top: 0;
+}
+
+.graphify-settings-panel {
+  gap: 14px;
+}
+
+.graphify-status-card {
+  display: flex;
+  gap: 16px;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px;
+  border: 1px solid rgba(141, 174, 214, 0.15);
+  border-radius: var(--radius-control);
+  background: rgba(255, 255, 255, 0.035);
+}
+
+.graphify-status-main {
+  display: flex;
+  min-width: 0;
+  gap: 12px;
+  align-items: center;
+}
+
+.graphify-status-main p {
+  margin: 4px 0 0;
+  color: var(--text-secondary);
+  font-size: 0.82rem;
+}
+
+.graphify-status-icon {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  border-radius: 10px;
+  background: rgba(56, 223, 255, 0.1);
+  color: #8eefff;
+}
+
+.graphify-status-meta,
+.graphify-tool-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.graphify-status-meta {
+  flex: 0 0 auto;
+  min-width: 150px;
+  color: var(--text-muted);
+  font-size: 0.76rem;
+}
+
+.graphify-status-meta strong {
+  color: var(--text-primary);
+}
+
+.graphify-tool-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+
+.graphify-tool-row {
+  padding: 8px 10px;
+  border: 1px solid rgba(141, 174, 214, 0.12);
+  border-radius: var(--radius-control);
+  background: rgba(255, 255, 255, 0.025);
+  color: var(--text-secondary);
+  font-size: 0.78rem;
+}
+
+.graphify-tool-row strong {
+  color: var(--text-primary);
+}
+
+.note-card-warning {
+  border-color: rgba(245, 165, 36, 0.26);
+  background: rgba(245, 165, 36, 0.065);
+}
+
 .ops-meter-row {
   display: flex;
   justify-content: space-between;

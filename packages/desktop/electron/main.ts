@@ -1,16 +1,19 @@
 // electron/main.ts
-import { app, BrowserWindow, ipcMain, safeStorage } from 'electron';
+import { app, BrowserWindow, dialog, ipcMain, net, protocol, safeStorage, shell } from 'electron';
+import { spawn } from 'node:child_process';
 import { createCipheriv, createDecipheriv, createHash, randomBytes, scryptSync } from 'node:crypto';
-import { existsSync } from 'node:fs';
+import { existsSync, watch as fsWatch, type FSWatcher } from 'node:fs';
 import { access, copyFile, mkdir, readFile, readdir, stat, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { basename, dirname, extname, isAbsolute, join, relative, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import {
   detectDuplicates,
+  GraphifyBuildQueue,
   OpenRouterClient,
   portableDecrypt,
   portableEncrypt,
+  resolveGraphifyCommandForRuntimeConfig,
   Vault,
 } from '@the-vault/core';
 import type { MemoryItemDetail, MemoryPack, ModelRoutingTable, RecallQuery } from '@the-vault/core';
@@ -21,6 +24,20 @@ import {
 } from './connection-migration.js';
 import { TaskExecutor } from './task-executor.js';
 import { getDirectorySizeSummary } from './vault-directory-size.js';
+import {
+  buildGraphifyArtifactProtocolUrl,
+  parseGraphifyArtifactUrlRequest,
+  type GraphifyArtifactName,
+  type GraphifyArtifactUrlRequest,
+} from '../src/graphify-artifact-url.js';
+import type {
+  GraphifyAvailableTools,
+  GraphifyArtifactPaths,
+  GraphifyBuildProcessOptions,
+  GraphifyBuildProcessResult,
+  GraphifyCommandResult,
+  GraphifyHtmlArtifactResult,
+} from '@the-vault/core';
 
 // Recreate __dirname for ESM
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -84,6 +101,18 @@ const DEFAULT_RECALL_TOP_MATCH_LIMIT = 4;
 const DEFAULT_RECALL_DETAIL_EXPANSION_LIMIT = 2;
 const DEFAULT_RECALL_SIDE_CHANNEL_LIMIT = 2;
 
+protocol.registerSchemesAsPrivileged([
+  {
+    scheme: 'vault-graphify',
+    privileges: {
+      standard: true,
+      secure: true,
+      supportFetchAPI: true,
+      corsEnabled: false,
+    },
+  },
+]);
+
 process.env.DIST = rendererPath;
 process.env.VITE_PUBLIC = publicPath;
 
@@ -97,6 +126,223 @@ const taskExecutor = new TaskExecutor({
   },
   pollIntervalMs: 5000,
 });
+
+// --- Graphify auto-build: debounced queue + per-project source watchers ---
+// Source changes for an enabled, source-rooted project queue a debounced fast build.
+// Builds write to managed app data (not the source root), so they never re-trigger the
+// watcher. All of this is best-effort and must never crash the main process.
+const graphifyBuildQueue = new GraphifyBuildQueue({
+  projectStore: {
+    getProjectStatus: (project) => vault.getGraphifyProjectStatus(project),
+    getProjectState: (project) => vault.getGraphifyProjectState(project),
+    upsertProjectState: (input) => vault.upsertGraphifyProjectState(input),
+  },
+  timers: {
+    setTimeout: (callback, delayMs) => setTimeout(callback, delayMs),
+    clearTimeout: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>),
+  },
+  clock: {
+    now: () => Date.now(),
+    isoNow: () => new Date().toISOString(),
+  },
+  buildExecutor: (request) => vault.buildGraphifyProjectGraph(request.project, {
+    commandRunner: runGraphifyBuildProcess,
+    buildId: request.buildId,
+    buildMode: request.buildMode,
+  }),
+});
+
+const graphifyWatchers = new Map<string, FSWatcher>();
+const GRAPHIFY_WATCH_IGNORED = new Set([
+  'node_modules', '.git', 'dist', 'dist-electron', 'coverage', '.next', '.turbo', 'graphify-out',
+]);
+
+function graphifyWatchPathIsIgnored(filename: string): boolean {
+  return filename.split(/[\\/]/).some((segment) => GRAPHIFY_WATCH_IGNORED.has(segment));
+}
+
+// Reconcile watchers with the set of enabled, build-eligible projects. Called at
+// startup and whenever a project's source root or enabled state changes.
+function syncGraphifyAutoBuildWatchers(): void {
+  try {
+    const desired = new Map<string, string>();
+    for (const project of vault.listProjects()) {
+      try {
+        const status = vault.getGraphifyProjectStatus(project.name);
+        if (status.enabled && status.buildEligible && status.sourceRoot && existsSync(status.sourceRoot)) {
+          desired.set(project.name, status.sourceRoot);
+        }
+      } catch {
+        // Skip projects whose status can't be read; never block startup.
+      }
+    }
+
+    for (const [name, watcher] of graphifyWatchers) {
+      if (!desired.has(name)) {
+        try { watcher.close(); } catch { /* ignore */ }
+        graphifyWatchers.delete(name);
+      }
+    }
+
+    for (const [name, sourceRoot] of desired) {
+      if (graphifyWatchers.has(name)) {
+        continue;
+      }
+      try {
+        const watcher = fsWatch(sourceRoot, { recursive: true }, (_event, filename) => {
+          if (filename && graphifyWatchPathIsIgnored(String(filename))) {
+            return;
+          }
+          try {
+            graphifyBuildQueue.triggerAutoBuild(name, { reason: 'sourceChanged' });
+          } catch {
+            // Auto-build is optional; swallow so a noisy watcher can't crash the app.
+          }
+        });
+        graphifyWatchers.set(name, watcher);
+      } catch {
+        // A non-watchable root simply opts that project out of auto-build.
+      }
+    }
+  } catch {
+    // Never let auto-build wiring break the desktop app.
+  }
+}
+
+function disposeGraphifyAutoBuild(): void {
+  for (const watcher of graphifyWatchers.values()) {
+    try { watcher.close(); } catch { /* ignore */ }
+  }
+  graphifyWatchers.clear();
+  graphifyBuildQueue.dispose();
+}
+
+function registerGraphifyArtifactProtocol(): void {
+  protocol.handle('vault-graphify', async (request) => {
+    try {
+      const url = new URL(request.url);
+      const artifactRequest = parseGraphifyArtifactUrlRequest({
+        project: url.searchParams.get('project'),
+        artifact: url.searchParams.get('artifact'),
+      });
+      const artifactPath = resolveGraphifyArtifactRequestPath(artifactRequest);
+      return net.fetch(pathToFileURL(artifactPath).toString());
+    } catch (err) {
+      return new Response(err instanceof Error ? err.message : 'Graphify artifact is unavailable.', {
+        status: 404,
+        headers: {
+          'content-type': 'text/plain; charset=utf-8',
+        },
+      });
+    }
+  });
+}
+
+function resolveGraphifyArtifactRequestPath(input: GraphifyArtifactUrlRequest): string {
+  const request = parseGraphifyArtifactUrlRequest(input);
+  const artifacts = vault.getGraphifyArtifacts(request.project);
+  const html = request.artifact === 'graphHtml'
+    ? vault.getGraphifyHtmlArtifact(request.project)
+    : null;
+  const artifactPath = getGraphifyArtifactPathByName(request.artifact, artifacts.artifactPaths, html);
+
+  if (!artifactPath) {
+    throw new Error('Requested Graphify artifact is missing.');
+  }
+
+  return vault.resolveGraphifyArtifactPath(request.project, artifactPath);
+}
+
+function getGraphifyArtifactPathByName(
+  artifact: GraphifyArtifactName,
+  paths: GraphifyArtifactPaths,
+  html: GraphifyHtmlArtifactResult | null,
+): string | null {
+  if (artifact === 'graphHtml') {
+    return html?.status === 'available' ? html.path : null;
+  }
+
+  if (artifact === 'graphJson') {
+    return paths.graphJson;
+  }
+
+  if (artifact === 'graphReport') {
+    return paths.graphReport;
+  }
+
+  return paths.graphSvg;
+}
+
+function runGraphifyVersionCommand(command: string, args: string[]): Promise<GraphifyCommandResult> {
+  return runProcess(command, args, { timeoutMs: 8000 });
+}
+
+function runGraphifyBuildProcess(
+  command: string,
+  args: string[],
+  options: GraphifyBuildProcessOptions,
+): Promise<GraphifyBuildProcessResult> {
+  return runProcess(command, args, {
+    cwd: options.cwd,
+    timeoutMs: 30 * 60 * 1000,
+    env: options.env,
+  });
+}
+
+function runProcess(
+  command: string,
+  args: string[],
+  options: {
+    cwd?: string;
+    timeoutMs: number;
+    env?: Record<string, string>;
+  },
+): Promise<GraphifyCommandResult> {
+  return new Promise((resolveProcess) => {
+    let stdout = '';
+    let stderr = '';
+    let settled = false;
+    const child = spawn(command, args, {
+      cwd: options.cwd,
+      shell: false,
+      windowsHide: true,
+      env: options.env ? { ...process.env, ...options.env } : process.env,
+    });
+    const timeout = setTimeout(() => {
+      if (!settled) {
+        stderr += `\nProcess timed out after ${options.timeoutMs}ms.`;
+        child.kill();
+      }
+    }, options.timeoutMs);
+
+    child.stdout?.on('data', (chunk) => {
+      stdout += String(chunk);
+    });
+    child.stderr?.on('data', (chunk) => {
+      stderr += String(chunk);
+    });
+    child.on('error', (err) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      resolveProcess({
+        exitCode: 1,
+        stdout,
+        stderr: stderr || err.message,
+      });
+    });
+    child.on('close', (code) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      resolveProcess({
+        exitCode: code ?? 1,
+        stdout,
+        stderr,
+      });
+    });
+  });
+}
 
 type EncryptedSettingValue =
   | {
@@ -870,6 +1116,7 @@ function resolveSkillFile(relativePathInput: unknown): { absolutePath: string; r
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') {
     taskExecutor.stop();
+    disposeGraphifyAutoBuild();
     vault.close();
     app.quit();
   }
@@ -882,6 +1129,8 @@ app.on('activate', () => {
 });
 
 app.whenReady().then(() => {
+  registerGraphifyArtifactProtocol();
+  syncGraphifyAutoBuildWatchers();
   createWindow();
 
   // IPC Handlers — Expose Vault methods
@@ -1354,6 +1603,230 @@ app.whenReady().then(() => {
     try {
       const active = initializeEnrichment();
       return { success: true, data: { enrichmentActive: active } };
+    } catch (e: any) {
+      return { success: false, error: e.message };
+    }
+  });
+
+  ipcMain.handle('vault:getGraphifyRuntimeConfig', () => {
+    try {
+      return { success: true, data: vault.getGraphifyRuntimeConfig() };
+    } catch (e: any) {
+      return { success: false, error: e.message };
+    }
+  });
+
+  ipcMain.handle('vault:saveGraphifyRuntimeConfig', (_, input) => {
+    try {
+      return { success: true, data: vault.saveGraphifyRuntimeConfig(input || {}) };
+    } catch (e: any) {
+      return { success: false, error: e.message };
+    }
+  });
+
+  ipcMain.handle('vault:detectGraphifyRuntime', async () => {
+    try {
+      const config = vault.getGraphifyRuntimeConfig();
+      return {
+        success: true,
+        data: await vault.detectGraphifyRuntime({
+          commandRunner: runGraphifyVersionCommand,
+          graphifyCommand: resolveGraphifyCommandForRuntimeConfig(config),
+        }),
+      };
+    } catch (e: any) {
+      return { success: false, error: e.message };
+    }
+  });
+
+  ipcMain.handle('vault:planGraphifyInstall', (_, input) => {
+    try {
+      const raw = input && typeof input === 'object' ? input as Record<string, unknown> : {};
+      const availableTools = raw.availableTools && typeof raw.availableTools === 'object'
+        ? raw.availableTools as Partial<GraphifyAvailableTools>
+        : {};
+      const config = vault.getGraphifyRuntimeConfig();
+      return {
+        success: true,
+        data: vault.planGraphifyInstall({
+          runtimeMode: raw.runtimeMode === 'path' || raw.runtimeMode === 'localSource' || raw.runtimeMode === 'managed'
+            ? raw.runtimeMode
+            : config.runtimeMode,
+          availableTools: {
+            python: Boolean(availableTools.python),
+            uv: Boolean(availableTools.uv),
+            pipx: Boolean(availableTools.pipx),
+          },
+          extras: Array.isArray(raw.extras) ? raw.extras.map(String) : config.installExtras,
+          localSourcePath: typeof raw.localSourcePath === 'string' ? raw.localSourcePath : config.localSourceCheckoutPath,
+        }),
+      };
+    } catch (e: any) {
+      return { success: false, error: e.message };
+    }
+  });
+
+  ipcMain.handle('vault:getGraphifyProjectStatus', (_, project) => {
+    try {
+      return { success: true, data: vault.getGraphifyProjectStatus(String(project || '')) };
+    } catch (e: any) {
+      return { success: false, error: e.message };
+    }
+  });
+
+  ipcMain.handle('vault:setGraphifyProjectSourceRoot', (_, project, sourceRoot) => {
+    try {
+      const data = vault.setGraphifyProjectSourceRoot(String(project || ''), String(sourceRoot || ''));
+      syncGraphifyAutoBuildWatchers();
+      return { success: true, data };
+    } catch (e: any) {
+      return { success: false, error: e.message };
+    }
+  });
+
+  ipcMain.handle('vault:chooseGraphifyProjectSourceRoot', async (_, project) => {
+    try {
+      const projectName = String(project || '').trim();
+      const selection = await dialog.showOpenDialog({
+        title: 'Choose Graphify source folder',
+        properties: ['openDirectory'],
+      });
+      if (selection.canceled || selection.filePaths.length === 0) {
+        return { success: true, data: null };
+      }
+
+      const data = vault.setGraphifyProjectSourceRoot(projectName, selection.filePaths[0]);
+      syncGraphifyAutoBuildWatchers();
+      return {
+        success: true,
+        data,
+      };
+    } catch (e: any) {
+      return { success: false, error: e.message };
+    }
+  });
+
+  ipcMain.handle('vault:setGraphifyProjectEnabled', (_, project, enabled) => {
+    try {
+      const data = vault.setGraphifyProjectEnabled(String(project || ''), Boolean(enabled));
+      syncGraphifyAutoBuildWatchers();
+      return { success: true, data };
+    } catch (e: any) {
+      return { success: false, error: e.message };
+    }
+  });
+
+  ipcMain.handle('vault:getGraphifyBuildHistory', (_, project, limit) => {
+    try {
+      return { success: true, data: vault.getGraphifyBuildHistory(String(project || ''), clampPositiveInteger(limit, 8, 1, 50)) };
+    } catch (e: any) {
+      return { success: false, error: e.message };
+    }
+  });
+
+  ipcMain.handle('vault:getGraphifyArtifacts', (_, project) => {
+    try {
+      return { success: true, data: vault.getGraphifyArtifacts(String(project || '')) };
+    } catch (e: any) {
+      return { success: false, error: e.message };
+    }
+  });
+
+  ipcMain.handle('vault:getGraphifyHtmlArtifact', (_, project) => {
+    try {
+      return { success: true, data: vault.getGraphifyHtmlArtifact(String(project || '')) };
+    } catch (e: any) {
+      return { success: false, error: e.message };
+    }
+  });
+
+  ipcMain.handle('vault:readGraphifyArtifactReport', (_, project, options) => {
+    try {
+      return { success: true, data: vault.readGraphifyArtifactReport(String(project || ''), options || undefined) };
+    } catch (e: any) {
+      return { success: false, error: e.message };
+    }
+  });
+
+  ipcMain.handle('vault:getGraphifyArtifactUrl', (_, input) => {
+    try {
+      const request = parseGraphifyArtifactUrlRequest(input);
+      const artifactPath = resolveGraphifyArtifactRequestPath(request);
+      return {
+        success: true,
+        data: {
+          url: buildGraphifyArtifactProtocolUrl(request),
+          artifactPath,
+        },
+      };
+    } catch (e: any) {
+      return { success: false, error: e.message };
+    }
+  });
+
+  ipcMain.handle('vault:buildGraphifyProjectGraph', async (_, input) => {
+    try {
+      const raw = input && typeof input === 'object' ? input as Record<string, unknown> : {};
+      const project = String(raw.project || '').trim();
+      const buildMode = raw.buildMode === 'full' || raw.buildMode === 'semantic' || raw.buildMode === 'fast'
+        ? raw.buildMode
+        : undefined;
+      return {
+        success: true,
+        data: await vault.buildGraphifyProjectGraph(project, {
+          buildMode,
+          commandRunner: runGraphifyBuildProcess,
+        }),
+      };
+    } catch (e: any) {
+      return { success: false, error: e.message };
+    }
+  });
+
+  ipcMain.handle('vault:openGraphifyArtifactFolder', async (_, project) => {
+    try {
+      const artifacts = vault.getGraphifyArtifacts(String(project || ''));
+      const folder = artifacts.artifactRoot;
+      if (!existsSync(folder)) {
+        throw new Error('Graphify artifact folder does not exist yet. Choose a source folder and build the project graph first.');
+      }
+      const result = await shell.openPath(folder);
+      if (result) {
+        throw new Error(result);
+      }
+      return { success: true, data: folder };
+    } catch (e: any) {
+      return { success: false, error: e.message };
+    }
+  });
+
+  ipcMain.handle('vault:exportGraphifyArtifacts', async (_, project) => {
+    try {
+      const artifacts = vault.getGraphifyArtifacts(String(project || ''));
+      if (!artifacts.available) {
+        throw new Error(artifacts.errorMessage || 'Graphify artifacts are not available.');
+      }
+
+      const selection = await dialog.showOpenDialog({
+        title: 'Choose export folder for Graphify artifacts',
+        properties: ['openDirectory', 'createDirectory'],
+      });
+      if (selection.canceled || selection.filePaths.length === 0) {
+        return { success: true, data: null };
+      }
+
+      const targetRoot = selection.filePaths[0];
+      const copied: string[] = [];
+      await mkdir(targetRoot, { recursive: true });
+      for (const sourcePath of Object.values(artifacts.artifactPaths)) {
+        if (!sourcePath) continue;
+        const safeSource = vault.resolveGraphifyArtifactPath(String(project || ''), sourcePath);
+        const targetPath = join(targetRoot, basename(safeSource));
+        await copyFile(safeSource, targetPath);
+        copied.push(targetPath);
+      }
+
+      return { success: true, data: { targetRoot, copied } };
     } catch (e: any) {
       return { success: false, error: e.message };
     }

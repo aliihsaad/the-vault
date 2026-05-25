@@ -80,6 +80,47 @@ import {
 } from './services/workspace-registry.service.js';
 import { buildProjectContextPack } from './services/project-context-pack.service.js';
 import {
+  getGraphifyRuntimeConfig,
+  resetGraphifyRuntimeConfig,
+  saveGraphifyRuntimeConfig,
+} from './services/graphify-config.service.js';
+import {
+  getGraphifyBuildHistory,
+  getGraphifyProjectStatus,
+  getGraphifyProjectState,
+  recordGraphifyBuild,
+  setGraphifyProjectEnabled,
+  setGraphifyProjectSourceRoot,
+  upsertGraphifyProjectState,
+} from './services/graphify-project.service.js';
+import {
+  detectGraphifyRuntime,
+  planGraphifyInstall,
+} from './services/graphify-runtime.service.js';
+import { exportGraphifyProjectCorpus } from './services/graphify-corpus.service.js';
+import { buildGraphifyProjectGraph } from './services/graphify-build.service.js';
+import {
+  discoverGraphifyArtifacts,
+  getGraphifyHtmlArtifact,
+  readGraphifyArtifactJson,
+  readGraphifyArtifactReport,
+  resolveGraphifyArtifactPath,
+} from './services/graphify-artifact.service.js';
+import {
+  explainGraphifyImpact,
+  getGraphifyNeighborsContext,
+  getGraphifyNodeContext,
+  getGraphifyShortestPathContext,
+  queryGraphifyProjectGraph,
+} from './services/graphify-query.service.js';
+import {
+  getGraphifySemanticModeStatus as getGraphifySemanticModeStatusForConfig,
+  planGraphifyScheduledFullRebuild as planGraphifyScheduledFullRebuildForProject,
+} from './services/graphify-quality.service.js';
+import { buildRecallWithGraphContext } from './services/graphify-recall.service.js';
+import { toGraphifyTelemetryLogMetadata } from './services/graphify-telemetry.service.js';
+import { markGraphifyProjectStaleForMemoryChange } from './services/graphify-build-queue.service.js';
+import {
   setEnrichmentClient as setGlobalEnrichmentClient,
   isEnrichmentAvailable as checkEnrichmentAvailable,
 } from './services/enrichment.service.js';
@@ -133,6 +174,47 @@ import type {
   ModelRouteConfig,
   ResolveLoopInput,
 } from './types/index.js';
+import type {
+  GraphifyArtifactDiscoveryResult,
+  GraphifyArtifactJsonReadResult,
+  GraphifyArtifactReportReadResult,
+  GraphifyBuildRecord,
+  GraphifyCorpusExportResult,
+  GraphifyGraphImpactInput,
+  GraphifyGraphImpactResult,
+  GraphifyGraphNeighborsInput,
+  GraphifyGraphNeighborsResult,
+  GraphifyGraphNodeInput,
+  GraphifyGraphNodeResult,
+  GraphifyGraphQueryInput,
+  GraphifyGraphQueryResult,
+  GraphifyGraphShortestPathInput,
+  GraphifyGraphShortestPathResult,
+  GraphifyHtmlArtifactResult,
+  GraphifyRecallContextInput,
+  GraphifyRecallContextResult,
+  GraphifyProjectStatus,
+  GraphifyProjectState,
+  GraphifyRuntimeConfig,
+  GraphifyScheduledFullRebuildPlan,
+  GraphifySemanticModeStatus,
+  ExportGraphifyCorpusInput,
+  PlanGraphifyScheduledFullRebuildInput,
+  RecordGraphifyBuildInput,
+  SaveGraphifyRuntimeConfigInput,
+  UpsertGraphifyProjectStateInput,
+} from './types/graphify.js';
+import type {
+  DetectGraphifyRuntimeInput,
+  GraphifyInstallPlan,
+  GraphifyRuntimeStatus,
+  PlanGraphifyInstallInput,
+} from './services/graphify-runtime.service.js';
+import type {
+  BuildGraphifyProjectGraphInput,
+  GraphifyProjectBuildResult,
+} from './services/graphify-build.service.js';
+import type { GraphifyArtifactReadOptions } from './services/graphify-artifact.service.js';
 
 export class Vault {
   private db!: VaultDB;
@@ -192,7 +274,9 @@ export class Vault {
    */
   saveMemory(input: SaveMemoryInput): SaveMemoryResult {
     this.ensureInitialized();
-    return saveMemory(this.db, this.vaultRoot, this.logsPath, input);
+    const result = saveMemory(this.db, this.vaultRoot, this.logsPath, input);
+    this.markGraphifyStaleAfterMemoryChange(result.item);
+    return result;
   }
 
   /**
@@ -276,7 +360,11 @@ export class Vault {
    */
   updateMemory(itemUid: string, updates: Partial<MemoryItem>): MemoryItem | null {
     this.ensureInitialized();
-    return updateMemory(this.db, this.vaultRoot, this.logsPath, itemUid, updates);
+    const updated = updateMemory(this.db, this.vaultRoot, this.logsPath, itemUid, updates);
+    if (updated) {
+      this.markGraphifyStaleAfterMemoryChange(updated, updates);
+    }
+    return updated;
   }
 
   /**
@@ -340,7 +428,14 @@ export class Vault {
    */
   resolveLoop(input: ResolveLoopInput): MemoryItem | null {
     this.ensureInitialized();
-    return resolveLoop(this.db, this.logsPath, input);
+    const resolved = resolveLoop(this.db, this.logsPath, input);
+    if (resolved) {
+      this.markGraphifyStaleAfterMemoryChange(resolved, {
+        status: resolved.status,
+        outcome: resolved.outcome,
+      });
+    }
+    return resolved;
   }
 
   /**
@@ -410,6 +505,283 @@ export class Vault {
     );
     this.setSetting('project_workspace_registry', nextRegistry);
     return listProjectWorkspaces(nextRegistry);
+  }
+
+  // =========================================================================
+  // Graphify Extension Storage
+  // =========================================================================
+
+  getGraphifyRuntimeConfig(): GraphifyRuntimeConfig {
+    this.ensureInitialized();
+    return getGraphifyRuntimeConfig(this.vaultRoot);
+  }
+
+  saveGraphifyRuntimeConfig(input: SaveGraphifyRuntimeConfigInput): GraphifyRuntimeConfig {
+    this.ensureInitialized();
+    return saveGraphifyRuntimeConfig(this.vaultRoot, input);
+  }
+
+  resetGraphifyRuntimeConfig(): GraphifyRuntimeConfig {
+    this.ensureInitialized();
+    return resetGraphifyRuntimeConfig(this.vaultRoot);
+  }
+
+  getGraphifySemanticModeStatus(): GraphifySemanticModeStatus {
+    this.ensureInitialized();
+    return getGraphifySemanticModeStatusForConfig(this.getGraphifyRuntimeConfig());
+  }
+
+  planGraphifyScheduledFullRebuild(
+    project: string,
+    input?: PlanGraphifyScheduledFullRebuildInput,
+  ): GraphifyScheduledFullRebuildPlan {
+    this.ensureInitialized();
+    return planGraphifyScheduledFullRebuildForProject(
+      this.getGraphifyProjectStatus(project),
+      this.getGraphifyRuntimeConfig(),
+      input,
+    );
+  }
+
+  getGraphifyProjectState(project: string): GraphifyProjectState | null {
+    this.ensureInitialized();
+    return getGraphifyProjectState(this.db, project);
+  }
+
+  getGraphifyProjectStatus(project: string): GraphifyProjectStatus {
+    this.ensureInitialized();
+    return getGraphifyProjectStatus(
+      this.db,
+      project,
+      this.getSetting('project_workspace_registry') as ProjectWorkspaceRegistry | undefined,
+    );
+  }
+
+  upsertGraphifyProjectState(input: UpsertGraphifyProjectStateInput): GraphifyProjectState {
+    this.ensureInitialized();
+    return upsertGraphifyProjectState(this.db, input);
+  }
+
+  setGraphifyProjectSourceRoot(project: string, sourceRoot: string): GraphifyProjectState {
+    this.ensureInitialized();
+    return setGraphifyProjectSourceRoot(this.db, project, sourceRoot);
+  }
+
+  setGraphifyProjectEnabled(project: string, enabled: boolean): GraphifyProjectState {
+    this.ensureInitialized();
+    return setGraphifyProjectEnabled(this.db, project, enabled);
+  }
+
+  recordGraphifyBuild(input: RecordGraphifyBuildInput): GraphifyBuildRecord {
+    this.ensureInitialized();
+    return recordGraphifyBuild(this.db, input);
+  }
+
+  getGraphifyBuildHistory(project: string, limit?: number): GraphifyBuildRecord[] {
+    this.ensureInitialized();
+    return getGraphifyBuildHistory(this.db, project, limit);
+  }
+
+  detectGraphifyRuntime(input: DetectGraphifyRuntimeInput): Promise<GraphifyRuntimeStatus> {
+    this.ensureInitialized();
+    return detectGraphifyRuntime(input);
+  }
+
+  planGraphifyInstall(input: Omit<PlanGraphifyInstallInput, 'vaultRoot'>): GraphifyInstallPlan {
+    this.ensureInitialized();
+    return planGraphifyInstall({
+      vaultRoot: this.vaultRoot,
+      ...input,
+    });
+  }
+
+  exportGraphifyProjectCorpus(
+    project: string,
+    input?: Omit<ExportGraphifyCorpusInput, 'project'>,
+  ): GraphifyCorpusExportResult {
+    this.ensureInitialized();
+    return exportGraphifyProjectCorpus(
+      this.db,
+      this.vaultRoot,
+      {
+        project,
+        ...input,
+      },
+      this.getSetting('project_workspace_registry') as ProjectWorkspaceRegistry | undefined,
+    );
+  }
+
+  buildGraphifyProjectGraph(
+    project: string,
+    input: Omit<BuildGraphifyProjectGraphInput, 'project'>,
+  ): Promise<GraphifyProjectBuildResult> {
+    this.ensureInitialized();
+    return buildGraphifyProjectGraph(
+      this.db,
+      this.vaultRoot,
+      {
+        project,
+        ...input,
+      },
+      this.getSetting('project_workspace_registry') as ProjectWorkspaceRegistry | undefined,
+    );
+  }
+
+  getGraphifyArtifacts(project: string): GraphifyArtifactDiscoveryResult {
+    this.ensureInitialized();
+    return discoverGraphifyArtifacts(this.vaultRoot, project);
+  }
+
+  resolveGraphifyArtifactPath(project: string, artifactPath: string): string {
+    this.ensureInitialized();
+    return resolveGraphifyArtifactPath(this.vaultRoot, project, artifactPath);
+  }
+
+  readGraphifyArtifactJson(
+    project: string,
+    options?: GraphifyArtifactReadOptions,
+  ): GraphifyArtifactJsonReadResult {
+    this.ensureInitialized();
+    return readGraphifyArtifactJson(this.vaultRoot, project, options);
+  }
+
+  readGraphifyArtifactReport(
+    project: string,
+    options?: GraphifyArtifactReadOptions,
+  ): GraphifyArtifactReportReadResult {
+    this.ensureInitialized();
+    return readGraphifyArtifactReport(this.vaultRoot, project, options);
+  }
+
+  getGraphifyHtmlArtifact(project: string): GraphifyHtmlArtifactResult {
+    this.ensureInitialized();
+    return getGraphifyHtmlArtifact(this.vaultRoot, project);
+  }
+
+  queryGraphifyProjectGraph(
+    project: string,
+    input: GraphifyGraphQueryInput,
+  ): GraphifyGraphQueryResult {
+    this.ensureInitialized();
+    return queryGraphifyProjectGraph(
+      this.vaultRoot,
+      project,
+      this.getGraphifyProjectStatus(project),
+      input,
+    );
+  }
+
+  getGraphifyNode(
+    project: string,
+    input: GraphifyGraphNodeInput,
+  ): GraphifyGraphNodeResult {
+    this.ensureInitialized();
+    return getGraphifyNodeContext(
+      this.vaultRoot,
+      project,
+      this.getGraphifyProjectStatus(project),
+      input,
+    );
+  }
+
+  getGraphifyNeighbors(
+    project: string,
+    input: GraphifyGraphNeighborsInput,
+  ): GraphifyGraphNeighborsResult {
+    this.ensureInitialized();
+    return getGraphifyNeighborsContext(
+      this.vaultRoot,
+      project,
+      this.getGraphifyProjectStatus(project),
+      input,
+    );
+  }
+
+  getGraphifyShortestPath(
+    project: string,
+    input: GraphifyGraphShortestPathInput,
+  ): GraphifyGraphShortestPathResult {
+    this.ensureInitialized();
+    return getGraphifyShortestPathContext(
+      this.vaultRoot,
+      project,
+      this.getGraphifyProjectStatus(project),
+      input,
+    );
+  }
+
+  explainGraphifyImpact(
+    project: string,
+    input: GraphifyGraphImpactInput,
+  ): GraphifyGraphImpactResult {
+    this.ensureInitialized();
+    return explainGraphifyImpact(
+      this.vaultRoot,
+      project,
+      this.getGraphifyProjectStatus(project),
+      input,
+    );
+  }
+
+  async recallWithGraphContext(
+    input: GraphifyRecallContextInput,
+    options?: RetrievalActivityOptions,
+  ): Promise<GraphifyRecallContextResult> {
+    this.ensureInitialized();
+    const startTime = Date.now();
+    const result = await buildRecallWithGraphContext({
+      recallContext: (query) => this.recallContext(query),
+      getGraphifyProjectStatus: (project) => this.getGraphifyProjectStatus(project),
+      queryGraphifyProjectGraph: (project, queryInput) => this.queryGraphifyProjectGraph(project, queryInput),
+      explainGraphifyImpact: (project, impactInput) => this.explainGraphifyImpact(project, impactInput),
+      getGraphifyShortestPath: (project, pathInput) => this.getGraphifyShortestPath(project, pathInput),
+      readGraphifyArtifactReport: (project, options) => this.readGraphifyArtifactReport(project, options),
+    }, input);
+
+    if (options?.logActivity !== false) {
+      logActivity(this.db, this.logsPath, {
+        sourceClient: options?.sourceClient ?? 'system',
+        project: input.project,
+        actionType: 'recall',
+        status: 'success',
+        latencyMs: Date.now() - startTime,
+        message: result.graph.used
+          ? `Recalled context with Graphify graph for ${input.project}`
+          : `Recalled Vault-only context for ${input.project}`,
+        metadata: {
+          recallKind: 'graph_context',
+          graphifyTool: true,
+          toolName: options?.toolName ?? 'vault_recall_with_graph_context',
+          graphUsed: result.graph.used,
+          graphStatus: result.graph.status,
+          graphFallbackReason: result.graph.fallbackReason,
+          graphFreshness: result.graph.freshness,
+          suggestedFileReadCount: result.suggestedNextFileReads.length,
+          estimatedTokens: result.budget.estimatedTokens,
+          maxTokens: result.budget.maxTokens,
+          ...toGraphifyTelemetryLogMetadata(result.telemetry),
+        },
+      });
+    }
+
+    return result;
+  }
+
+  recordGraphifyToolActivity(input: GraphifyToolActivityInput): void {
+    this.ensureInitialized();
+    logActivity(this.db, this.logsPath, {
+      sourceClient: input.sourceClient ?? 'mcp',
+      project: input.project,
+      actionType: input.actionType ?? 'recall',
+      status: input.status ?? 'success',
+      latencyMs: input.latencyMs,
+      message: input.message ?? `${input.toolName} completed`,
+      metadata: {
+        graphifyTool: true,
+        toolName: input.toolName,
+        ...compactActivityMetadata(input.metadata ?? {}),
+      },
+    });
   }
 
   // =========================================================================
@@ -794,9 +1166,69 @@ export class Vault {
       );
     }
   }
+
+  private markGraphifyStaleAfterMemoryChange(
+    item: MemoryItem,
+    updates?: Partial<MemoryItem>,
+  ): void {
+    try {
+      markGraphifyProjectStaleForMemoryChange({
+        getProjectStatus: (project) => getGraphifyProjectStatus(
+          this.db,
+          project,
+          this.getSetting('project_workspace_registry') as ProjectWorkspaceRegistry | undefined,
+        ),
+        getProjectState: (project) => getGraphifyProjectState(this.db, project),
+        upsertProjectState: (input) => upsertGraphifyProjectState(this.db, input),
+      }, item, updates);
+    } catch {
+      // Graphify is optional; stale marking must never block memory operations.
+    }
+  }
 }
 
 interface RetrievalActivityOptions {
   logActivity?: boolean;
   sourceClient?: string;
+  toolName?: string;
+}
+
+interface GraphifyToolActivityInput {
+  sourceClient?: string;
+  project?: string;
+  toolName: string;
+  actionType?: ActivityLogEntry['actionType'];
+  status?: string;
+  latencyMs?: number;
+  message?: string;
+  metadata?: Record<string, unknown>;
+}
+
+function compactActivityMetadata(metadata: Record<string, unknown>): Record<string, unknown> {
+  return Object.fromEntries(
+    Object.entries(metadata).map(([key, value]) => [key, compactActivityValue(value)]),
+  );
+}
+
+function compactActivityValue(value: unknown, depth = 0): unknown {
+  if (typeof value === 'string') {
+    return value.length > 64 ? `${value.slice(0, 61)}...` : value;
+  }
+  if (typeof value === 'number' || typeof value === 'boolean' || value === null) {
+    return value;
+  }
+  if (Array.isArray(value)) {
+    return depth >= 2 ? `[${value.length} item(s)]` : value.slice(0, 10).map((item) => compactActivityValue(item, depth + 1));
+  }
+  if (value && typeof value === 'object') {
+    if (depth >= 2) {
+      return '[object]';
+    }
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>)
+        .slice(0, 20)
+        .map(([key, nested]) => [key, compactActivityValue(nested, depth + 1)]),
+    );
+  }
+  return undefined;
 }

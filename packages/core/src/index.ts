@@ -70,6 +70,17 @@ export {
   OUTCOME_VALUES,
 } from './rules/controlled-values.js';
 
+export {
+  GRAPHIFY_BUILD_MODES,
+  GRAPHIFY_FRESHNESS_STATES,
+  GRAPHIFY_INSTALL_PROFILES,
+  GRAPHIFY_RUNTIME_MODES,
+  GraphifyBuildModeSchema,
+  GraphifyFreshnessStateSchema,
+  GraphifyInstallProfileSchema,
+  GraphifyRuntimeModeSchema,
+} from './rules/graphify.js';
+
 export type {
   MemoryType,
   RoutineType,
@@ -86,6 +97,221 @@ export type {
   TaskPriority,
   OutcomeValue,
 } from './rules/controlled-values.js';
+
+export type {
+  GraphifyBuildMode,
+  GraphifyFreshnessState,
+  GraphifyInstallProfile,
+  GraphifyRuntimeMode,
+} from './rules/graphify.js';
+
+export type {
+  GraphifyArtifactDiscoveryResult,
+  GraphifyArtifactPaths,
+  GraphifyArtifactJsonReadResult,
+  GraphifyArtifactReadAvailable,
+  GraphifyArtifactReadFallback,
+  GraphifyArtifactReadStatus,
+  GraphifyArtifactReportReadResult,
+  GraphifyArtifactTextReadAvailable,
+  GraphifyBuildRecord,
+  GraphifyBuildBlockedReason,
+  GraphifyCorpusExportResult,
+  GraphifyDebounceConfig,
+  GraphifyGraphContextBase,
+  GraphifyGraphContextStatus,
+  GraphifyGraphEdgeContext,
+  GraphifyGraphFallbackReason,
+  GraphifyGraphImpactInput,
+  GraphifyGraphImpactResult,
+  GraphifyGraphNeighborsInput,
+  GraphifyGraphNeighborsResult,
+  GraphifyGraphNodeContext,
+  GraphifyGraphNodeInput,
+  GraphifyGraphNodeResult,
+  GraphifyGraphQueryInput,
+  GraphifyGraphQueryResult,
+  GraphifyGraphShortestPathInput,
+  GraphifyGraphShortestPathResult,
+  GraphifyGraphStats,
+  GraphifyHtmlArtifactAvailable,
+  GraphifyHtmlArtifactMissing,
+  GraphifyHtmlArtifactResult,
+  GraphifyImpactFileContext,
+  GraphifyMemoryExportEntry,
+  GraphifyMemoryExportOpenLoopState,
+  GraphifyProjectStatus,
+  GraphifyProjectState,
+  GraphifyProjectUiState,
+  GraphifyRecallBudget,
+  GraphifyRecallContextInput,
+  GraphifyRecallContextResult,
+  GraphifyRecallGraphContext,
+  GraphifyRecallTelemetry,
+  GraphifyReportSnippet,
+  GraphifyRuntimeConfig,
+  GraphifyScheduledFullRebuildPlan,
+  GraphifyScheduledFullRebuildReason,
+  GraphifySemanticConfig,
+  GraphifySemanticModeStatus,
+  GraphifyShortestPathContext,
+  GraphifySourceRootCandidate,
+  GraphifySourceManifest,
+  ExportGraphifyCorpusInput,
+  PlanGraphifyScheduledFullRebuildInput,
+  RecordGraphifyBuildInput,
+  SaveGraphifyRuntimeConfigInput,
+  UpsertGraphifyProjectStateInput,
+} from './types/graphify.js';
+
+export {
+  getGraphifyExtensionPaths,
+  getGraphifyProjectPaths,
+} from './services/graphify-paths.service.js';
+
+export type {
+  GraphifyExtensionPaths,
+  GraphifyProjectPaths,
+} from './services/graphify-paths.service.js';
+
+export {
+  getDefaultGraphifyRuntimeConfig,
+  getGraphifyRuntimeConfig,
+  resetGraphifyRuntimeConfig,
+  saveGraphifyRuntimeConfig,
+} from './services/graphify-config.service.js';
+
+export {
+  getGraphifyBuildHistory,
+  getGraphifyProjectStatus,
+  getGraphifyProjectState,
+  recordGraphifyBuild,
+  setGraphifyProjectEnabled,
+  setGraphifyProjectSourceRoot,
+  upsertGraphifyProjectState,
+} from './services/graphify-project.service.js';
+
+export {
+  detectGraphifyRuntime,
+  planGraphifyInstall,
+  resolveGraphifyCommandForRuntimeConfig,
+} from './services/graphify-runtime.service.js';
+
+export {
+  exportGraphifyProjectCorpus,
+} from './services/graphify-corpus.service.js';
+
+export {
+  buildGraphifyProjectGraph,
+} from './services/graphify-build.service.js';
+
+export type {
+  BuildGraphifyProjectGraphInput,
+  GraphifyBuildProcessOptions,
+  GraphifyBuildProcessResult,
+  GraphifyBuildProcessRunner,
+  GraphifyProjectBuildResult,
+} from './services/graphify-build.service.js';
+
+export {
+  GraphifyBuildQueue,
+  markGraphifyProjectStale,
+  markGraphifyProjectStaleForMemoryChange,
+  shouldMarkGraphifyStaleForMemoryChange,
+} from './services/graphify-build-queue.service.js';
+
+export type {
+  GraphifyBuildQueueClock,
+  GraphifyBuildQueueOptions,
+  GraphifyBuildQueueProjectRuntimeState,
+  GraphifyBuildQueueProjectStore,
+  GraphifyBuildQueueReason,
+  GraphifyBuildQueueStaleResult,
+  GraphifyBuildQueueTimers,
+  GraphifyBuildQueueTrigger,
+  GraphifyBuildQueueTriggerResult,
+  GraphifyBuildQueueTriggerStatus,
+  GraphifyQueuedBuildExecutor,
+  GraphifyQueuedBuildRequest,
+} from './services/graphify-build-queue.service.js';
+
+export {
+  discoverGraphifyArtifacts,
+  getGraphifyHtmlArtifact,
+  readGraphifyArtifactJson,
+  readGraphifyArtifactReport,
+  readGraphStatsFromGraphJson,
+  resolveGraphifyArtifactPath,
+} from './services/graphify-artifact.service.js';
+
+export type {
+  GraphifyArtifactReadOptions,
+} from './services/graphify-artifact.service.js';
+
+export {
+  explainGraphifyImpact,
+  getGraphifyNeighborsContext,
+  getGraphifyNodeContext,
+  getGraphifyShortestPathContext,
+  queryGraphifyProjectGraph,
+} from './services/graphify-query.service.js';
+
+export {
+  assertGraphifySemanticBuildAllowed,
+  getGraphifySemanticModeStatus,
+  planGraphifyScheduledFullRebuild,
+} from './services/graphify-quality.service.js';
+
+export {
+  buildRecallWithGraphContext,
+} from './services/graphify-recall.service.js';
+
+export type {
+  RecallWithGraphContextSource,
+} from './services/graphify-recall.service.js';
+
+export {
+  buildGraphifyRecallTelemetry,
+  toGraphifyTelemetryLogMetadata,
+} from './services/graphify-telemetry.service.js';
+
+export type {
+  BuildGraphifyRecallTelemetryInput,
+} from './services/graphify-telemetry.service.js';
+
+export {
+  DEFAULT_GRAPHIFY_INSTRUCTION_BODY,
+  GRAPHIFY_INSTRUCTION_END_MARKER,
+  GRAPHIFY_INSTRUCTION_START_MARKER,
+  applyGraphifyInstructionSync,
+  buildGraphifyInstructionSection,
+  buildGraphifyInstructionSyncPreview,
+  previewGraphifyInstructionSync,
+  removeGraphifyInstructionSection,
+  upsertGraphifyInstructionSection,
+} from './services/graphify-instruction-sync.service.js';
+
+export type {
+  BuildGraphifyInstructionSyncPreviewInput,
+  GraphifyInstructionSyncInput,
+  GraphifyInstructionSyncOperation,
+  GraphifyInstructionSyncPreview,
+  GraphifyInstructionTarget,
+} from './services/graphify-instruction-sync.service.js';
+
+export type {
+  DetectGraphifyRuntimeInput,
+  GraphifyAvailableTools,
+  GraphifyCommandResult,
+  GraphifyCommandRunner,
+  GraphifyDetectedCli,
+  GraphifyDetectedTool,
+  GraphifyInstallCommandPreview,
+  GraphifyInstallPlan,
+  GraphifyInstaller,
+  GraphifyRuntimeStatus,
+  PlanGraphifyInstallInput,
+} from './services/graphify-runtime.service.js';
 
 // Validation schemas (useful for MCP server)
 export {

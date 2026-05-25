@@ -65,7 +65,7 @@ const PRIMARY_NAV: Array<NavItem<PrimaryTab>> = [
   { id: 'handoffs', label: 'Handoffs', description: 'Filtered transfer notes', icon: GitBranch },
   { id: 'decisions', label: 'Decisions', description: 'Promoted choices and rationale', icon: ShieldCheck },
   { id: 'loops', label: 'Loops', description: 'Open-loop control surface', icon: ListChecks },
-  { id: 'graph', label: 'Graph', description: 'Relationship preview', icon: Network },
+  { id: 'graph', label: 'Graph', description: 'Graphify project graph', icon: Network },
   { id: 'recall', label: 'Recall', description: 'Recall efficiency and logs', icon: Search },
   { id: 'analytics', label: 'Analytics', description: 'Operational telemetry', icon: BrainCircuit },
   { id: 'agent', label: 'Agent', description: 'Runtime, queue, executor', icon: Bot },
@@ -105,7 +105,7 @@ const TAB_META: Record<AppTab, { title: string; description: string }> = {
   },
   graph: {
     title: 'Graph',
-    description: 'Read-only relationship preview built from stored related memory IDs, files, and projects.',
+    description: 'Graphify project artifacts, build status, reports, and Vault relationship fallback.',
   },
   recall: {
     title: 'Recall',

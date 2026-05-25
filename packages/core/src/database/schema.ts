@@ -244,3 +244,76 @@ export const tasks = sqliteTable(
     index('idx_tasks_parent_task_uid').on(table.parentTaskUid),
   ],
 );
+
+// ---------------------------------------------------------------------------
+// graphify_project_state — Queryable product state for the optional Graphify
+// extension. Machine-local runtime paths live in JSON config, not here.
+// ---------------------------------------------------------------------------
+export const graphifyProjectState = sqliteTable(
+  'graphify_project_state',
+  {
+    id: integer('id').primaryKey({ autoIncrement: true }),
+    project: text('project').unique().notNull(),
+    enabled: integer('enabled', { mode: 'boolean' }).notNull().default(true),
+    sourceRoot: text('source_root'),
+    freshness: text('freshness').notNull().default('missing'),
+    buildMode: text('build_mode').notNull().default('fast'),
+    latestBuildId: text('latest_build_id'),
+    graphJsonPath: text('graph_json_path'),
+    graphHtmlPath: text('graph_html_path'),
+    graphReportPath: text('graph_report_path'),
+    graphSvgPath: text('graph_svg_path'),
+    nodeCount: integer('node_count'),
+    edgeCount: integer('edge_count'),
+    communityCount: integer('community_count'),
+    failureCount: integer('failure_count').notNull().default(0),
+    lastError: text('last_error'),
+    detectedGraphifyVersion: text('detected_graphify_version'),
+    lastBuildStartedAt: text('last_build_started_at'),
+    lastBuildCompletedAt: text('last_build_completed_at'),
+    createdAt: text('created_at')
+      .notNull()
+      .$defaultFn(() => new Date().toISOString()),
+    updatedAt: text('updated_at')
+      .notNull()
+      .$defaultFn(() => new Date().toISOString()),
+  },
+  (table) => [
+    index('idx_graphify_project_state_project').on(table.project),
+    index('idx_graphify_project_state_freshness').on(table.freshness),
+    index('idx_graphify_project_state_enabled').on(table.enabled),
+    index('idx_graphify_project_state_latest_build_id').on(table.latestBuildId),
+  ],
+);
+
+// ---------------------------------------------------------------------------
+// graphify_builds — Build history and artifact snapshots for Graphify.
+// ---------------------------------------------------------------------------
+export const graphifyBuilds = sqliteTable(
+  'graphify_builds',
+  {
+    id: integer('id').primaryKey({ autoIncrement: true }),
+    buildId: text('build_id').unique().notNull(),
+    project: text('project').notNull(),
+    status: text('status').notNull(),
+    buildMode: text('build_mode').notNull(),
+    startedAt: text('started_at'),
+    completedAt: text('completed_at'),
+    artifactJson: text('artifact_json'),
+    graphStatsJson: text('graph_stats_json'),
+    detectedGraphifyVersion: text('detected_graphify_version'),
+    logPath: text('log_path'),
+    errorMessage: text('error_message'),
+    createdAt: text('created_at')
+      .notNull()
+      .$defaultFn(() => new Date().toISOString()),
+    updatedAt: text('updated_at')
+      .notNull()
+      .$defaultFn(() => new Date().toISOString()),
+  },
+  (table) => [
+    index('idx_graphify_builds_project').on(table.project),
+    index('idx_graphify_builds_status').on(table.status),
+    index('idx_graphify_builds_started_at').on(table.startedAt),
+  ],
+);

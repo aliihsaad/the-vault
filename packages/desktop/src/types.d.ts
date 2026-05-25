@@ -1,5 +1,24 @@
 /// <reference types="vite/client" />
 
+import type {
+  GraphifyArtifactDiscoveryResult,
+  GraphifyArtifactReportReadResult,
+  GraphifyBuildMode,
+  GraphifyBuildRecord,
+  GraphifyHtmlArtifactResult,
+  GraphifyInstallPlan,
+  GraphifyProjectBuildResult,
+  GraphifyProjectState,
+  GraphifyProjectStatus,
+  GraphifyRuntimeConfig,
+  GraphifyRuntimeStatus,
+  SaveGraphifyRuntimeConfigInput,
+} from '@the-vault/core';
+import type {
+  GraphifyArtifactUrlRequest,
+  GraphifyArtifactUrlResponse,
+} from './graphify-artifact-url.js';
+
 declare global {
   interface VaultResponse<T> {
     success: boolean;
@@ -634,6 +653,31 @@ declare global {
     getOpenRouterModels: (apiKey: string) => Promise<VaultResponse<OpenRouterModelSummary[]>>;
     testOpenRouterApiKey: (apiKey: string) => Promise<VaultResponse<OpenRouterKeyTestResult>>;
     executeVaultApiAgent: (input: VaultApiAgentExecutionInput) => Promise<VaultResponse<VaultApiAgentExecutionResult>>;
+    getGraphifyRuntimeConfig: () => Promise<VaultResponse<GraphifyRuntimeConfig>>;
+    saveGraphifyRuntimeConfig: (input: SaveGraphifyRuntimeConfigInput) => Promise<VaultResponse<GraphifyRuntimeConfig>>;
+    detectGraphifyRuntime: () => Promise<VaultResponse<GraphifyRuntimeStatus>>;
+    planGraphifyInstall: (input: {
+      runtimeMode: GraphifyRuntimeConfig['runtimeMode'];
+      availableTools: {
+        python: boolean;
+        uv: boolean;
+        pipx: boolean;
+      };
+      extras?: string[];
+      localSourcePath?: string | null;
+    }) => Promise<VaultResponse<GraphifyInstallPlan>>;
+    getGraphifyProjectStatus: (project: string) => Promise<VaultResponse<GraphifyProjectStatus>>;
+    setGraphifyProjectSourceRoot: (project: string, sourceRoot: string) => Promise<VaultResponse<GraphifyProjectState>>;
+    chooseGraphifyProjectSourceRoot: (project: string) => Promise<VaultResponse<GraphifyProjectState | null>>;
+    setGraphifyProjectEnabled: (project: string, enabled: boolean) => Promise<VaultResponse<GraphifyProjectState>>;
+    getGraphifyBuildHistory: (project: string, limit?: number) => Promise<VaultResponse<GraphifyBuildRecord[]>>;
+    getGraphifyArtifacts: (project: string) => Promise<VaultResponse<GraphifyArtifactDiscoveryResult>>;
+    getGraphifyHtmlArtifact: (project: string) => Promise<VaultResponse<GraphifyHtmlArtifactResult>>;
+    readGraphifyArtifactReport: (project: string, options?: { maxBytes?: number }) => Promise<VaultResponse<GraphifyArtifactReportReadResult>>;
+    getGraphifyArtifactUrl: (input: GraphifyArtifactUrlRequest) => Promise<VaultResponse<GraphifyArtifactUrlResponse>>;
+    buildGraphifyProjectGraph: (input: { project: string; buildMode?: GraphifyBuildMode }) => Promise<VaultResponse<GraphifyProjectBuildResult>>;
+    openGraphifyArtifactFolder: (project: string) => Promise<VaultResponse<string>>;
+    exportGraphifyArtifacts: (project: string) => Promise<VaultResponse<{ targetRoot: string; copied: string[] } | null>>;
     readSkillFile: (relativePath: string) => Promise<VaultResponse<VaultSkillFile>>;
     getVaultStructure: () => Promise<VaultResponse<VaultStructureSnapshot>>;
     readVaultFilePreview: (relativePath: string) => Promise<VaultResponse<VaultFilePreview>>;

@@ -44,6 +44,17 @@ export type RecallSummaryMetric = {
   latestTimestamp: string | null;
 };
 
+export type GraphifyTelemetrySummaryMetric = {
+  graphContextRecallCount: number;
+  graphQueryCount: number;
+  fallbackCount: number;
+  filesAvoided: number;
+  estimatedTokensSaved: number;
+  latestTimestamp: string | null;
+  freshnessMix: Record<string, number>;
+  fallbackReasons: Array<{ reason: string; count: number }>;
+};
+
 export type MemoryTypeMetric = {
   type: VaultMemoryType;
   count: number;
@@ -238,6 +249,37 @@ export function buildRecallSummary(
       ? recallLogs.reduce((sum, log) => sum + extractTopScore(log), 0) / recallLogs.length
       : 0,
     latestTimestamp,
+  };
+}
+
+export function buildGraphifyTelemetrySummary(logs: VaultLogEntry[]): GraphifyTelemetrySummaryMetric {
+  const graphLogs = logs.filter((log) => log.metadata?.recallKind === 'graph_context');
+  const freshnessMix = countMetadataValues(graphLogs, 'graphFreshness');
+  const fallbackReasonCounts = countMetadataValues(
+    graphLogs.filter((log) => typeof log.metadata?.graphFallbackReason === 'string'),
+    'graphFallbackReason',
+  );
+  const latestTimestamp = graphLogs.reduce<string | null>((latest, log) => {
+    if (!log.timestamp) {
+      return latest;
+    }
+    if (!latest || new Date(log.timestamp).getTime() > new Date(latest).getTime()) {
+      return log.timestamp;
+    }
+    return latest;
+  }, null);
+
+  return {
+    graphContextRecallCount: graphLogs.length,
+    graphQueryCount: graphLogs.reduce((sum, log) => sum + metadataNumber(log, 'graphQueriesPerRecall'), 0),
+    fallbackCount: graphLogs.filter((log) => typeof log.metadata?.graphFallbackReason === 'string').length,
+    filesAvoided: graphLogs.reduce((sum, log) => sum + metadataNumber(log, 'graphFilesAvoidedEstimate'), 0),
+    estimatedTokensSaved: graphLogs.reduce((sum, log) => sum + metadataNumber(log, 'graphEstimatedTokensSaved'), 0),
+    latestTimestamp,
+    freshnessMix,
+    fallbackReasons: Object.entries(fallbackReasonCounts)
+      .map(([reason, count]) => ({ reason, count }))
+      .sort((left, right) => right.count - left.count || left.reason.localeCompare(right.reason)),
   };
 }
 
@@ -513,6 +555,23 @@ function countBy<T>(items: T[], getKey: (item: T) => string): Map<string, number
     map.set(key, (map.get(key) || 0) + 1);
   }
   return map;
+}
+
+function countMetadataValues(logs: VaultLogEntry[], key: string): Record<string, number> {
+  const counts: Record<string, number> = {};
+  for (const log of logs) {
+    const value = log.metadata?.[key];
+    if (typeof value !== 'string' || value.length === 0) {
+      continue;
+    }
+    counts[value] = (counts[value] || 0) + 1;
+  }
+  return counts;
+}
+
+function metadataNumber(log: VaultLogEntry, key: string): number {
+  const value = log.metadata?.[key];
+  return typeof value === 'number' && Number.isFinite(value) ? value : 0;
 }
 
 function shortFileName(filePath: string): string {
