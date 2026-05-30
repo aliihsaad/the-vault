@@ -7,10 +7,14 @@ describe('desktop shell navigation', () => {
   const overviewSource = readFileSync(join(process.cwd(), 'packages/desktop/src/components/OverviewCockpitView.tsx'), 'utf8');
   const operationsSource = readFileSync(join(process.cwd(), 'packages/desktop/src/components/CockpitOperationsViews.tsx'), 'utf8');
   const settingsSource = readFileSync(join(process.cwd(), 'packages/desktop/src/components/SettingsView.tsx'), 'utf8');
+  const collabSource = readFileSync(join(process.cwd(), 'packages/desktop/src/components/VaultCollabView.tsx'), 'utf8');
+  const collabViewModelSource = readFileSync(join(process.cwd(), 'packages/desktop/src/vault-collab-view-model.ts'), 'utf8');
   const connectPanelSource = readFileSync(join(process.cwd(), 'packages/desktop/src/components/ConnectPanel.tsx'), 'utf8');
   const electronMainSource = readFileSync(join(process.cwd(), 'packages/desktop/electron/main.ts'), 'utf8');
   const electronPreloadSource = readFileSync(join(process.cwd(), 'packages/desktop/electron/preload.ts'), 'utf8');
   const desktopTypesSource = readFileSync(join(process.cwd(), 'packages/desktop/src/types.d.ts'), 'utf8');
+  const codexSkillSource = readFileSync(join(process.cwd(), 'skills/codex-vault-skill.md'), 'utf8');
+  const claudeSkillSource = readFileSync(join(process.cwd(), 'skills/claude-vault-skill.md'), 'utf8');
 
   it('removes Recall Console from the primary desktop shell', () => {
     expect(appSource).not.toContain('Recall Console');
@@ -41,7 +45,7 @@ describe('desktop shell navigation', () => {
 
   it('derives overview recall telemetry from the same recall-only window as the Recall page', () => {
     expect(overviewSource).toContain('const [recallLogs, setRecallLogs]');
-    expect(overviewSource).toContain("window.vaultAPI.getRecentLogs(420, { actionType: 'recall' })");
+    expect(overviewSource).toContain("window.vaultAPI.getRecentLogs(RECALL_ANALYTICS_LOG_LIMIT, { actionType: 'recall', dateFrom: getRecallAnalyticsDateFrom() })");
     expect(overviewSource).toContain('buildRecallTrend(recallLogs, 14');
     expect(overviewSource).not.toContain('buildRecallTrend(logs, 7');
     expect(overviewSource).not.toContain('over 7 days');
@@ -52,6 +56,8 @@ describe('desktop shell navigation', () => {
     expect(operationsSource).toContain('Compact recall log');
     expect(operationsSource).toContain('Activity keeps full event detail');
     expect(operationsSource).toContain('recall-cta-grid');
+    expect(operationsSource).toContain("window.vaultAPI.getRecentLogs(RECALL_ANALYTICS_LOG_LIMIT, { actionType: 'recall', dateFrom: getRecallAnalyticsDateFrom() })");
+    expect(operationsSource).not.toContain("window.vaultAPI.getRecentLogs(420, { actionType: 'recall' })");
   });
 
   it('gives Handoffs and Decisions type-aware cockpit surfaces', () => {
@@ -99,6 +105,198 @@ describe('desktop shell navigation', () => {
     expect(handlerSource).toContain('graphifyCommand:');
   });
 
+  it('exposes Vault Collab extension install and detect wiring through Settings', () => {
+    expect(electronMainSource).toContain("ipcMain.handle('vault:getVaultCollabRuntimeConfig'");
+    expect(electronMainSource).toContain("ipcMain.handle('vault:resetVaultCollabRuntimeConfig'");
+    expect(electronMainSource).toContain("ipcMain.handle('vault:detectVaultCollabRuntime'");
+    expect(electronMainSource).toContain("ipcMain.handle('vault:planVaultCollabInstall'");
+    expect(electronMainSource).toContain("ipcMain.handle('vault:detectVaultCollabSourcePath'");
+    expect(electronMainSource).toContain("ipcMain.handle('vault:useDetectedVaultCollabSourcePath'");
+    expect(electronMainSource).toContain("ipcMain.handle('vault:chooseVaultCollabSourcePath'");
+    expect(electronPreloadSource).toContain('getVaultCollabRuntimeConfig');
+    expect(electronPreloadSource).toContain('resetVaultCollabRuntimeConfig');
+    expect(electronPreloadSource).toContain('useDetectedVaultCollabSourcePath');
+    expect(electronPreloadSource).toContain('chooseVaultCollabSourcePath');
+    expect(desktopTypesSource).toContain('VaultCollabRuntimeConfig');
+    expect(settingsSource).toContain('Vault Collab');
+    expect(settingsSource).toContain('https://github.com/aliihsaad/vault-collab');
+    expect(settingsSource).not.toContain("import { VAULT_COLLAB_REPOSITORY_URL } from '@the-vault/core'");
+    expect(settingsSource).toContain('npm exec health check');
+    expect(settingsSource).toContain('GitHub managed install');
+    expect(settingsSource).toContain('vaultCollabStatusBadge');
+    expect(settingsSource).toContain('Use GitHub install');
+    expect(settingsSource).toContain('Install preview');
+    expect(settingsSource).toContain('Use local repo');
+    expect(settingsSource).toContain('Choose local source');
+    expect(settingsSource).toContain('vault-collab-install-plan');
+  });
+
+  it('wires the read-only Vault Collab dashboard into a separate workspace tab', () => {
+    expect(electronMainSource).toContain("ipcMain.handle('vault:getVaultCollabDashboardSnapshot'");
+    expect(electronPreloadSource).toContain('getVaultCollabDashboardSnapshot');
+    expect(desktopTypesSource).toContain('VaultCollabDashboardSnapshot');
+    expect(desktopTypesSource).toContain('getVaultCollabDashboardSnapshot');
+    expect(appSource).toContain("import { VaultCollabView }");
+    expect(appSource).toContain("| 'collab'");
+    expect(appSource).toContain('const EXTENSION_NAV');
+    expect(appSource).toContain("label: 'Extensions'");
+    expect(appSource).toContain("id: 'graph', label: 'Graphify'");
+    expect(appSource).toContain("id: 'collab', label: 'Vault Collab'");
+    expect(appSource).toContain("title: 'Vault Collab'");
+    expect(appSource).toContain("activeTab === 'collab' ? <VaultCollabView />");
+    expect(collabSource).toContain('window.vaultAPI.getVaultCollabDashboardSnapshot');
+    expect(collabSource).toContain('Agent roster');
+    expect(collabSource).toContain('Handoff queue');
+    expect(collabSource).toContain('Event timeline');
+    expect(collabSource).toContain('vault-collab-ops-grid');
+    expect(collabSource).not.toContain('Session mesh');
+    expect(collabSource).not.toContain('vault-collab-live-map');
+    expect(collabSource).not.toContain('vault-collab-hero');
+    expect(collabSource).not.toContain("from '@the-vault/core'");
+    expect(agentSource).not.toContain('Vault Collab');
+    expect(agentSource).not.toContain('getVaultCollabDashboardSnapshot');
+  });
+
+  it('renders Vault Collab v2 read-only agent, queue, dependency, and discussion fields', () => {
+    const collabModelSurface = `${collabSource}\n${collabViewModelSource}`;
+
+    expect(collabModelSurface).toContain('agentDisplayName');
+    expect(collabModelSurface).toContain('agentName');
+    expect(collabModelSurface).toContain('agentRole');
+    expect(collabModelSurface).toContain('queueKey');
+    expect(collabModelSurface).toContain('queuePosition');
+    expect(collabModelSurface).toContain('dependsOnHandoffUid');
+    expect(collabModelSurface).toContain('labels');
+    expect(collabModelSurface).toContain('discussionThreads');
+    expect(collabSource).toContain('Discussion threads');
+    expect(collabSource).toContain('buildVaultCollabDashboardViewModel');
+    expect(collabSource).not.toContain('Manual orchestration only');
+    expect(collabSource).not.toContain('sessionToken');
+    expect(collabSource).not.toContain('claimHandoff');
+    expect(collabSource).not.toContain('resolveHandoff');
+    expect(collabSource).not.toContain('releaseHandoff');
+  });
+
+  it('renders Vault Collab launch requests as a read-only dashboard lane', () => {
+    const appCssSource = readFileSync(join(process.cwd(), 'packages/desktop/src/app.css'), 'utf8');
+    const collabModelSurface = `${collabSource}\n${collabViewModelSource}`;
+
+    expect(collabSource).toContain('Launch requests');
+    expect(collabSource).toContain('model.launchRequestRows');
+    expect(collabSource).toContain('vault-collab-launch-section');
+    expect(collabSource).toContain('vault-collab-launch-card');
+    expect(collabModelSurface).toContain('launchRequests');
+    expect(collabModelSurface).toContain('activeLaunchRequests');
+    expect(collabViewModelSource).toContain('launch_request.');
+    expect(appCssSource).toContain('vault-collab-launch-section');
+    expect(appCssSource).toContain('vault-collab-command-preview');
+    expect(collabSource).not.toContain('approveLaunchRequest');
+    expect(collabSource).not.toContain('rejectLaunchRequest');
+    expect(collabSource).not.toContain('cancelLaunchRequest');
+    expect(collabSource).not.toContain('markLaunchRequestRunning');
+  });
+
+  it('renders Vault Collab permission-needed and attention indicators as read-only UI', () => {
+    expect(collabViewModelSource).toContain('permissionNeeded');
+    expect(collabViewModelSource).toContain('permissionRequestEvents');
+    expect(collabViewModelSource).toContain('attentionPingEvents');
+    expect(collabSource).toContain('Permission needed');
+    expect(collabViewModelSource).toContain('session.permission_requested');
+    expect(collabViewModelSource).toContain('handoff.permission_requested');
+    expect(collabViewModelSource).toContain('session.pinged');
+    expect(collabViewModelSource).toContain('permissionRequest');
+    expect(collabSource).toContain('vault-collab-attention-card');
+    expect(collabSource).toContain('vault-collab-attention-row');
+    expect(collabSource).toContain('vault-collab-permission-note');
+    expect(collabSource).not.toContain('requestSessionPermission');
+    expect(collabSource).not.toContain('requestHandoffPermission');
+    expect(collabSource).not.toContain('pingSession');
+  });
+
+  it('lets Vault Collab panels collapse for compact screens', () => {
+    const appCssSource = readFileSync(join(process.cwd(), 'packages/desktop/src/app.css'), 'utf8');
+
+    expect(collabSource).toContain('toggleCollapsedPanel');
+    expect(collabSource).toContain('vault-collab-panel-toggle');
+    expect(collabSource).toContain('aria-expanded');
+    expect(collabSource).toContain('vault-collab-panel-collapsed');
+    expect(appCssSource).toContain('vault-collab-panel-toggle');
+    expect(appCssSource).toContain('vault-collab-panel-collapsed');
+    expect(appCssSource).toContain('max-height: 0');
+  });
+
+  it('respects reduced motion for Vault Collab attention animation', () => {
+    const appCssSource = readFileSync(join(process.cwd(), 'packages/desktop/src/app.css'), 'utf8');
+
+    expect(appCssSource).toContain('vault-collab-attention-card');
+    expect(appCssSource).toContain('vault-collab-attention-row');
+    expect(appCssSource).toContain('vault-collab-permission-note');
+    expect(appCssSource).toContain('@keyframes vault-collab-attention-pulse');
+    expect(appCssSource).toContain('@media (prefers-reduced-motion: reduce)');
+    expect(appCssSource).toContain('.vault-collab-attention-card');
+  });
+
+  it('teaches Codex and Claude to bootstrap their own brain projects', () => {
+    expect(codexSkillSource).toContain('Codex-brain');
+    expect(codexSkillSource).toContain('vault_list_projects');
+    expect(codexSkillSource).toContain('bootstrap brain memory');
+    expect(codexSkillSource).toContain('Do not save ordinary project implementation details to Codex-brain');
+
+    expect(claudeSkillSource).toContain('claude-code-brain');
+    expect(claudeSkillSource).toContain('claude-desktop-brain');
+    expect(claudeSkillSource).toContain('vault_list_projects');
+    expect(claudeSkillSource).toContain('bootstrap brain memory');
+    expect(claudeSkillSource).toContain('Do not save ordinary project implementation details to a brain project');
+  });
+
+  it('documents Vault Collab MCP as the live session handoff layer in skills and setup UI', () => {
+    for (const source of [codexSkillSource, claudeSkillSource, connectPanelSource, settingsSource]) {
+      expect(source).toContain('Vault Collab MCP');
+      expect(source).toContain('vault_collab_register_session');
+      expect(source).toContain('vault_collab_list_inbox');
+      expect(source).toContain('vault_collab_claim_handoff');
+    }
+
+    expect(codexSkillSource).toContain('Never auto-claim while actively working');
+    expect(claudeSkillSource).toContain('Never auto-claim while actively working');
+    expect(codexSkillSource).toContain('ask one short opt-in question');
+    expect(claudeSkillSource).toContain('ask one short opt-in question');
+    expect(codexSkillSource).toContain('Use Vault Collab for this session?');
+    expect(claudeSkillSource).toContain('Use Vault Collab for this session?');
+    expect(codexSkillSource).toContain('use vault collab');
+    expect(codexSkillSource).toContain('current Codex builds reject unknown unprefixed slash commands');
+    expect(claudeSkillSource).toContain('/vault-collab');
+    expect(settingsSource).toContain('/vault-collab');
+    expect(connectPanelSource).toContain('Connect Vault Collab MCP');
+    expect(connectPanelSource).toContain('Codex uses prompt shortcut');
+    expect(settingsSource).toContain('brain bootstrap');
+    expect(settingsSource).toContain('Codex-brain');
+    expect(settingsSource).toContain('claude-code-brain');
+    expect(settingsSource).toContain('claude-desktop-brain');
+  });
+
+  it('offers one-click Vault Collab MCP wiring and /vault-collab command installation', () => {
+    expect(electronMainSource).toContain("ipcMain.handle('vault:connectVaultCollabClients'");
+    expect(electronMainSource).toContain("ipcMain.handle('vault:disconnectVaultCollabClients'");
+    expect(electronMainSource).toContain('resolveVaultCollabMcpServerPath');
+    expect(electronMainSource).toContain('vault-collab-mcp');
+    expect(electronMainSource).toContain('vault-collab.md');
+    expect(electronMainSource).toContain('buildVaultCollabCommandContent');
+    expect(electronMainSource).toContain('connectVaultCollabClients');
+    expect(electronMainSource).toContain('disconnectVaultCollabClients');
+    expect(electronPreloadSource).toContain('connectVaultCollabClients');
+    expect(electronPreloadSource).toContain('disconnectVaultCollabClients');
+    expect(desktopTypesSource).toContain('vaultCollab:');
+    expect(desktopTypesSource).toContain('connectVaultCollabClients');
+    expect(desktopTypesSource).toContain('disconnectVaultCollabClients');
+    expect(connectPanelSource).toContain('Connect Vault Collab MCP');
+    expect(connectPanelSource).toContain('/vault-collab');
+    expect(connectPanelSource).toContain('use vault collab');
+    expect(connectPanelSource).toContain('Codex uses prompt shortcut');
+    expect(connectPanelSource).toContain('connectVaultCollabClients');
+    expect(connectPanelSource).toContain('disconnectVaultCollabClients');
+  });
+
   it('hides the Graphify install preview after the runtime is installed', () => {
     const installPreviewIndex = settingsSource.indexOf('<div className="field-label">Install preview</div>');
     const guardStart = settingsSource.lastIndexOf("graphifyModel.state !== 'installed'", installPreviewIndex);
@@ -129,6 +327,16 @@ describe('desktop shell navigation', () => {
     expect(operationsSource).toContain('Change source folder');
     expect(operationsSource).toContain('graphifyModel.actions.changeSourceRoot.enabled');
     expect(operationsSource).toContain('Change folder');
+    expect(operationsSource).toContain('graphify-source-actions');
+    expect(operationsSource).not.toContain('graphify-disable-row');
+  });
+
+  it('lets the Graphify graph use the full workspace instead of a constrained panel', () => {
+    expect(appSource).toContain("content-scroll ${activeTab === 'graph' ? 'content-scroll-graph' : ''}");
+    expect(appSource).toContain("content-surface ${activeTab === 'graph' ? 'content-surface-graph' : ''}");
+    expect(operationsSource).toContain('<div className="ops-layout graphify-workspace">');
+    expect(operationsSource).toContain('<section className="graphify-dashboard">');
+    expect(operationsSource).not.toContain('<section className="panel graphify-dashboard">');
   });
 
   it('uses a large enough Graphify report budget for report-only builds', () => {

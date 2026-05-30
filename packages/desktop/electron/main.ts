@@ -2,7 +2,7 @@
 import { app, BrowserWindow, dialog, ipcMain, net, protocol, safeStorage, shell } from 'electron';
 import { spawn } from 'node:child_process';
 import { createCipheriv, createDecipheriv, createHash, randomBytes, scryptSync } from 'node:crypto';
-import { existsSync, watch as fsWatch, type FSWatcher } from 'node:fs';
+import { existsSync, readFileSync, watch as fsWatch, type FSWatcher } from 'node:fs';
 import { access, copyFile, mkdir, readFile, readdir, stat, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { basename, dirname, extname, isAbsolute, join, relative, resolve } from 'node:path';
@@ -11,9 +11,13 @@ import {
   detectDuplicates,
   GraphifyBuildQueue,
   OpenRouterClient,
+  executeVaultCollabAction,
+  executeVaultCollabDashboardSessionRegistration,
+  executeVaultCollabHandoffActions,
   portableDecrypt,
   portableEncrypt,
   resolveGraphifyCommandForRuntimeConfig,
+  resolveVaultCollabMcpServerPath,
   Vault,
 } from '@the-vault/core';
 import type { MemoryItemDetail, MemoryPack, ModelRoutingTable, RecallQuery } from '@the-vault/core';
@@ -37,6 +41,13 @@ import type {
   GraphifyBuildProcessResult,
   GraphifyCommandResult,
   GraphifyHtmlArtifactResult,
+  VaultCollabActionResult,
+  VaultCollabDashboardActionInput,
+  VaultCollabDashboardActor,
+  VaultCollabHandoffActionSet,
+  VaultCollabDashboardOptions,
+  VaultCollabRuntimeConfig,
+  SaveVaultCollabRuntimeConfigInput,
 } from '@the-vault/core';
 
 // Recreate __dirname for ESM
@@ -100,6 +111,14 @@ const DEFAULT_RECALL_CONTEXT_LIMIT = 6;
 const DEFAULT_RECALL_TOP_MATCH_LIMIT = 4;
 const DEFAULT_RECALL_DETAIL_EXPANSION_LIMIT = 2;
 const DEFAULT_RECALL_SIDE_CHANNEL_LIMIT = 2;
+
+interface VaultCollabSourcePathDetection {
+  detected: boolean;
+  path: string | null;
+  reason: string;
+}
+
+let vaultCollabDashboardActor: VaultCollabDashboardActor | null = null;
 
 protocol.registerSchemesAsPrivileged([
   {
@@ -215,6 +234,64 @@ function disposeGraphifyAutoBuild(): void {
   }
   graphifyWatchers.clear();
   graphifyBuildQueue.dispose();
+}
+
+function detectVaultCollabSourcePath(): VaultCollabSourcePathDetection {
+  const candidates = Array.from(new Set([
+    process.env.VAULT_COLLAB_SOURCE,
+    resolve(__dirname, '../../../..', 'vault-collab'),
+    resolve(process.cwd(), '..', 'vault-collab'),
+    join(homedir(), 'Desktop', 'Projects', 'vault-collab'),
+  ].filter((candidate): candidate is string => Boolean(candidate?.trim()))));
+
+  for (const candidate of candidates) {
+    if (isVaultCollabSourceRoot(candidate)) {
+      return {
+        detected: true,
+        path: candidate,
+        reason: 'Found a local vault-collab source checkout.',
+      };
+    }
+  }
+
+  return {
+    detected: false,
+    path: null,
+    reason: 'No local vault-collab source checkout was found. Use managed install when available, or choose a source folder manually.',
+  };
+}
+
+function isVaultCollabSourceRoot(candidate: string): boolean {
+  const packagePath = join(candidate, 'package.json');
+  if (!existsSync(packagePath)) {
+    return false;
+  }
+
+  try {
+    const parsed = JSON.parse(readFileSync(packagePath, 'utf8')) as Record<string, unknown>;
+    return parsed.name === 'vault-collab';
+  } catch {
+    return false;
+  }
+}
+
+function getVaultCollabDashboardActionRuntimeConfig(): VaultCollabRuntimeConfig {
+  const config = vault.getVaultCollabRuntimeConfig();
+  if (config.runtimeMode !== 'managed') {
+    return config;
+  }
+
+  const detected = detectVaultCollabSourcePath();
+  const localCliPath = detected.path ? join(detected.path, 'dist', 'cli.js') : null;
+  if (!detected.path || !localCliPath || !existsSync(localCliPath)) {
+    return config;
+  }
+
+  return {
+    ...config,
+    runtimeMode: 'localSource',
+    localSourceCheckoutPath: detected.path,
+  };
 }
 
 function registerGraphifyArtifactProtocol(): void {
@@ -1832,6 +1909,151 @@ app.whenReady().then(() => {
     }
   });
 
+  ipcMain.handle('vault:getVaultCollabRuntimeConfig', () => {
+    try {
+      return { success: true, data: vault.getVaultCollabRuntimeConfig() };
+    } catch (e: any) {
+      return { success: false, error: e.message };
+    }
+  });
+
+  ipcMain.handle('vault:saveVaultCollabRuntimeConfig', (_, input) => {
+    try {
+      return { success: true, data: vault.saveVaultCollabRuntimeConfig((input || {}) as SaveVaultCollabRuntimeConfigInput) };
+    } catch (e: any) {
+      return { success: false, error: e.message };
+    }
+  });
+
+  ipcMain.handle('vault:resetVaultCollabRuntimeConfig', () => {
+    try {
+      return { success: true, data: vault.resetVaultCollabRuntimeConfig() };
+    } catch (e: any) {
+      return { success: false, error: e.message };
+    }
+  });
+
+  ipcMain.handle('vault:detectVaultCollabRuntime', () => {
+    try {
+      return { success: true, data: vault.detectVaultCollabRuntime() };
+    } catch (e: any) {
+      return { success: false, error: e.message };
+    }
+  });
+
+  ipcMain.handle('vault:planVaultCollabInstall', () => {
+    try {
+      return { success: true, data: vault.planVaultCollabInstall() };
+    } catch (e: any) {
+      return { success: false, error: e.message };
+    }
+  });
+
+  ipcMain.handle('vault:getVaultCollabDashboardSnapshot', (_, options) => {
+    try {
+      const input = options && typeof options === 'object' ? options as VaultCollabDashboardOptions : undefined;
+      return { success: true, data: vault.getVaultCollabDashboardSnapshot(input) };
+    } catch (e: any) {
+      return { success: false, error: e.message };
+    }
+  });
+
+  async function ensureVaultCollabDashboardActor(): Promise<VaultCollabDashboardActor> {
+    if (vaultCollabDashboardActor) {
+      return vaultCollabDashboardActor;
+    }
+
+    const registration = await executeVaultCollabDashboardSessionRegistration(
+      getVaultCollabDashboardActionRuntimeConfig(),
+      {
+        project: 'the-vault',
+        workspacePath: resolve(__dirname, '../../..'),
+      },
+    );
+    vaultCollabDashboardActor = registration.actor;
+    return registration.actor;
+  }
+
+  ipcMain.handle('vault:performVaultCollabDashboardAction', async (_, input) => {
+    try {
+      const actor = await ensureVaultCollabDashboardActor();
+      const data = await executeVaultCollabAction(
+        getVaultCollabDashboardActionRuntimeConfig(),
+        actor,
+        (input || {}) as VaultCollabDashboardActionInput,
+      ) as VaultCollabActionResult;
+      return { success: data.ok, data, error: data.error || undefined };
+    } catch (e: any) {
+      return { success: false, error: e.message };
+    }
+  });
+
+  ipcMain.handle('vault:getVaultCollabHandoffActions', async (_, handoffUid) => {
+    try {
+      if (typeof handoffUid !== 'string' || !handoffUid.trim()) {
+        throw new Error('Handoff UID is required.');
+      }
+
+      const actor = await ensureVaultCollabDashboardActor();
+      const data = await executeVaultCollabHandoffActions(
+        getVaultCollabDashboardActionRuntimeConfig(),
+        actor,
+        handoffUid,
+      );
+      return { success: data.ok, data: data.data as VaultCollabHandoffActionSet | null, error: data.error || undefined };
+    } catch (e: any) {
+      return { success: false, error: e.message };
+    }
+  });
+
+  ipcMain.handle('vault:detectVaultCollabSourcePath', () => {
+    try {
+      return { success: true, data: detectVaultCollabSourcePath() };
+    } catch (e: any) {
+      return { success: false, error: e.message };
+    }
+  });
+
+  ipcMain.handle('vault:useDetectedVaultCollabSourcePath', () => {
+    try {
+      const detected = detectVaultCollabSourcePath();
+      if (!detected.path) {
+        throw new Error(detected.reason);
+      }
+
+      const data = vault.saveVaultCollabRuntimeConfig({
+        runtimeMode: 'localSource',
+        localSourceCheckoutPath: detected.path,
+        databasePath: join(detected.path, 'vault-collab.db'),
+      });
+      return { success: true, data };
+    } catch (e: any) {
+      return { success: false, error: e.message };
+    }
+  });
+
+  ipcMain.handle('vault:chooseVaultCollabSourcePath', async () => {
+    try {
+      const selection = await dialog.showOpenDialog({
+        title: 'Choose Vault Collab source folder',
+        properties: ['openDirectory'],
+      });
+      if (selection.canceled || selection.filePaths.length === 0) {
+        return { success: true, data: null };
+      }
+
+      const sourceRoot = selection.filePaths[0];
+      const data = vault.saveVaultCollabRuntimeConfig({
+        runtimeMode: 'localSource',
+        localSourceCheckoutPath: sourceRoot,
+        databasePath: join(sourceRoot, 'vault-collab.db'),
+      });
+      return { success: true, data };
+    } catch (e: any) {
+      return { success: false, error: e.message };
+    }
+  });
+
   ipcMain.handle('vault:getOpenRouterModels', async (_, apiKey) => {
     try {
       return { success: true, data: await getOpenRouterModels(apiKey) };
@@ -1906,7 +2128,11 @@ app.whenReady().then(() => {
   const claudeMdPath = join(homedir(), '.claude', 'CLAUDE.md');
   const claudeUserSkillDir = join(homedir(), '.claude', 'skills', 'vault-memory');
   const claudeUserSkillPath = join(claudeUserSkillDir, 'SKILL.md');
+  const claudeCommandsDir = join(homedir(), '.claude', 'commands');
+  const claudeVaultCollabCommandPath = join(claudeCommandsDir, 'vault-collab.md');
   const codexConfigPath = join(homedir(), '.codex', 'config.toml');
+  const codexCommandsDir = join(homedir(), '.codex', 'commands');
+  const codexVaultCollabCommandPath = join(codexCommandsDir, 'vault-collab.md');
   const claudeSkillPath = resolve(skillsPath, 'claude-vault-skill.md');
   const codexAgentsPath = join(homedir(), '.codex', 'AGENTS.md');
   const codexSkillPath = resolve(skillsPath, 'codex-vault-skill.md');
@@ -1976,6 +2202,66 @@ app.whenReady().then(() => {
     };
   }
 
+  function getVaultCollabMcpLaunchConfig(): McpLaunchConfig {
+    const config = vault.getVaultCollabRuntimeConfig();
+    const serverPath = resolveVaultCollabMcpServerPath(config);
+
+    if (config.runtimeMode === 'managed') {
+      return {
+        mode: 'development',
+        command: 'npm',
+        args: [
+          'exec',
+          '--yes',
+          '--package',
+          'https://github.com/aliihsaad/vault-collab',
+          '--',
+          'vault-collab-mcp',
+          '--db',
+          config.databasePath,
+        ],
+        requiredPaths: [],
+        displayPath: `vault-collab-mcp --db ${config.databasePath}`,
+      };
+    }
+
+    return {
+      mode: 'development',
+      command: 'node',
+      args: [serverPath || '', '--db', config.databasePath],
+      requiredPaths: serverPath ? [serverPath] : ['Vault Collab MCP server path is not configured'],
+      displayPath: serverPath || 'Vault Collab MCP server path is not configured',
+    };
+  }
+
+  function getServerDisplayName(serverName: string): string {
+    return serverName === 'vault-collab' ? 'Vault Collab MCP' : 'Vault memory MCP';
+  }
+
+  function escapeRegExp(value: string): string {
+    return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  }
+
+  function buildVaultCollabCommandContent(): string {
+    return [
+      '---',
+      'description: Register this session with Vault Collab, show active inbox state, and ask before claiming handoffs.',
+      '---',
+      '',
+      '# Vault Collab',
+      '',
+      'Use Vault Collab MCP for this session.',
+      '',
+      '1. If `vault_collab_register_session` is unavailable, say that Vault Collab MCP is not connected and tell the user to run Vault Settings -> Client setup -> Connect Vault Collab MCP.',
+      '2. If this session is not registered, call `vault_collab_register_session` with the current client type, project, workspace path, and capabilities.',
+      '3. Report the current registered session state.',
+      '4. Call `vault_collab_list_inbox` for the current project and related project context.',
+      '5. Show available handoffs briefly and ask before calling `vault_collab_claim_handoff`.',
+      '6. Do not claim, resolve, reopen, or execute risky work without user approval.',
+      '',
+    ].join('\n');
+  }
+
   async function validateMcpRuntime(steps: ConnectStep[], launchConfig: McpLaunchConfig): Promise<boolean> {
     const missingPaths: string[] = [];
     for (const requiredPath of launchConfig.requiredPaths) {
@@ -2007,32 +2293,55 @@ app.whenReady().then(() => {
   }
 
   function hasCodexVaultEntry(content: string): boolean {
-    return /\[mcp_servers(?:\."vault-memory"|\.vault-memory)\]/.test(content);
+    return hasCodexMcpEntry(content, 'vault-memory');
   }
 
   function removeCodexVaultEntry(content: string): string {
+    return removeCodexMcpEntry(content, 'vault-memory');
+  }
+
+  function hasCodexMcpEntry(content: string, serverName: string): boolean {
+    const escaped = escapeRegExp(serverName);
+    return new RegExp(`\\[mcp_servers(?:\\."${escaped}"|\\.${escaped})\\]`).test(content);
+  }
+
+  function removeCodexMcpEntry(content: string, serverName: string): string {
+    const escaped = escapeRegExp(serverName);
     return content
-      .replace(/\n*\[mcp_servers(?:\."vault-memory"|\.vault-memory)\]\n[\s\S]*?(?=\n\[|$)/g, '\n')
+      .replace(new RegExp(`\\n*\\[mcp_servers(?:\\."${escaped}"|\\.${escaped})\\]\\n[\\s\\S]*?(?=\\n\\[|$)`, 'g'), '\n')
       .replace(/\n{3,}/g, '\n\n')
       .trimEnd();
   }
 
   function hasCurrentCodexVaultEntry(content: string, launchConfig: McpLaunchConfig): boolean {
-    return content.includes(buildCodexVaultEntry(launchConfig).trim());
+    return hasCurrentCodexMcpEntry(content, 'vault-memory', launchConfig);
   }
 
   function buildCodexVaultEntry(launchConfig: McpLaunchConfig): string {
+    return buildCodexMcpEntry('vault-memory', launchConfig);
+  }
+
+  function hasCurrentCodexMcpEntry(content: string, serverName: string, launchConfig: McpLaunchConfig): boolean {
+    return content.includes(buildCodexMcpEntry(serverName, launchConfig).trim());
+  }
+
+  function buildCodexMcpEntry(serverName: string, launchConfig: McpLaunchConfig): string {
     return [
-      '[mcp_servers.vault-memory]',
+      `[mcp_servers.${serverName}]`,
       `command = ${JSON.stringify(launchConfig.command)}`,
       `args = [${launchConfig.args.map((arg) => JSON.stringify(arg)).join(', ')}]`,
       '',
     ].join('\n');
   }
 
-  async function connectMcpToConfig(configPath: string, label: string): Promise<{ success: boolean; steps: ConnectStep[]; backupPath?: string }> {
+  async function connectMcpToConfig(
+    configPath: string,
+    label: string,
+    serverName = 'vault-memory',
+    launchConfig = getMcpLaunchConfig(),
+  ): Promise<{ success: boolean; steps: ConnectStep[]; backupPath?: string }> {
     const steps: ConnectStep[] = [];
-    const launchConfig = getMcpLaunchConfig();
+    const displayName = getServerDisplayName(serverName);
 
     // Step 1: Locate MCP server
     const mcpExists = await validateMcpRuntime(steps, launchConfig);
@@ -2065,7 +2374,7 @@ app.whenReady().then(() => {
     });
 
     // Step 3: Check if already configured
-    const existingEntry = config.mcpServers?.['vault-memory'];
+    const existingEntry = config.mcpServers?.[serverName];
     if (mcpEntriesMatch(existingEntry, launchConfig)) {
       steps.push({ id: 'check-existing', label: 'Check existing entry', status: 'success', detail: 'Already configured with correct path' });
       steps.push({ id: 'backup', label: 'Backup config', status: 'skipped', detail: 'No changes needed' });
@@ -2077,7 +2386,7 @@ app.whenReady().then(() => {
       id: 'check-existing',
       label: 'Check existing entry',
       status: 'success',
-      detail: existingEntry ? 'Entry exists but path differs — will update' : 'No existing vault-memory entry',
+      detail: existingEntry ? 'Entry exists but path differs — will update' : `No existing ${serverName} entry`,
     });
 
     // Step 4: Backup
@@ -2100,14 +2409,14 @@ app.whenReady().then(() => {
     // Step 5: Merge and write
     try {
       config.mcpServers = config.mcpServers || {};
-      config.mcpServers['vault-memory'] = {
+      config.mcpServers[serverName] = {
         command: launchConfig.command,
         args: launchConfig.args,
       };
 
       await mkdir(dirname(configPath), { recursive: true });
       await writeFile(configPath, JSON.stringify(config, null, 2), 'utf8');
-      steps.push({ id: 'write-config', label: 'Write MCP entry', status: 'success', detail: 'vault-memory entry written' });
+      steps.push({ id: 'write-config', label: 'Write MCP entry', status: 'success', detail: `${serverName} entry written` });
     } catch (err: any) {
       steps.push({ id: 'write-config', label: 'Write MCP entry', status: 'fail', detail: err.message });
       steps.push({ id: 'verify', label: 'Verify config', status: 'skipped' });
@@ -2117,7 +2426,7 @@ app.whenReady().then(() => {
     // Step 6: Verify
     try {
       const verifyResult = await readJsonFile(configPath);
-      if (mcpEntriesMatch(verifyResult.data?.mcpServers?.['vault-memory'], launchConfig)) {
+      if (mcpEntriesMatch(verifyResult.data?.mcpServers?.[serverName], launchConfig)) {
         steps.push({ id: 'verify', label: 'Verify config', status: 'success', detail: 'Entry confirmed in config file' });
       } else {
         steps.push({ id: 'verify', label: 'Verify config', status: 'fail', detail: 'Entry not found after write' });
@@ -2128,12 +2437,18 @@ app.whenReady().then(() => {
       return { success: false, steps, backupPath };
     }
 
+    if (serverName === 'vault-collab') {
+      steps.push({ id: 'next-step', label: 'Restart client', status: 'success', detail: `${displayName} will be available after the client restarts or reloads MCP servers.` });
+    }
     return { success: true, steps, backupPath };
   }
 
-  async function connectMcpToCodexConfig(): Promise<{ success: boolean; steps: ConnectStep[]; backupPath?: string }> {
+  async function connectMcpToCodexConfig(
+    serverName = 'vault-memory',
+    launchConfig = getMcpLaunchConfig(),
+  ): Promise<{ success: boolean; steps: ConnectStep[]; backupPath?: string }> {
     const steps: ConnectStep[] = [];
-    const launchConfig = getMcpLaunchConfig();
+    const displayName = getServerDisplayName(serverName);
 
     const mcpExists = await validateMcpRuntime(steps, launchConfig);
     if (!mcpExists) {
@@ -2164,7 +2479,7 @@ app.whenReady().then(() => {
       }
     }
 
-    if (hasCurrentCodexVaultEntry(configContent, launchConfig)) {
+    if (hasCurrentCodexMcpEntry(configContent, serverName, launchConfig)) {
       steps.push({ id: 'check-existing', label: 'Check existing entry', status: 'success', detail: 'Already configured with correct path' });
       steps.push({ id: 'backup', label: 'Backup config', status: 'skipped', detail: 'No changes needed' });
       steps.push({ id: 'write-config', label: 'Write MCP entry', status: 'skipped', detail: 'No changes needed' });
@@ -2175,7 +2490,7 @@ app.whenReady().then(() => {
       id: 'check-existing',
       label: 'Check existing entry',
       status: 'success',
-      detail: hasCodexVaultEntry(configContent) ? 'Entry exists but path differs — will update' : 'No existing vault-memory entry',
+      detail: hasCodexMcpEntry(configContent, serverName) ? 'Entry exists but path differs — will update' : `No existing ${serverName} entry`,
     });
 
     let backupPath: string | undefined;
@@ -2195,11 +2510,11 @@ app.whenReady().then(() => {
     }
 
     try {
-      const cleaned = removeCodexVaultEntry(configContent);
-      const nextContent = `${cleaned.trimEnd()}${cleaned.trim() ? '\n\n' : ''}${buildCodexVaultEntry(launchConfig)}`;
+      const cleaned = removeCodexMcpEntry(configContent, serverName);
+      const nextContent = `${cleaned.trimEnd()}${cleaned.trim() ? '\n\n' : ''}${buildCodexMcpEntry(serverName, launchConfig)}`;
       await mkdir(dirname(codexConfigPath), { recursive: true });
       await writeFile(codexConfigPath, nextContent, 'utf8');
-      steps.push({ id: 'write-config', label: 'Write MCP entry', status: 'success', detail: 'vault-memory entry written to config.toml' });
+      steps.push({ id: 'write-config', label: 'Write MCP entry', status: 'success', detail: `${serverName} entry written to config.toml` });
     } catch (err: any) {
       steps.push({ id: 'write-config', label: 'Write MCP entry', status: 'fail', detail: err.message });
       steps.push({ id: 'verify', label: 'Verify config', status: 'skipped' });
@@ -2208,8 +2523,11 @@ app.whenReady().then(() => {
 
     try {
       const verifyContent = await readFile(codexConfigPath, 'utf8');
-      if (hasCurrentCodexVaultEntry(verifyContent, launchConfig)) {
+      if (hasCurrentCodexMcpEntry(verifyContent, serverName, launchConfig)) {
         steps.push({ id: 'verify', label: 'Verify config', status: 'success', detail: 'Entry confirmed in config.toml' });
+        if (serverName === 'vault-collab') {
+          steps.push({ id: 'next-step', label: 'Restart client', status: 'success', detail: `${displayName} will be available after Codex restarts or reloads tool servers.` });
+        }
         return { success: true, steps, backupPath };
       }
 
@@ -2224,14 +2542,17 @@ app.whenReady().then(() => {
   ipcMain.handle('vault:checkConnectionStatus', async () => {
     try {
       const launchConfig = getMcpLaunchConfig();
+      const vaultCollabLaunchConfig = getVaultCollabMcpLaunchConfig();
 
       // Check Claude Desktop
       const desktopResult = await readJsonFile(claudeDesktopConfigPath);
       const desktopConfigured = mcpEntriesMatch(desktopResult.data?.mcpServers?.['vault-memory'], launchConfig);
+      const vaultCollabDesktopConfigured = mcpEntriesMatch(desktopResult.data?.mcpServers?.['vault-collab'], vaultCollabLaunchConfig);
 
       // Check Claude Code
       const codeResult = await readJsonFile(claudeCodeSettingsPath);
       const codeConfigured = mcpEntriesMatch(codeResult.data?.mcpServers?.['vault-memory'], launchConfig);
+      const vaultCollabCodeConfigured = mcpEntriesMatch(codeResult.data?.mcpServers?.['vault-collab'], vaultCollabLaunchConfig);
 
       // Check the active Claude Code skill vector only. Legacy CLAUDE.md references
       // are migration signals, not proof that Claude Code will load the skill.
@@ -2245,14 +2566,16 @@ app.whenReady().then(() => {
         // File doesn't exist — not installed
       }
 
+      const codexConfigContent = await readTextFileIfExists(codexConfigPath);
+
       return {
         success: true,
         data: {
           claudeDesktop: { configured: desktopConfigured, configPath: claudeDesktopConfigPath },
           claudeCode: { configured: codeConfigured, configPath: claudeCodeSettingsPath },
           codex: {
-            configured: await fileExists(codexConfigPath)
-              ? hasCurrentCodexVaultEntry(await readFile(codexConfigPath, 'utf8'), launchConfig)
+            configured: codexConfigContent !== null
+              ? hasCurrentCodexVaultEntry(codexConfigContent, launchConfig)
               : false,
             configPath: codexConfigPath,
           },
@@ -2268,6 +2591,29 @@ app.whenReady().then(() => {
             claudeSkillPath: claudeUserSkillPath,
             codexInstalled: codexSkillInstalled,
             codexAgentsPath,
+          },
+          vaultCollab: {
+            claudeDesktop: { configured: vaultCollabDesktopConfigured, configPath: claudeDesktopConfigPath },
+            claudeCode: { configured: vaultCollabCodeConfigured, configPath: claudeCodeSettingsPath },
+            codex: {
+              configured: codexConfigContent !== null
+                ? hasCurrentCodexMcpEntry(codexConfigContent, 'vault-collab', vaultCollabLaunchConfig)
+                : false,
+              configPath: codexConfigPath,
+            },
+            mcpRuntime: {
+              mode: vaultCollabLaunchConfig.mode,
+              command: vaultCollabLaunchConfig.command,
+              args: vaultCollabLaunchConfig.args,
+              displayPath: vaultCollabLaunchConfig.displayPath,
+            },
+            command: {
+              claudeInstalled: await fileExists(claudeVaultCollabCommandPath),
+              claudeCommandPath: claudeVaultCollabCommandPath,
+              codexSlashCommandSupported: false,
+              codexLegacyCommandPresent: await fileExists(codexVaultCollabCommandPath),
+              codexLegacyCommandPath: codexVaultCollabCommandPath,
+            },
           },
         },
       };
@@ -2297,6 +2643,15 @@ app.whenReady().then(() => {
   ipcMain.handle('vault:connectCodex', async () => {
     try {
       const result = await connectMcpToCodexConfig();
+      return { success: true, data: result };
+    } catch (e: any) {
+      return { success: false, error: e.message };
+    }
+  });
+
+  ipcMain.handle('vault:connectVaultCollabClients', async () => {
+    try {
+      const result = await connectVaultCollabClients();
       return { success: true, data: result };
     } catch (e: any) {
       return { success: false, error: e.message };
@@ -2455,6 +2810,105 @@ app.whenReady().then(() => {
     }
   }
 
+  async function installVaultCollabCommandFiles(): Promise<ConnectStep[]> {
+    const steps: ConnectStep[] = [];
+    const content = buildVaultCollabCommandContent();
+    const targets = [
+      { label: 'Claude Code /vault-collab command', dir: claudeCommandsDir, path: claudeVaultCollabCommandPath },
+    ];
+
+    for (const target of targets) {
+      const targetId = target.label.toLowerCase().replace(/[^a-z0-9]+/g, '-');
+      try {
+        await mkdir(target.dir, { recursive: true });
+        if (await fileExists(target.path)) {
+          const existing = await readFile(target.path, 'utf8');
+          if (existing.trim() === content.trim()) {
+            steps.push({ id: `${targetId}-up-to-date`, label: target.label, status: 'success', detail: 'Already installed' });
+            continue;
+          }
+          await copyFile(target.path, `${target.path}.vault-backup-${Date.now()}`);
+        }
+        await writeFile(target.path, content, 'utf8');
+        steps.push({ id: `${targetId}-write`, label: target.label, status: 'success', detail: target.path });
+      } catch (err: any) {
+        steps.push({ id: `${targetId}-write`, label: target.label, status: 'fail', detail: err.message });
+      }
+    }
+
+    steps.push({
+      id: 'codex-slash-command-note',
+      label: 'Codex shortcut',
+      status: 'skipped',
+      detail: 'Codex does not currently load personal unprefixed slash commands from ~/.codex/commands; use a normal prompt like "use vault collab" after MCP restart.',
+    });
+
+    return steps;
+  }
+
+  async function removeVaultCollabCommandFiles(): Promise<ConnectStep[]> {
+    const steps: ConnectStep[] = [];
+    const targets = [
+      { label: 'Claude Code /vault-collab command', path: claudeVaultCollabCommandPath },
+      { label: 'Legacy Codex /vault-collab command file', path: codexVaultCollabCommandPath },
+    ];
+    const { unlink } = await import('node:fs/promises');
+
+    for (const target of targets) {
+      const targetId = target.label.toLowerCase().replace(/[^a-z0-9]+/g, '-');
+      if (!(await fileExists(target.path))) {
+        steps.push({ id: `${targetId}-remove`, label: target.label, status: 'skipped', detail: 'Not installed' });
+        continue;
+      }
+
+      try {
+        await copyFile(target.path, `${target.path}.vault-backup-${Date.now()}`);
+        await unlink(target.path);
+        steps.push({ id: `${targetId}-remove`, label: target.label, status: 'success', detail: target.path });
+      } catch (err: any) {
+        steps.push({ id: `${targetId}-remove`, label: target.label, status: 'fail', detail: err.message });
+      }
+    }
+
+    return steps;
+  }
+
+  async function connectVaultCollabClients(): Promise<{ success: boolean; steps: ConnectStep[]; backupPath?: string }> {
+    const steps: ConnectStep[] = [];
+    const backupPaths: string[] = [];
+    const launchConfig = getVaultCollabMcpLaunchConfig();
+
+    try {
+      await mkdir(dirname(vault.getVaultCollabRuntimeConfig().databasePath), { recursive: true });
+    } catch (err: any) {
+      steps.push({ id: 'prepare-database-dir', label: 'Prepare Vault Collab database directory', status: 'fail', detail: err.message });
+      return { success: false, steps };
+    }
+    steps.push({ id: 'prepare-database-dir', label: 'Prepare Vault Collab database directory', status: 'success', detail: vault.getVaultCollabRuntimeConfig().databasePath });
+
+    const targets = [
+      { label: 'Claude Desktop', run: () => connectMcpToConfig(claudeDesktopConfigPath, 'Claude Desktop', 'vault-collab', launchConfig) },
+      { label: 'Claude Code', run: () => connectMcpToConfig(claudeCodeSettingsPath, 'Claude Code', 'vault-collab', launchConfig) },
+      { label: 'Codex', run: () => connectMcpToCodexConfig('vault-collab', launchConfig) },
+    ];
+
+    for (const target of targets) {
+      const result = await target.run();
+      steps.push(...result.steps.map((step) => ({ ...step, id: `vault-collab-${target.label.toLowerCase().replace(/\s+/g, '-')}-${step.id}`, label: `${target.label}: ${step.label}` })));
+      if (result.backupPath) {
+        backupPaths.push(result.backupPath);
+      }
+    }
+
+    steps.push(...await installVaultCollabCommandFiles());
+
+    return {
+      success: steps.every((step) => step.status !== 'fail'),
+      steps,
+      backupPath: backupPaths.join('; ') || undefined,
+    };
+  }
+
   function logAutoMigration(label: string, result: { success: boolean; steps: ConnectStep[]; backupPath?: string }): void {
     const changed = result.steps.some((step) => step.status === 'success' && (
       step.id === 'write-config'
@@ -2532,31 +2986,112 @@ app.whenReady().then(() => {
 
   // --- Disconnect handlers ---
 
-  async function disconnectMcpFromConfig(configPath: string, label: string): Promise<{ success: boolean; steps: ConnectStep[]; backupPath?: string }> {
+  async function disconnectMcpFromCodexConfig(serverName = 'vault-memory'): Promise<{ success: boolean; steps: ConnectStep[]; backupPath?: string }> {
     const steps: ConnectStep[] = [];
 
-    // Step 1: Read config
-    const configResult = await readJsonFile(configPath);
-    if (!configResult.exists || !configResult.data) {
-      steps.push({ id: 'read-config', label: `Read ${label} config`, status: 'fail', detail: configResult.error || 'Config file not found' });
-      steps.push({ id: 'check-existing', label: 'Check vault-memory entry', status: 'skipped' });
+    let configContent = '';
+    try {
+      configContent = await readFile(codexConfigPath, 'utf8');
+      steps.push({ id: 'read-config', label: 'Read Codex config', status: 'success', detail: codexConfigPath });
+    } catch (err: any) {
+      if (err.code === 'ENOENT') {
+        steps.push({ id: 'read-config', label: 'Read Codex config', status: 'success', detail: 'File does not exist — nothing to remove' });
+        steps.push({ id: 'check-existing', label: `Check ${serverName} entry`, status: 'skipped' });
+        steps.push({ id: 'backup', label: 'Backup config', status: 'skipped' });
+        steps.push({ id: 'remove-entry', label: 'Remove MCP entry', status: 'skipped' });
+        steps.push({ id: 'verify', label: 'Verify removal', status: 'success', detail: 'Already disconnected' });
+        return { success: true, steps };
+      }
+
+      steps.push({ id: 'read-config', label: 'Read Codex config', status: 'fail', detail: err.message });
+      steps.push({ id: 'check-existing', label: `Check ${serverName} entry`, status: 'skipped' });
       steps.push({ id: 'backup', label: 'Backup config', status: 'skipped' });
       steps.push({ id: 'remove-entry', label: 'Remove MCP entry', status: 'skipped' });
       steps.push({ id: 'verify', label: 'Verify removal', status: 'skipped' });
       return { success: false, steps };
     }
-    steps.push({ id: 'read-config', label: `Read ${label} config`, status: 'success', detail: configPath });
 
-    // Step 2: Check if vault-memory exists
-    const config = configResult.data;
-    if (!config.mcpServers?.['vault-memory']) {
-      steps.push({ id: 'check-existing', label: 'Check vault-memory entry', status: 'success', detail: 'No vault-memory entry found — already disconnected' });
+    if (!hasCodexMcpEntry(configContent, serverName)) {
+      steps.push({ id: 'check-existing', label: `Check ${serverName} entry`, status: 'success', detail: `No ${serverName} entry found — already disconnected` });
       steps.push({ id: 'backup', label: 'Backup config', status: 'skipped', detail: 'No changes needed' });
       steps.push({ id: 'remove-entry', label: 'Remove MCP entry', status: 'skipped', detail: 'No changes needed' });
       steps.push({ id: 'verify', label: 'Verify removal', status: 'success', detail: 'Already disconnected' });
       return { success: true, steps };
     }
-    steps.push({ id: 'check-existing', label: 'Check vault-memory entry', status: 'success', detail: 'Entry found — will remove' });
+    steps.push({ id: 'check-existing', label: `Check ${serverName} entry`, status: 'success', detail: 'Entry found — will remove' });
+
+    let backupPath: string | undefined;
+    try {
+      backupPath = `${codexConfigPath}.vault-backup-${Date.now()}`;
+      await copyFile(codexConfigPath, backupPath);
+      steps.push({ id: 'backup', label: 'Backup config', status: 'success', detail: backupPath });
+    } catch (err: any) {
+      steps.push({ id: 'backup', label: 'Backup config', status: 'fail', detail: err.message });
+      steps.push({ id: 'remove-entry', label: 'Remove MCP entry', status: 'skipped' });
+      steps.push({ id: 'verify', label: 'Verify removal', status: 'skipped' });
+      return { success: false, steps, backupPath };
+    }
+
+    try {
+      const cleaned = removeCodexMcpEntry(configContent, serverName);
+      await writeFile(codexConfigPath, cleaned ? `${cleaned}\n` : '', 'utf8');
+      steps.push({ id: 'remove-entry', label: 'Remove MCP entry', status: 'success', detail: `${serverName} entry removed from config.toml` });
+    } catch (err: any) {
+      steps.push({ id: 'remove-entry', label: 'Remove MCP entry', status: 'fail', detail: err.message });
+      steps.push({ id: 'verify', label: 'Verify removal', status: 'skipped' });
+      return { success: false, steps, backupPath };
+    }
+
+    try {
+      const verifyContent = await readFile(codexConfigPath, 'utf8');
+      if (!hasCodexMcpEntry(verifyContent, serverName)) {
+        steps.push({ id: 'verify', label: 'Verify removal', status: 'success', detail: 'Entry confirmed removed from config.toml' });
+        return { success: true, steps, backupPath };
+      }
+
+      steps.push({ id: 'verify', label: 'Verify removal', status: 'fail', detail: 'Entry still present after write' });
+      return { success: false, steps, backupPath };
+    } catch (err: any) {
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
+        steps.push({ id: 'verify', label: 'Verify removal', status: 'success', detail: 'Config file absent after removal' });
+        return { success: true, steps, backupPath };
+      }
+
+      steps.push({ id: 'verify', label: 'Verify removal', status: 'fail', detail: err.message });
+      return { success: false, steps, backupPath };
+    }
+  }
+
+  async function disconnectMcpFromConfig(
+    configPath: string,
+    label: string,
+    serverName = 'vault-memory',
+  ): Promise<{ success: boolean; steps: ConnectStep[]; backupPath?: string }> {
+    const steps: ConnectStep[] = [];
+
+    // Step 1: Read config
+    const configResult = await readJsonFile(configPath);
+    if (!configResult.exists || !configResult.data) {
+      const readStatus = configResult.error ? 'fail' : 'success';
+      steps.push({ id: 'read-config', label: `Read ${label} config`, status: readStatus, detail: configResult.error || 'File does not exist — nothing to remove' });
+      steps.push({ id: 'check-existing', label: `Check ${serverName} entry`, status: configResult.error ? 'skipped' : 'success', detail: configResult.error ? undefined : 'Already disconnected' });
+      steps.push({ id: 'backup', label: 'Backup config', status: 'skipped' });
+      steps.push({ id: 'remove-entry', label: 'Remove MCP entry', status: 'skipped' });
+      steps.push({ id: 'verify', label: 'Verify removal', status: configResult.error ? 'skipped' : 'success', detail: configResult.error ? undefined : 'Already disconnected' });
+      return { success: !configResult.error, steps };
+    }
+    steps.push({ id: 'read-config', label: `Read ${label} config`, status: 'success', detail: configPath });
+
+    // Step 2: Check if vault-memory exists
+    const config = configResult.data;
+    if (!config.mcpServers?.[serverName]) {
+      steps.push({ id: 'check-existing', label: `Check ${serverName} entry`, status: 'success', detail: `No ${serverName} entry found — already disconnected` });
+      steps.push({ id: 'backup', label: 'Backup config', status: 'skipped', detail: 'No changes needed' });
+      steps.push({ id: 'remove-entry', label: 'Remove MCP entry', status: 'skipped', detail: 'No changes needed' });
+      steps.push({ id: 'verify', label: 'Verify removal', status: 'success', detail: 'Already disconnected' });
+      return { success: true, steps };
+    }
+    steps.push({ id: 'check-existing', label: `Check ${serverName} entry`, status: 'success', detail: 'Entry found — will remove' });
 
     // Step 3: Backup
     let backupPath: string | undefined;
@@ -2573,13 +3108,13 @@ app.whenReady().then(() => {
 
     // Step 4: Remove entry and write
     try {
-      delete config.mcpServers['vault-memory'];
+      delete config.mcpServers[serverName];
       // Clean up empty mcpServers object
       if (Object.keys(config.mcpServers).length === 0) {
         delete config.mcpServers;
       }
       await writeFile(configPath, JSON.stringify(config, null, 2), 'utf8');
-      steps.push({ id: 'remove-entry', label: 'Remove MCP entry', status: 'success', detail: 'vault-memory entry removed' });
+      steps.push({ id: 'remove-entry', label: 'Remove MCP entry', status: 'success', detail: `${serverName} entry removed` });
     } catch (err: any) {
       steps.push({ id: 'remove-entry', label: 'Remove MCP entry', status: 'fail', detail: err.message });
       steps.push({ id: 'verify', label: 'Verify removal', status: 'skipped' });
@@ -2589,7 +3124,7 @@ app.whenReady().then(() => {
     // Step 5: Verify
     try {
       const verifyResult = await readJsonFile(configPath);
-      if (!verifyResult.data?.mcpServers?.['vault-memory']) {
+      if (!verifyResult.data?.mcpServers?.[serverName]) {
         steps.push({ id: 'verify', label: 'Verify removal', status: 'success', detail: 'Entry confirmed removed from config' });
       } else {
         steps.push({ id: 'verify', label: 'Verify removal', status: 'fail', detail: 'Entry still present after write' });
@@ -2602,6 +3137,45 @@ app.whenReady().then(() => {
 
     return { success: true, steps, backupPath };
   }
+
+  async function disconnectVaultCollabClients(): Promise<{ success: boolean; steps: ConnectStep[]; backupPath?: string }> {
+    const steps: ConnectStep[] = [];
+    const backupPaths: string[] = [];
+    const targets = [
+      { label: 'Claude Desktop', run: () => disconnectMcpFromConfig(claudeDesktopConfigPath, 'Claude Desktop', 'vault-collab') },
+      { label: 'Claude Code', run: () => disconnectMcpFromConfig(claudeCodeSettingsPath, 'Claude Code', 'vault-collab') },
+      { label: 'Codex', run: () => disconnectMcpFromCodexConfig('vault-collab') },
+    ];
+
+    for (const target of targets) {
+      const result = await target.run();
+      steps.push(...result.steps.map((step) => ({
+        ...step,
+        id: `vault-collab-${target.label.toLowerCase().replace(/\s+/g, '-')}-${step.id}`,
+        label: `${target.label}: ${step.label}`,
+      })));
+      if (result.backupPath) {
+        backupPaths.push(result.backupPath);
+      }
+    }
+
+    steps.push(...await removeVaultCollabCommandFiles());
+
+    return {
+      success: steps.every((step) => step.status !== 'fail'),
+      steps,
+      backupPath: backupPaths.join('; ') || undefined,
+    };
+  }
+
+  ipcMain.handle('vault:disconnectVaultCollabClients', async () => {
+    try {
+      const result = await disconnectVaultCollabClients();
+      return { success: true, data: result };
+    } catch (e: any) {
+      return { success: false, error: e.message };
+    }
+  });
 
   ipcMain.handle('vault:disconnectClaudeDesktop', async () => {
     try {

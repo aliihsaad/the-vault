@@ -85,6 +85,11 @@ import {
   saveGraphifyRuntimeConfig,
 } from './services/graphify-config.service.js';
 import {
+  getVaultCollabRuntimeConfig,
+  resetVaultCollabRuntimeConfig,
+  saveVaultCollabRuntimeConfig,
+} from './services/vault-collab-config.service.js';
+import {
   getGraphifyBuildHistory,
   getGraphifyProjectStatus,
   getGraphifyProjectState,
@@ -97,6 +102,11 @@ import {
   detectGraphifyRuntime,
   planGraphifyInstall,
 } from './services/graphify-runtime.service.js';
+import {
+  detectVaultCollabRuntime,
+  planVaultCollabInstall,
+} from './services/vault-collab-runtime.service.js';
+import { getVaultCollabDashboardSnapshot } from './services/vault-collab-dashboard.service.js';
 import { exportGraphifyProjectCorpus } from './services/graphify-corpus.service.js';
 import { buildGraphifyProjectGraph } from './services/graphify-build.service.js';
 import {
@@ -205,11 +215,21 @@ import type {
   UpsertGraphifyProjectStateInput,
 } from './types/graphify.js';
 import type {
+  SaveVaultCollabRuntimeConfigInput,
+  VaultCollabDashboardOptions,
+  VaultCollabDashboardSnapshot,
+  VaultCollabRuntimeConfig,
+} from './types/vault-collab.js';
+import type {
   DetectGraphifyRuntimeInput,
   GraphifyInstallPlan,
   GraphifyRuntimeStatus,
   PlanGraphifyInstallInput,
 } from './services/graphify-runtime.service.js';
+import type {
+  VaultCollabInstallPlan,
+  VaultCollabRuntimeStatus,
+} from './services/vault-collab-runtime.service.js';
 import type {
   BuildGraphifyProjectGraphInput,
   GraphifyProjectBuildResult,
@@ -593,6 +613,40 @@ export class Vault {
       vaultRoot: this.vaultRoot,
       ...input,
     });
+  }
+
+  // =========================================================================
+  // Vault Collab Extension Storage
+  // =========================================================================
+
+  getVaultCollabRuntimeConfig(): VaultCollabRuntimeConfig {
+    this.ensureInitialized();
+    return getVaultCollabRuntimeConfig(this.vaultRoot);
+  }
+
+  saveVaultCollabRuntimeConfig(input: SaveVaultCollabRuntimeConfigInput): VaultCollabRuntimeConfig {
+    this.ensureInitialized();
+    return saveVaultCollabRuntimeConfig(this.vaultRoot, input);
+  }
+
+  resetVaultCollabRuntimeConfig(): VaultCollabRuntimeConfig {
+    this.ensureInitialized();
+    return resetVaultCollabRuntimeConfig(this.vaultRoot);
+  }
+
+  detectVaultCollabRuntime(): VaultCollabRuntimeStatus {
+    this.ensureInitialized();
+    return detectVaultCollabRuntime(this.getVaultCollabRuntimeConfig());
+  }
+
+  planVaultCollabInstall(): VaultCollabInstallPlan {
+    this.ensureInitialized();
+    return planVaultCollabInstall(this.getVaultCollabRuntimeConfig());
+  }
+
+  getVaultCollabDashboardSnapshot(options?: VaultCollabDashboardOptions): VaultCollabDashboardSnapshot {
+    this.ensureInitialized();
+    return getVaultCollabDashboardSnapshot(this.getVaultCollabRuntimeConfig(), options);
   }
 
   exportGraphifyProjectCorpus(

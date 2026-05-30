@@ -38,13 +38,20 @@ function buildRuntimeCommand(runtime?: ConnectionStatus['mcpRuntime']): string {
   return [runtime.command, ...runtime.args].map(quoteCliArg).join(' ');
 }
 
-function buildJsonClientSnippet(runtime?: ConnectionStatus['mcpRuntime']): string {
+function buildJsonClientSnippet(runtime?: ConnectionStatus['mcpRuntime'], serverName = 'vault-memory'): string {
+  const fallback = serverName === 'vault-collab'
+    ? {
+        command: 'npm',
+        args: ['exec', '--yes', '--package', 'https://github.com/aliihsaad/vault-collab', '--', 'vault-collab-mcp'],
+      }
+    : { command: 'pnpm', args: ['--filter', '@the-vault/mcp-server', 'dev'] };
+
   return JSON.stringify(
     {
       mcpServers: {
-        'vault-memory': runtime
+        [serverName]: runtime
           ? { command: runtime.command, args: runtime.args }
-          : { command: 'pnpm', args: ['--filter', '@the-vault/mcp-server', 'dev'] },
+          : fallback,
       },
     },
     null,
@@ -108,12 +115,14 @@ export function ConnectPanel({ copyText, copiedToken }: ConnectPanelProps) {
   const [desktopResult, setDesktopResult] = useState<ConnectResult | null>(null);
   const [codeResult, setCodeResult] = useState<ConnectResult | null>(null);
   const [codexResult, setCodexResult] = useState<ConnectResult | null>(null);
+  const [collabResult, setCollabResult] = useState<ConnectResult | null>(null);
   const [claudeSkillResult, setClaudeSkillResult] = useState<ConnectResult | null>(null);
   const [codexSkillResult, setCodexSkillResult] = useState<ConnectResult | null>(null);
   const [connectingDesktop, setConnectingDesktop] = useState(false);
   const [connectingCode, setConnectingCode] = useState(false);
   const [connectingCodex, setConnectingCodex] = useState(false);
   const [connectingAll, setConnectingAll] = useState(false);
+  const [connectingCollab, setConnectingCollab] = useState(false);
   const [installingClaudeSkill, setInstallingClaudeSkill] = useState(false);
   const [installingCodexSkill, setInstallingCodexSkill] = useState(false);
   const [manualOpen, setManualOpen] = useState(false);
@@ -124,11 +133,21 @@ export function ConnectPanel({ copyText, copiedToken }: ConnectPanelProps) {
   const codexConnected = connectionStatus?.codex.configured ?? false;
   const claudeSkillInstalled = connectionStatus?.skill.claudeInstalled ?? false;
   const codexSkillInstalled = connectionStatus?.skill.codexInstalled ?? false;
+  const collabDesktopConnected = connectionStatus?.vaultCollab?.claudeDesktop.configured ?? false;
+  const collabCodeConnected = connectionStatus?.vaultCollab?.claudeCode.configured ?? false;
+  const collabCodexConnected = connectionStatus?.vaultCollab?.codex.configured ?? false;
+  const claudeCollabCommandInstalled = connectionStatus?.vaultCollab?.command.claudeInstalled ?? false;
+  const codexCollabSlashSupported = connectionStatus?.vaultCollab?.command.codexSlashCommandSupported ?? false;
   const connectedClientCount = [desktopConnected, codeConnected, codexConnected].filter(Boolean).length;
   const allClientsConnected = connectedClientCount === 3;
+  const collabConnectedClientCount = [collabDesktopConnected, collabCodeConnected, collabCodexConnected].filter(Boolean).length;
+  const allCollabClientsConnected = collabConnectedClientCount === 3;
+  const vaultCollabInstalled = allCollabClientsConnected && claudeCollabCommandInstalled;
   const isPackagedRuntime = connectionStatus?.mcpRuntime.mode === 'packaged';
   const runtimeCommand = buildRuntimeCommand(connectionStatus?.mcpRuntime);
   const jsonClientSnippet = buildJsonClientSnippet(connectionStatus?.mcpRuntime);
+  const collabRuntimeCommand = buildRuntimeCommand(connectionStatus?.vaultCollab?.mcpRuntime);
+  const collabJsonClientSnippet = buildJsonClientSnippet(connectionStatus?.vaultCollab?.mcpRuntime, 'vault-collab');
 
   useEffect(() => {
     void refreshStatus();
@@ -140,12 +159,13 @@ export function ConnectPanel({ copyText, copiedToken }: ConnectPanelProps) {
       (desktopResult && !desktopResult.success) ||
       (codeResult && !codeResult.success) ||
       (codexResult && !codexResult.success) ||
+      (collabResult && !collabResult.success) ||
       (claudeSkillResult && !claudeSkillResult.success) ||
       (codexSkillResult && !codexSkillResult.success);
     if (anyFailed) {
       setManualOpen(true);
     }
-  }, [desktopResult, codeResult, codexResult, claudeSkillResult, codexSkillResult]);
+  }, [desktopResult, codeResult, codexResult, collabResult, claudeSkillResult, codexSkillResult]);
 
   async function refreshStatus() {
     setLoadingStatus(true);
@@ -224,6 +244,26 @@ export function ConnectPanel({ copyText, copiedToken }: ConnectPanelProps) {
       setCodexResult({ success: false, steps: [{ id: 'error', label: 'Operation failed', status: 'fail', detail: err instanceof Error ? err.message : 'Unknown error' }] });
     } finally {
       setConnectingCodex(false);
+    }
+  }
+
+  async function handleToggleVaultCollabClients() {
+    setConnectingCollab(true);
+    setCollabResult(null);
+    try {
+      const response = vaultCollabInstalled
+        ? await window.vaultAPI.disconnectVaultCollabClients()
+        : await window.vaultAPI.connectVaultCollabClients();
+      if (response.success && response.data) {
+        setCollabResult(response.data);
+      } else {
+        setCollabResult({ success: false, steps: [{ id: 'error', label: 'Operation failed', status: 'fail', detail: response.error }] });
+      }
+      await refreshStatus();
+    } catch (err) {
+      setCollabResult({ success: false, steps: [{ id: 'error', label: 'Operation failed', status: 'fail', detail: err instanceof Error ? err.message : 'Unknown error' }] });
+    } finally {
+      setConnectingCollab(false);
     }
   }
 
@@ -441,6 +481,14 @@ export function ConnectPanel({ copyText, copiedToken }: ConnectPanelProps) {
               <span className="connect-badge-dot" />
               {badgeLabel(connectionStatus?.skill.codexInstalled, 'Codex skill')}
             </span>
+            <span className={badgeClass(connectionStatus ? allCollabClientsConnected : undefined)}>
+              <span className="connect-badge-dot" />
+              {connectionStatus ? `Vault Collab MCP: ${collabConnectedClientCount}/3 clients` : 'Vault Collab MCP: checking...'}
+            </span>
+            <span className={badgeClass(connectionStatus ? claudeCollabCommandInstalled : undefined)}>
+              <span className="connect-badge-dot" />
+              {connectionStatus ? `Claude /vault-collab: ${claudeCollabCommandInstalled ? 'installed' : 'not installed'}` : 'Claude /vault-collab: checking...'}
+            </span>
           </div>
         </div>
       </section>
@@ -556,6 +604,16 @@ export function ConnectPanel({ copyText, copiedToken }: ConnectPanelProps) {
               'Keep the skill file nearby as operator guidance, then verify with a Vault recall tool call.',
             ]}
           />
+          <QuickStartCard
+            title="Brain + Vault Collab"
+            description="After memory MCP is connected, add durable client memory and the optional live handoff inbox."
+            steps={[
+              'Let the installed guide create or recall the client brain: Codex-brain, claude-code-brain, or claude-desktop-brain.',
+              'Click Connect Vault Collab MCP to add the provider-neutral inbox server beside vault-memory.',
+              'Use /vault-collab in Claude Code after restart, or type "use vault collab" in Codex because Codex does not load personal unprefixed slash commands.',
+              'Verify with vault_collab_register_session, vault_collab_list_inbox, and vault_collab_claim_handoff before using active handoffs.',
+            ]}
+          />
         </div>
       </section>
 
@@ -570,6 +628,72 @@ export function ConnectPanel({ copyText, copiedToken }: ConnectPanelProps) {
         </div>
 
         <div className="connect-action-grid">
+          {/* Vault Collab MCP + Claude slash command */}
+          <div className="snippet-card connect-action-card">
+            <div className="snippet-head">
+              <div>
+                <div className="field-label">Vault Collab MCP + /vault-collab</div>
+                <div className="field-help">
+                  <span>
+                    {vaultCollabInstalled
+                      ? 'vault-collab MCP entries and the Claude Code command are installed'
+                      : 'Writes vault-collab MCP entries and installs the Claude Code /vault-collab command'}
+                  </span>
+                  <code className="connect-config-path">{connectionStatus?.vaultCollab?.mcpRuntime.displayPath || 'vault-collab-mcp'}</code>
+                </div>
+              </div>
+              <button
+                type="button"
+                className={vaultCollabInstalled ? 'header-button danger-button' : 'primary-button'}
+                onClick={() => void handleToggleVaultCollabClients()}
+                disabled={connectingCollab}
+              >
+                {vaultCollabInstalled ? <Unplug size={16} /> : <Cable size={16} />}
+                <span>
+                  {connectingCollab
+                    ? (vaultCollabInstalled ? 'Disconnecting...' : 'Connecting...')
+                    : (vaultCollabInstalled ? 'Disconnect Vault Collab' : 'Connect Vault Collab MCP')}
+                </span>
+              </button>
+            </div>
+            <div className="connect-status-row">
+              <span className={badgeClass(connectionStatus ? allCollabClientsConnected : undefined)}>
+                <span className="connect-badge-dot" />
+                {connectionStatus ? `${collabConnectedClientCount}/3 clients` : 'checking clients'}
+              </span>
+              <span className={badgeClass(connectionStatus ? claudeCollabCommandInstalled : undefined)}>
+                <span className="connect-badge-dot" />
+                {claudeCollabCommandInstalled ? 'Claude /vault-collab installed' : 'Claude /vault-collab missing'}
+              </span>
+              <span className="connect-badge connect-badge-unknown">
+                <span className="connect-badge-dot" />
+                {codexCollabSlashSupported ? 'Codex slash command supported' : 'Codex uses prompt shortcut'}
+              </span>
+            </div>
+            <div className="field-help">
+              This adds a second MCP server beside <code>vault-memory</code>. Restart Codex, Claude Code, or Claude Desktop before expecting <code>vault_collab_*</code> tools to appear. Codex should be prompted with <code>use vault collab</code>; Claude Code can run <code>/vault-collab</code>.
+            </div>
+            {collabResult ? <StepList steps={collabResult.steps} /> : null}
+            {collabResult?.backupPath ? (
+              <div className="connect-card-description">Backups saved to: {collabResult.backupPath}</div>
+            ) : null}
+            {collabResult && !collabResult.success ? (
+              <p className="error-text" style={{ marginTop: 8 }}>Operation failed. See steps above or use the manual guide below.</p>
+            ) : null}
+            {collabResult?.success && vaultCollabInstalled ? (
+              <p className="success-text" style={{ marginTop: 8 }}>Vault Collab MCP is configured. Restart clients, then run <code>/vault-collab</code> in Claude Code or type <code>use vault collab</code> in Codex.</p>
+            ) : null}
+            {collabResult?.success && !vaultCollabInstalled ? (
+              <p className="success-text" style={{ marginTop: 8 }}>Vault Collab MCP and command files were removed. Restart clients to apply.</p>
+            ) : null}
+            <div className="inline-actions">
+              <button type="button" className="header-button" onClick={() => void copyText('vault-collab-command', collabRuntimeCommand, 'Copied Vault Collab MCP command.')}>
+                <Copy size={16} />
+                <span>{copiedToken === 'vault-collab-command' ? 'Copied' : 'Copy MCP command'}</span>
+              </button>
+            </div>
+          </div>
+
           {/* Claude Desktop */}
           <div className="snippet-card connect-action-card">
             <div className="snippet-head">
@@ -874,13 +998,28 @@ export function ConnectPanel({ copyText, copiedToken }: ConnectPanelProps) {
             <section className="manual-guide-section">
               <div className="manual-guide-heading">Skill installation (manual)</div>
               <div className="manual-guide-description">
-                The skill file teaches agents when to recall, when to save, and how to structure memory items.
+                The skill file teaches agents when to recall, when to save, how to create their own brain memory if missing, and how to use Vault Collab MCP when attached.
               </div>
               <ol className="manual-guide-steps">
                 <li>Copy the contents of <code>skills/claude-vault-skill.md</code> (or <code>skills/codex-vault-skill.md</code> for Codex).</li>
                 <li>Paste the full file into your agent's project instructions, CLAUDE.md, or system prompt.</li>
                 <li>Keep the file path stable so future setup prompts can reference it.</li>
+                <li>After Vault MCP is connected, verify the client can call <code>vault_list_projects</code>, then let it bootstrap <code>Codex-brain</code>, <code>claude-code-brain</code>, or <code>claude-desktop-brain</code> as appropriate.</li>
               </ol>
+            </section>
+
+            <section className="manual-guide-section">
+              <div className="manual-guide-heading">Vault Collab MCP (optional)</div>
+              <div className="manual-guide-description">
+                Vault Collab is a second MCP server for live sessions and handoff inbox routing. Vault MCP still owns durable memory.
+              </div>
+              <ol className="manual-guide-steps">
+                <li>Prefer the <strong>Connect Vault Collab MCP</strong> guided action above. It adds the <code>vault-collab</code> server and installs the Claude Code <code>/vault-collab</code> command file.</li>
+                <li>For manual setup, add the JSON block below as a second MCP server beside <code>vault-memory</code> in the target client.</li>
+                <li>Restart the client. In Claude Code, run <code>/vault-collab</code>. In Codex, type <code>use vault collab</code>. Then verify with <code>vault_collab_register_session</code> and <code>vault_collab_list_inbox</code>.</li>
+                <li>Only call <code>vault_collab_claim_handoff</code> when the user approves the handoff or the current session is idle.</li>
+              </ol>
+              <pre className="snippet-block">{collabJsonClientSnippet}</pre>
             </section>
 
             <div className="note-card">

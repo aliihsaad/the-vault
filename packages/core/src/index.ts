@@ -81,6 +81,11 @@ export {
   GraphifyRuntimeModeSchema,
 } from './rules/graphify.js';
 
+export {
+  VAULT_COLLAB_RUNTIME_MODES,
+  VaultCollabRuntimeModeSchema,
+} from './rules/vault-collab.js';
+
 export type {
   MemoryType,
   RoutineType,
@@ -104,6 +109,10 @@ export type {
   GraphifyInstallProfile,
   GraphifyRuntimeMode,
 } from './rules/graphify.js';
+
+export type {
+  VaultCollabRuntimeMode,
+} from './rules/vault-collab.js';
 
 export type {
   GraphifyArtifactDiscoveryResult,
@@ -164,15 +173,49 @@ export type {
   UpsertGraphifyProjectStateInput,
 } from './types/graphify.js';
 
+export type {
+  SaveVaultCollabRuntimeConfigInput,
+  VaultCollabClientType,
+  VaultCollabDashboardCounts,
+  VaultCollabDashboardOptions,
+  VaultCollabDashboardSnapshot,
+  VaultCollabDashboardActionInput,
+  VaultCollabDashboardActor,
+  VaultCollabEventSnapshot,
+  VaultCollabHandoffPriority,
+  VaultCollabHandoffActionAffordance,
+  VaultCollabHandoffActionKind,
+  VaultCollabHandoffActionSet,
+  VaultCollabHandoffSnapshot,
+  VaultCollabHandoffStatus,
+  VaultCollabJsonRecord,
+  VaultCollabLaunchRequestSnapshot,
+  VaultCollabLaunchRequestStatus,
+  VaultCollabRuntimeConfig,
+  VaultCollabSessionConnectionState,
+  VaultCollabSessionSnapshot,
+  VaultCollabSessionStatus,
+  VaultCollabActionInvocation,
+  VaultCollabActionResult,
+} from './types/vault-collab.js';
+
 export {
   getGraphifyExtensionPaths,
   getGraphifyProjectPaths,
 } from './services/graphify-paths.service.js';
 
+export {
+  getVaultCollabExtensionPaths,
+} from './services/vault-collab-paths.service.js';
+
 export type {
   GraphifyExtensionPaths,
   GraphifyProjectPaths,
 } from './services/graphify-paths.service.js';
+
+export type {
+  VaultCollabExtensionPaths,
+} from './services/vault-collab-paths.service.js';
 
 export {
   getDefaultGraphifyRuntimeConfig,
@@ -180,6 +223,13 @@ export {
   resetGraphifyRuntimeConfig,
   saveGraphifyRuntimeConfig,
 } from './services/graphify-config.service.js';
+
+export {
+  getDefaultVaultCollabRuntimeConfig,
+  getVaultCollabRuntimeConfig,
+  resetVaultCollabRuntimeConfig,
+  saveVaultCollabRuntimeConfig,
+} from './services/vault-collab-config.service.js';
 
 export {
   getGraphifyBuildHistory,
@@ -196,6 +246,42 @@ export {
   planGraphifyInstall,
   resolveGraphifyCommandForRuntimeConfig,
 } from './services/graphify-runtime.service.js';
+
+export {
+  VAULT_COLLAB_REPOSITORY_URL,
+  detectVaultCollabRuntime,
+  planVaultCollabInstall,
+  resolveVaultCollabCliPath,
+  resolveVaultCollabMcpServerPath,
+} from './services/vault-collab-runtime.service.js';
+
+export {
+  getVaultCollabDashboardSnapshot,
+} from './services/vault-collab-dashboard.service.js';
+
+export {
+  buildVaultCollabDashboardSessionInvocation,
+  buildVaultCollabActionInvocation,
+  buildVaultCollabHandoffActionsInvocation,
+  executeVaultCollabAction,
+  executeVaultCollabDashboardSessionRegistration,
+  executeVaultCollabHandoffActions,
+  redactVaultCollabActionInvocation,
+} from './services/vault-collab-actions.service.js';
+
+export type {
+  VaultCollabActionRunner,
+  VaultCollabActionRunnerResult,
+  VaultCollabDashboardSessionInput,
+  VaultCollabDashboardSessionRegistrationResult,
+} from './services/vault-collab-actions.service.js';
+
+export type {
+  VaultCollabDetectedPath,
+  VaultCollabInstallPlan,
+  VaultCollabPackageInfo,
+  VaultCollabRuntimeStatus,
+} from './services/vault-collab-runtime.service.js';
 
 export {
   exportGraphifyProjectCorpus,

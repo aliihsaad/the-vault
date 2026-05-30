@@ -13,6 +13,15 @@ import type {
   GraphifyRuntimeConfig,
   GraphifyRuntimeStatus,
   SaveGraphifyRuntimeConfigInput,
+  SaveVaultCollabRuntimeConfigInput,
+  VaultCollabActionResult,
+  VaultCollabDashboardActionInput,
+  VaultCollabDashboardOptions,
+  VaultCollabDashboardSnapshot,
+  VaultCollabHandoffActionSet,
+  VaultCollabInstallPlan,
+  VaultCollabRuntimeConfig,
+  VaultCollabRuntimeStatus,
 } from '@the-vault/core';
 import type {
   GraphifyArtifactUrlRequest,
@@ -506,6 +515,12 @@ declare global {
     isBinary: boolean;
   }
 
+  interface VaultCollabSourcePathDetection {
+    detected: boolean;
+    path: string | null;
+    reason: string;
+  }
+
   type ConnectStepStatus = 'pending' | 'running' | 'success' | 'fail' | 'skipped';
 
   interface ConnectStep {
@@ -537,6 +552,24 @@ declare global {
       claudeSkillPath: string;
       codexInstalled: boolean;
       codexAgentsPath: string;
+    };
+    vaultCollab: {
+      claudeDesktop: { configured: boolean; configPath: string };
+      claudeCode: { configured: boolean; configPath: string };
+      codex: { configured: boolean; configPath: string };
+      mcpRuntime: {
+        mode: 'packaged' | 'development';
+        command: string;
+        args: string[];
+        displayPath: string;
+      };
+      command: {
+        claudeInstalled: boolean;
+        claudeCommandPath: string;
+        codexSlashCommandSupported: boolean;
+        codexLegacyCommandPresent: boolean;
+        codexLegacyCommandPath: string;
+      };
     };
   }
 
@@ -678,6 +711,17 @@ declare global {
     buildGraphifyProjectGraph: (input: { project: string; buildMode?: GraphifyBuildMode }) => Promise<VaultResponse<GraphifyProjectBuildResult>>;
     openGraphifyArtifactFolder: (project: string) => Promise<VaultResponse<string>>;
     exportGraphifyArtifacts: (project: string) => Promise<VaultResponse<{ targetRoot: string; copied: string[] } | null>>;
+    getVaultCollabRuntimeConfig: () => Promise<VaultResponse<VaultCollabRuntimeConfig>>;
+    saveVaultCollabRuntimeConfig: (input: SaveVaultCollabRuntimeConfigInput) => Promise<VaultResponse<VaultCollabRuntimeConfig>>;
+    resetVaultCollabRuntimeConfig: () => Promise<VaultResponse<VaultCollabRuntimeConfig>>;
+    detectVaultCollabRuntime: () => Promise<VaultResponse<VaultCollabRuntimeStatus>>;
+    planVaultCollabInstall: () => Promise<VaultResponse<VaultCollabInstallPlan>>;
+    getVaultCollabDashboardSnapshot: (options?: VaultCollabDashboardOptions) => Promise<VaultResponse<VaultCollabDashboardSnapshot>>;
+    getVaultCollabHandoffActions: (handoffUid: string) => Promise<VaultResponse<VaultCollabHandoffActionSet | null>>;
+    performVaultCollabDashboardAction: (input: VaultCollabDashboardActionInput) => Promise<VaultResponse<VaultCollabActionResult>>;
+    detectVaultCollabSourcePath: () => Promise<VaultResponse<VaultCollabSourcePathDetection>>;
+    useDetectedVaultCollabSourcePath: () => Promise<VaultResponse<VaultCollabRuntimeConfig>>;
+    chooseVaultCollabSourcePath: () => Promise<VaultResponse<VaultCollabRuntimeConfig | null>>;
     readSkillFile: (relativePath: string) => Promise<VaultResponse<VaultSkillFile>>;
     getVaultStructure: () => Promise<VaultResponse<VaultStructureSnapshot>>;
     readVaultFilePreview: (relativePath: string) => Promise<VaultResponse<VaultFilePreview>>;
@@ -685,11 +729,13 @@ declare global {
     connectClaudeDesktop: () => Promise<VaultResponse<ConnectResult>>;
     connectClaudeCode: () => Promise<VaultResponse<ConnectResult>>;
     connectCodex: () => Promise<VaultResponse<ConnectResult>>;
+    connectVaultCollabClients: () => Promise<VaultResponse<ConnectResult>>;
     installSkillFile: (target: string) => Promise<VaultResponse<ConnectResult>>;
     refreshEnrichment: () => Promise<VaultResponse<{ enrichmentActive: boolean }>>;
     disconnectClaudeDesktop: () => Promise<VaultResponse<ConnectResult>>;
     disconnectClaudeCode: () => Promise<VaultResponse<ConnectResult>>;
     disconnectCodex: () => Promise<VaultResponse<ConnectResult>>;
+    disconnectVaultCollabClients: () => Promise<VaultResponse<ConnectResult>>;
     uninstallSkillFile: (target: string) => Promise<VaultResponse<ConnectResult>>;
     onTaskEvent: (callback: (event: VaultTaskEvent) => void) => () => void;
   }
