@@ -489,6 +489,10 @@ function buildConversationEntries(
       continue;
     }
 
+    if (!isConversationEvent(event)) {
+      continue;
+    }
+
     entries.push({
       id: `event:${event.eventId}`,
       at: event.createdAt,
@@ -580,7 +584,7 @@ function buildLaunchRequestRow(
     actorLabel: launchRequest.launchedSessionUid
       ? `launched ${formatVaultCollabShortUid(launchRequest.launchedSessionUid, 8)}`
       : launchRequest.brokerSessionUid
-        ? `broker ${formatVaultCollabShortUid(launchRequest.brokerSessionUid, 8)}`
+        ? `handled by ${formatVaultCollabShortUid(launchRequest.brokerSessionUid, 8)}`
         : launchRequest.requestedBySessionUid
           ? `by ${formatVaultCollabShortUid(launchRequest.requestedBySessionUid, 8)}`
           : 'unassigned',
@@ -1073,6 +1077,10 @@ function formatDiscussionThreadSummary(
   parts.push(`${thread.messageCount} message${thread.messageCount === 1 ? '' : 's'}`);
 
   return parts.join(' / ');
+}
+
+function isConversationEvent(event: VaultCollabEventSnapshot): boolean {
+  return event.eventType !== SESSION_PINGED_EVENT;
 }
 
 function formatEventPayload(event: VaultCollabEventSnapshot): string {

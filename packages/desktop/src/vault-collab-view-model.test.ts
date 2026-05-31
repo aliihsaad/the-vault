@@ -758,6 +758,7 @@ describe('Vault Collab dashboard view model', () => {
       'mark_running',
       'fail',
     ]);
+    expect(model.launchRequestRows[2].actorLabel).toBe('handled by vc_sess_...');
     expect(model.launchRequestRows[3]).toMatchObject({
       statusLabel: 'stopped',
       badgeClass: 'badge-task-complete',
@@ -975,6 +976,14 @@ describe('Vault Collab dashboard view model', () => {
           handoffUid: 'vc_handoff_other_1234567890',
           eventType: 'handoff.claimed',
           payload: {},
+          createdAt: '2026-05-30T00:19:00.000Z',
+        }),
+        event({
+          eventId: 14,
+          handoffUid: selectedHandoffUid,
+          sessionUid: 'vc_sess_worker_1234567890',
+          eventType: 'session.pinged',
+          payload: { message: 'wake worker' },
           createdAt: '2026-05-30T00:19:00.000Z',
         }),
       ],
