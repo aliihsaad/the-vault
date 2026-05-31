@@ -584,7 +584,11 @@ describe('Vault Collab dashboard view model', () => {
           failed: 1,
         },
       },
-    }), now);
+    }), now, null, {
+      approvedLaunchCommands: {
+        vc_launch_approved_1234567890: 'codex --no-alt-screen -C C:/workspace/the-vault "Launch after approval."',
+      },
+    });
 
     expect(model.statusItems).toContain('2 active launches');
     expect(model.launchRequestRows).toHaveLength(5);
@@ -613,6 +617,8 @@ describe('Vault Collab dashboard view model', () => {
       'cancel',
       'fail',
     ]);
+    expect(model.launchRequestRows[0].approvedLaunchCommand).toBeNull();
+    expect(model.launchRequestRows[1].approvedLaunchCommand).toBe('codex --no-alt-screen -C C:/workspace/the-vault "Launch after approval."');
     expect(model.launchRequestRows[2].actions.map((action) => action.action)).toEqual([
       'mark_running',
       'fail',

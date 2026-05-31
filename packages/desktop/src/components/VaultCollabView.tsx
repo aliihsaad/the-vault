@@ -5,6 +5,7 @@ import {
   ChevronDown,
   CheckCircle2,
   Clock3,
+  Copy,
   Inbox,
   Link2,
   MessageSquareText,
@@ -41,6 +42,7 @@ export function VaultCollabView() {
   const [discussionDraft, setDiscussionDraft] = useState('');
   const [handoffActionSet, setHandoffActionSet] = useState<VaultCollabHandoffActionSet | null>(null);
   const [managedTerminals, setManagedTerminals] = useState<VaultCollabManagedTerminalStatus[]>([]);
+  const [approvedLaunchCommands, setApprovedLaunchCommands] = useState<Record<string, string>>({});
 
   useEffect(() => {
     void loadDashboard();
@@ -129,9 +131,12 @@ export function VaultCollabView() {
 
   const model = useMemo(
     () => snapshot
-      ? buildVaultCollabDashboardViewModel(snapshot, lastLoadedAt ?? new Date(), selectedHandoffUid, { dashboardSessionUid })
+      ? buildVaultCollabDashboardViewModel(snapshot, lastLoadedAt ?? new Date(), selectedHandoffUid, {
+        dashboardSessionUid,
+        approvedLaunchCommands,
+      })
       : null,
-    [dashboardSessionUid, lastLoadedAt, selectedHandoffUid, snapshot],
+    [approvedLaunchCommands, dashboardSessionUid, lastLoadedAt, selectedHandoffUid, snapshot],
   );
   const rosterCollapsed = collapsedPanels.has('roster');
   const queueCollapsed = collapsedPanels.has('queue');
@@ -369,9 +374,38 @@ export function VaultCollabView() {
     setDiscussionDraft('');
   }
 
+  async function copyLaunchCommand(launchRequestUid: string, command: string) {
+    try {
+      await navigator.clipboard.writeText(command);
+      setActionNotice('Launch command copied. Run it in a new terminal to start the agent.');
+      setActionError(null);
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : 'Could not copy launch command');
+    }
+  }
+
   async function runLaunchAction(action: string, launchRequestUid: string) {
     if (action === 'approve') {
-      await performDashboardAction({ kind: 'launch', action: 'approve', launchRequestUid, detail: 'Approved from The Vault dashboard.' }, `${launchRequestUid}:approve`);
+      setActionBusy(`${launchRequestUid}:approve`);
+      setActionError(null);
+      setActionNotice(null);
+      try {
+        const response = await window.vaultAPI.approveVaultCollabLaunchRequest(launchRequestUid);
+        if (!response.success || !response.data?.ok || !response.data.launchCommand) {
+          throw new Error(response.error || response.data?.error || 'Vault Collab launch approval failed');
+        }
+
+        setApprovedLaunchCommands((current) => ({
+          ...current,
+          [launchRequestUid]: response.data!.launchCommand!.display,
+        }));
+        setActionNotice('Launch command ready. Run it in a new terminal to start the agent.');
+        await loadDashboard(true);
+      } catch (err) {
+        setActionError(err instanceof Error ? err.message : 'Vault Collab launch approval failed');
+      } finally {
+        setActionBusy(null);
+      }
       return;
     }
 
@@ -402,7 +436,13 @@ export function VaultCollabView() {
         if (!response.success || !response.data) {
           throw new Error(response.error || 'The Vault launch broker failed.');
         }
-        setActionNotice(`Started Codex worker ${formatSessionShortUid(response.data.launchedSessionUid)}.`);
+        setApprovedLaunchCommands((current) => ({
+          ...current,
+          [launchRequestUid]: response.data!.display,
+        }));
+        setActionNotice(response.data.launchedSessionUid
+          ? `Started Codex worker ${formatSessionShortUid(response.data.launchedSessionUid)}.`
+          : 'Launch command ready. Run it in a new terminal to start the agent.');
         await loadDashboard(true);
       } catch (err) {
         setActionError(err instanceof Error ? err.message : 'The Vault launch broker failed.');
@@ -754,6 +794,21 @@ export function VaultCollabView() {
                             ) : null}
                             {launchRequest.commandPreview ? (
                               <span className="vault-collab-command-preview text-mono">{launchRequest.commandPreview}</span>
+                            ) : null}
+                            {launchRequest.approvedLaunchCommand ? (
+                              <div className="vault-collab-approved-command">
+                                <span className="vault-collab-command-preview text-mono">{launchRequest.approvedLaunchCommand}</span>
+                                <button
+                                  type="button"
+                                  className="header-button"
+                                  onClick={() => void copyLaunchCommand(launchRequest.uid, launchRequest.approvedLaunchCommand!)}
+                                  title="Copy launch command"
+                                >
+                                  <Copy size={14} />
+                                  <span>Copy</span>
+                                </button>
+                                <span>Run this in a new terminal to start the agent.</span>
+                              </div>
                             ) : null}
                             {launchRequest.actions.length > 0 ? (
                               <div className="inline-actions vault-collab-action-row">

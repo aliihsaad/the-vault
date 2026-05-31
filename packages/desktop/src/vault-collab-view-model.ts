@@ -81,6 +81,7 @@ export interface VaultCollabLaunchRequestRow {
   ageLabel: string;
   detail: string;
   commandPreview: string | null;
+  approvedLaunchCommand: string | null;
   capabilityLabel: string | null;
   actions: VaultCollabActionDescriptor[];
   attention: boolean;
@@ -154,6 +155,7 @@ export interface VaultCollabSelectedHandoff {
 
 export interface VaultCollabDashboardViewModelOptions {
   dashboardSessionUid?: string | null;
+  approvedLaunchCommands?: Record<string, string>;
 }
 
 export interface VaultCollabDashboardViewModel {
@@ -240,7 +242,11 @@ export function buildVaultCollabDashboardViewModel(
       now,
       options.dashboardSessionUid ?? null,
     ),
-    launchRequestRows: snapshot.launchRequests.map((launchRequest) => buildLaunchRequestRow(launchRequest, now)),
+    launchRequestRows: snapshot.launchRequests.map((launchRequest) => buildLaunchRequestRow(
+      launchRequest,
+      now,
+      options.approvedLaunchCommands ?? {},
+    )),
     handoffRows: snapshot.handoffs.map((handoff) => buildHandoffRow(handoff, now)),
     selectedHandoff: selectedHandoff
       ? buildSelectedHandoff(selectedHandoff, selectedPermissionEvent, now, options.dashboardSessionUid ?? null)
@@ -252,6 +258,7 @@ export function buildVaultCollabDashboardViewModel(
 function buildLaunchRequestRow(
   launchRequest: VaultCollabLaunchRequestSnapshot,
   now: Date,
+  approvedLaunchCommands: Record<string, string>,
 ): VaultCollabLaunchRequestRow {
   const role = launchRequest.role ? formatLooseLabel(launchRequest.role) : null;
   const title = role
@@ -282,6 +289,7 @@ function buildLaunchRequestRow(
       || launchRequest.commandPreview
       || launchRequest.initialInstructions,
     commandPreview: launchRequest.commandPreview,
+    approvedLaunchCommand: approvedLaunchCommands[launchRequest.launchRequestUid] ?? null,
     capabilityLabel,
     actions: buildLaunchRequestActions(launchRequest),
     attention: isActiveLaunchRequestStatus(launchRequest.status),
@@ -301,7 +309,7 @@ function buildLaunchRequestActions(
 
   if (launchRequest.status === 'approved') {
     return [
-      { action: 'mark_launching', label: 'Launch', disabled: false, reason: null, tone: 'primary' },
+      { action: 'mark_launching', label: 'Get command', disabled: false, reason: null, tone: 'primary' },
       { action: 'cancel', label: 'Cancel', disabled: false, reason: null, tone: 'warning' },
       { action: 'fail', label: 'Fail', disabled: false, reason: null, tone: 'danger' },
     ];

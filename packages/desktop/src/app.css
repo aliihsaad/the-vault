@@ -2101,6 +2101,24 @@ select.text-input optgroup {
   white-space: nowrap;
 }
 
+.vault-collab-approved-command {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+}
+
+.vault-collab-approved-command > span:last-child {
+  grid-column: 1 / -1;
+  color: var(--text-muted);
+  font-size: 0.72rem;
+}
+
+.vault-collab-approved-command .header-button {
+  min-height: 28px;
+  padding: 5px 8px;
+}
+
 .vault-collab-handoff-table {
   gap: 0;
 }
