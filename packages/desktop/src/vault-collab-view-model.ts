@@ -1375,6 +1375,8 @@ function getConnectionClass(state: VaultCollabSessionSnapshot['connectionState']
       return 'vault-collab-connection-stale';
     case 'disconnected':
       return 'vault-collab-connection-disconnected';
+    default:
+      return 'vault-collab-connection-disconnected';
   }
 }
 
@@ -1385,6 +1387,8 @@ function getConnectionLabel(state: VaultCollabSessionSnapshot['connectionState']
     case 'stale':
       return 'stale';
     case 'disconnected':
+      return 'closed';
+    default:
       return 'closed';
   }
 }
