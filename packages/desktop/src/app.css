@@ -2230,12 +2230,6 @@ select.text-input optgroup {
   align-items: center;
 }
 
-.vault-collab-delivery-detail {
-  color: var(--text-muted);
-  font-size: 0.74rem;
-  line-height: 1.4;
-}
-
 .vault-collab-session-actions {
   gap: 6px;
   padding-top: 2px;
@@ -2595,6 +2589,230 @@ select.text-input optgroup {
 
   .vault-collab-queue-panel {
     min-height: 420px;
+  }
+}
+
+.vault-collab-cockpit-grid {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: minmax(240px, 0.72fr) minmax(430px, 1.16fr) minmax(360px, 0.92fr);
+  grid-template-areas:
+    "agents work conversation"
+    "detail work conversation";
+  gap: 16px;
+  align-items: stretch;
+}
+
+.vault-collab-zone,
+.vault-collab-needs-you {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid rgba(141, 174, 214, 0.12);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.026);
+}
+
+.vault-collab-needs-you {
+  min-height: 116px;
+}
+
+.vault-collab-roster-zone {
+  grid-area: agents;
+}
+
+.vault-collab-work-zone {
+  grid-area: work;
+}
+
+.vault-collab-conversation-zone {
+  grid-area: conversation;
+}
+
+.vault-collab-detail-zone {
+  grid-area: detail;
+}
+
+.vault-collab-zone-header {
+  display: flex;
+  min-width: 0;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 13px 14px;
+  border-bottom: 1px solid rgba(141, 174, 214, 0.1);
+}
+
+.vault-collab-zone-header > div {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.vault-collab-zone-header strong {
+  color: var(--text-primary);
+  font-size: 0.9rem;
+}
+
+.vault-collab-zone-header span,
+.vault-collab-zone-header svg {
+  color: var(--text-muted);
+}
+
+.vault-collab-zone-header span {
+  font-size: 0.76rem;
+}
+
+.vault-collab-needs-list {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 10px;
+  padding: 12px;
+}
+
+.vault-collab-need-row,
+.vault-collab-agent-row,
+.vault-collab-work-card {
+  min-width: 0;
+  border: 1px solid rgba(141, 174, 214, 0.1);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.024);
+}
+
+.vault-collab-need-row {
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr);
+  gap: 10px;
+  padding: 10px;
+  border-color: rgba(245, 165, 36, 0.28);
+  background: rgba(245, 165, 36, 0.06);
+}
+
+.vault-collab-need-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  background: rgba(245, 165, 36, 0.12);
+  color: #ffd98b;
+}
+
+.vault-collab-need-main,
+.vault-collab-work-card-main {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.vault-collab-need-main p {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 0.76rem;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.vault-collab-agent-row {
+  display: grid;
+  grid-template-columns: 30px minmax(0, 1fr);
+  gap: 10px;
+  align-items: start;
+  padding: 10px;
+}
+
+.vault-collab-work-columns {
+  display: grid;
+  min-height: 0;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  padding: 12px;
+  overflow: auto;
+}
+
+.vault-collab-work-column {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.vault-collab-work-empty {
+  min-height: 52px;
+  padding: 12px;
+  border: 1px dashed rgba(141, 174, 214, 0.16);
+  border-radius: 8px;
+  color: var(--text-muted);
+  font-size: 0.76rem;
+}
+
+.vault-collab-work-card {
+  position: relative;
+  width: 100%;
+  min-height: 104px;
+  padding: 11px 12px 11px 20px;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.vault-collab-work-card:hover,
+.vault-collab-work-card-active {
+  border-color: rgba(92, 224, 230, 0.2);
+  background: rgba(92, 224, 230, 0.045);
+}
+
+.vault-collab-work-card .queue-status-rail {
+  position: absolute;
+  top: 12px;
+  bottom: 12px;
+  left: 8px;
+}
+
+.vault-collab-conversation-zone .vault-collab-discussion-composer {
+  padding: 12px;
+  border-bottom: 1px solid rgba(141, 174, 214, 0.1);
+}
+
+.vault-collab-conversation-zone .vault-collab-event-list,
+.vault-collab-detail-zone .vault-collab-inspector-stack,
+.vault-collab-roster-zone .vault-collab-roster-groups {
+  min-height: 0;
+  overflow: auto;
+}
+
+.vault-collab-conversation-zone .vault-collab-event-list {
+  padding: 12px;
+}
+
+@media (max-width: 1500px) {
+  .vault-collab-cockpit-grid {
+    grid-template-columns: minmax(280px, 0.45fr) minmax(0, 1fr);
+    grid-template-areas:
+      "agents work"
+      "detail work"
+      "conversation conversation";
+  }
+}
+
+@media (max-width: 980px) {
+  .vault-collab-cockpit-grid {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-areas:
+      "agents"
+      "work"
+      "conversation"
+      "detail";
+  }
+
+  .vault-collab-work-columns,
+  .vault-collab-needs-list {
+    grid-template-columns: minmax(0, 1fr);
   }
 }
 

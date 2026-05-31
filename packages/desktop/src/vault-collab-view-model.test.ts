@@ -92,8 +92,9 @@ type EventSnapshot = VaultCollabDashboardSnapshot['events'][number];
 type DiscussionThreadSnapshot = HandoffSnapshot['discussionThreads'][number];
 
 function session(overrides: Partial<SessionSnapshot> & { sessionUid: string }): SessionSnapshot {
+  const { sessionUid, ...rest } = overrides;
   return {
-    sessionUid: overrides.sessionUid,
+    sessionUid,
     displayName: 'Codex worker',
     clientType: 'codex',
     project: 'the-vault',
@@ -114,13 +115,14 @@ function session(overrides: Partial<SessionSnapshot> & { sessionUid: string }): 
     createdAt: now.toISOString(),
     updatedAt: now.toISOString(),
     disconnectedAt: null,
-    ...overrides,
+    ...rest,
   };
 }
 
 function handoff(overrides: Partial<HandoffSnapshot> & { handoffUid: string }): HandoffSnapshot {
+  const { handoffUid, ...rest } = overrides;
   return {
-    handoffUid: overrides.handoffUid,
+    handoffUid,
     vaultMemoryUid: null,
     shortPrompt: 'Implement dashboard work.',
     sourceProject: 'the-vault',
@@ -147,15 +149,16 @@ function handoff(overrides: Partial<HandoffSnapshot> & { handoffUid: string }): 
     resolvedAt: null,
     staleAt: null,
     discussionThreads: [],
-    ...overrides,
+    ...rest,
   };
 }
 
 function launchRequest(
   overrides: Partial<LaunchRequestSnapshot> & { launchRequestUid: string },
 ): LaunchRequestSnapshot {
+  const { launchRequestUid, ...rest } = overrides;
   return {
-    launchRequestUid: overrides.launchRequestUid,
+    launchRequestUid,
     provider: 'codex',
     model: 'gpt-5-codex',
     effortLevel: 'medium',
@@ -182,13 +185,14 @@ function launchRequest(
     rejectedAt: null,
     startedAt: null,
     completedAt: null,
-    ...overrides,
+    ...rest,
   };
 }
 
 function discussionThread(overrides: Partial<DiscussionThreadSnapshot> & { threadUid: string }): DiscussionThreadSnapshot {
+  const { threadUid, ...rest } = overrides;
   return {
-    threadUid: overrides.threadUid,
+    threadUid,
     handoffUid: 'vc_handoff_discussion_1234567890',
     project: 'the-vault',
     title: 'Review thread',
@@ -199,19 +203,20 @@ function discussionThread(overrides: Partial<DiscussionThreadSnapshot> & { threa
     resolvedAt: null,
     messageCount: 2,
     lastMessageAt: '2026-05-30T00:12:00.000Z',
-    ...overrides,
+    ...rest,
   };
 }
 
 function event(overrides: Partial<EventSnapshot> & { eventId: number; eventType: string }): EventSnapshot {
+  const { eventId, eventType, ...rest } = overrides;
   return {
-    eventId: overrides.eventId,
+    eventId,
     handoffUid: null,
     sessionUid: null,
-    eventType: overrides.eventType,
+    eventType,
     payload: {},
     createdAt: '2026-05-30T00:11:00.000Z',
-    ...overrides,
+    ...rest,
   };
 }
 

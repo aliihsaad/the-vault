@@ -246,7 +246,7 @@ export function buildVaultCollabDashboardViewModel(
     : snapshot.counts.permissionRequestEvents > 0
       ? `${snapshot.counts.permissionRequestEvents} recent requests`
     : snapshot.counts.attentionPingEvents > 0
-      ? `${snapshot.counts.attentionPingEvents} pings`
+      ? `${snapshot.counts.attentionPingEvents} attention notices`
       : 'No attention';
   const attentionActive = snapshot.counts.permissionNeeded > 0
     || snapshot.counts.permissionRequestEvents > 0
@@ -268,13 +268,6 @@ export function buildVaultCollabDashboardViewModel(
   const selectedHandoff = getSelectedHandoff(snapshot.handoffs, selectedHandoffUid);
   const latestPermissionEventBySessionUid = getLatestEventBySessionUid(snapshot.events, SESSION_PERMISSION_REQUESTED_EVENT);
   const latestDeliveryAttemptBySessionUid = getLatestDeliveryAttemptBySessionUid(snapshot.deliveryAttempts ?? []);
-  const failedDeliveryAttempts = (snapshot.deliveryAttempts ?? []).filter((attempt) => attempt.status === 'failed').length;
-  if (snapshot.deliveryAttempts?.length) {
-    statusItemModels.splice(statusItemModels.length - 1, 0, {
-      label: `${failedDeliveryAttempts}/${snapshot.deliveryAttempts.length} delivery failed`,
-      tone: failedDeliveryAttempts > 0 ? 'attention' : 'muted',
-    });
-  }
   const selectedPermissionEvent = selectedHandoff
     ? snapshot.events.find((event) => (
       event.handoffUid === selectedHandoff.handoffUid
@@ -321,6 +314,7 @@ export function buildVaultCollabDashboardViewModel(
       selectedHandoffModel,
       selectedHandoff?.handoffUid ?? null,
       now,
+      options.dashboardSessionUid ?? null,
     ),
   };
 }
@@ -341,9 +335,10 @@ function buildCockpitViewModel(
   selectedHandoff: VaultCollabSelectedHandoff | null,
   selectedHandoffUid: string | null,
   now: Date,
+  dashboardSessionUid: string | null,
 ): VaultCollabCockpitViewModel {
   return {
-    needsYou: buildNeedsYouItems(snapshot, launchRequestRows, handoffRows),
+    needsYou: buildNeedsYouItems(snapshot, launchRequestRows, handoffRows, dashboardSessionUid),
     roster: buildRoleGroups(snapshot.sessions),
     work: buildWorkColumns(snapshot.handoffs, handoffRows),
     conversation: buildConversationEntries(snapshot.handoffs, snapshot.events, selectedHandoffUid, now),
@@ -355,6 +350,7 @@ function buildNeedsYouItems(
   snapshot: VaultCollabDashboardSnapshot,
   launchRequestRows: VaultCollabLaunchRequestRow[],
   handoffRows: VaultCollabHandoffRow[],
+  dashboardSessionUid: string | null,
 ): VaultCollabNeedsYouItem[] {
   const launchRowsByUid = new Map(launchRequestRows.map((row) => [row.uid, row]));
   const handoffRowsByUid = new Map(handoffRows.map((row) => [row.uid, row]));
@@ -386,7 +382,7 @@ function buildNeedsYouItems(
       id: handoff.handoffUid,
       title: handoff.shortPrompt,
       subtitle: handoff.progressNote ?? row?.statusLabel,
-      actions: buildHandoffActions(handoff, null),
+      actions: buildHandoffActions(handoff, dashboardSessionUid),
     });
   }
 
