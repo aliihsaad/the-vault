@@ -2485,12 +2485,20 @@ app.whenReady().then(() => {
 
   function parseVaultCollabAgentRequestInput(input: unknown): VaultCollabAgentRequestInput {
     const raw = input && typeof input === 'object' ? input as Record<string, unknown> : {};
+    const project = typeof raw.project === 'string' ? raw.project.trim() : '';
+    const workspacePath = typeof raw.workspacePath === 'string' ? raw.workspacePath.trim() : '';
     const role = typeof raw.role === 'string' ? raw.role.trim() : '';
     const instructions = typeof raw.instructions === 'string' ? raw.instructions.trim() : '';
     const provider = raw.provider === 'codex' || raw.provider === 'claude-code'
       ? raw.provider
       : null;
 
+    if (!project) {
+      throw new Error('Agent project is required.');
+    }
+    if (!workspacePath) {
+      throw new Error('Agent workspace path is required.');
+    }
     if (!role) {
       throw new Error('Agent role is required.');
     }
@@ -2501,7 +2509,7 @@ app.whenReady().then(() => {
       throw new Error('Agent instructions are required.');
     }
 
-    return { role, provider, instructions };
+    return { role, provider, instructions, project, workspacePath };
   }
 
   function getVaultCollabAgentRequestModel(provider: VaultCollabAgentRequestInput['provider']): string {
@@ -2536,7 +2544,6 @@ app.whenReady().then(() => {
       const request = parseVaultCollabAgentRequestInput(input);
       const config = getVaultCollabDashboardActionRuntimeConfig();
       const actor = await ensureVaultCollabDashboardActor();
-      const workspacePath = resolve(__dirname, '../../..');
       const data = await executeVaultCollabAction(
         config,
         actor,
@@ -2546,12 +2553,12 @@ app.whenReady().then(() => {
           provider: request.provider,
           model: getVaultCollabAgentRequestModel(request.provider),
           effortLevel: request.provider === 'codex' ? 'medium' : null,
-          project: 'the-vault',
-          workspacePath,
+          project: request.project,
+          workspacePath: request.workspacePath,
           role: request.role,
           initialInstructions: request.instructions,
           permissionMode: 'workspace-write',
-          commandPreview: getVaultCollabAgentRequestCommandPreview(request.provider, workspacePath),
+          commandPreview: getVaultCollabAgentRequestCommandPreview(request.provider, request.workspacePath),
           requestedCapabilities: ['vault_collab', 'code_editing'],
           approvalPolicyVersion: 'dashboard-request-agent-v1',
           metadata: { source: 'dashboard' },

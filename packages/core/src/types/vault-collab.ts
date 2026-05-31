@@ -313,6 +313,8 @@ export type VaultCollabAgentRequestProvider = Extract<VaultCollabClientType, 'co
 export interface VaultCollabAgentRequestInput {
   role: string;
   provider: VaultCollabAgentRequestProvider;
+  project: string;
+  workspacePath: string;
   instructions: string;
 }
 

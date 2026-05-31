@@ -1,4 +1,4 @@
-import { useState, type FormEvent } from 'react';
+import { useEffect, useState, type FormEvent } from 'react';
 import { AlertTriangle, CheckCircle2, Copy, Rocket, UserPlus } from 'lucide-react';
 
 import type {
@@ -10,15 +10,25 @@ interface NeedsYouProps {
   items: VaultCollabNeedsYouItem[];
   launchRequests: VaultCollabLaunchRequestRow[];
   actionBusy: string | null;
+  projectOptions: RequestAgentProjectOption[];
+  defaultProject: string;
+  defaultWorkspacePath: string;
   onRequestAgent: (input: RequestAgentInput) => void;
   onLaunchAction: (action: string, launchRequestUid: string) => void;
   onHandoffAction: (action: string, handoffUid: string) => void;
   onCopyLaunchCommand: (launchRequestUid: string, command: string) => void;
 }
 
+interface RequestAgentProjectOption {
+  project: string;
+  workspacePath: string;
+}
+
 interface RequestAgentInput {
   role: string;
   provider: 'codex' | 'claude-code';
+  project: string;
+  workspacePath: string;
   instructions: string;
 }
 
@@ -31,6 +41,9 @@ export function NeedsYou({
   items,
   launchRequests,
   actionBusy,
+  projectOptions,
+  defaultProject,
+  defaultWorkspacePath,
   onRequestAgent,
   onLaunchAction,
   onHandoffAction,
@@ -64,6 +77,9 @@ export function NeedsYou({
         {requestFormOpen ? (
           <RequestAgentForm
             disabled={actionBusy === 'agent-request'}
+            projectOptions={projectOptions}
+            defaultProject={defaultProject}
+            defaultWorkspacePath={defaultWorkspacePath}
             onCancel={() => setRequestFormOpen(false)}
             onRequestAgent={onRequestAgent}
           />
@@ -133,28 +149,56 @@ export function NeedsYou({
 
 function RequestAgentForm({
   disabled,
+  projectOptions,
+  defaultProject,
+  defaultWorkspacePath,
   onCancel,
   onRequestAgent,
 }: {
   disabled: boolean;
+  projectOptions: RequestAgentProjectOption[];
+  defaultProject: string;
+  defaultWorkspacePath: string;
   onCancel: () => void;
   onRequestAgent: (input: RequestAgentInput) => void;
 }) {
+  const [project, setProject] = useState(defaultProject);
+  const [workspacePath, setWorkspacePath] = useState(defaultWorkspacePath);
   const [role, setRole] = useState('implementation-worker');
   const [provider, setProvider] = useState<RequestAgentInput['provider']>('codex');
   const [agentInstructions, setAgentInstructions] = useState('');
 
+  useEffect(() => {
+    setProject((current) => current.trim() ? current : defaultProject);
+  }, [defaultProject]);
+
+  useEffect(() => {
+    setWorkspacePath((current) => current.trim() ? current : defaultWorkspacePath);
+  }, [defaultWorkspacePath]);
+
+  function updateProject(nextProject: string) {
+    setProject(nextProject);
+    const matchingOption = projectOptions.find((option) => option.project === nextProject);
+    if (matchingOption) {
+      setWorkspacePath(matchingOption.workspacePath);
+    }
+  }
+
   function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    const trimmedProject = project.trim();
+    const trimmedWorkspacePath = workspacePath.trim();
     const trimmedRole = role.trim();
     const trimmedInstructions = agentInstructions.trim();
-    if (!trimmedRole || !trimmedInstructions) {
+    if (!trimmedProject || !trimmedWorkspacePath || !trimmedRole || !trimmedInstructions) {
       return;
     }
 
     onRequestAgent({
       role: trimmedRole,
       provider,
+      project: trimmedProject,
+      workspacePath: trimmedWorkspacePath,
       instructions: trimmedInstructions,
     });
   }
@@ -169,6 +213,30 @@ function RequestAgentForm({
           <strong>Request agent</strong>
           <span>{provider}</span>
         </div>
+        <label className="field-row">
+          <span className="field-label">Project</span>
+          <input
+            className="text-input"
+            list="vault-collab-request-agent-projects"
+            value={project}
+            onChange={(event) => updateProject(event.target.value)}
+            placeholder="Project name"
+          />
+          <datalist id="vault-collab-request-agent-projects">
+            {projectOptions.map((option) => (
+              <option key={option.project} value={option.project} />
+            ))}
+          </datalist>
+        </label>
+        <label className="field-row">
+          <span className="field-label">Workspace</span>
+          <input
+            className="text-input"
+            value={workspacePath}
+            onChange={(event) => setWorkspacePath(event.target.value)}
+            placeholder="Absolute workspace path"
+          />
+        </label>
         <label className="field-row">
           <span className="field-label">Role</span>
           <input
@@ -202,7 +270,7 @@ function RequestAgentForm({
           <button
             type="submit"
             className="primary-button"
-            disabled={disabled || !role.trim() || !agentInstructions.trim()}
+            disabled={disabled || !project.trim() || !workspacePath.trim() || !role.trim() || !agentInstructions.trim()}
           >
             Request agent
           </button>

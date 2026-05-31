@@ -390,7 +390,7 @@ function App() {
                   onOpenMemory={openMemoryItem}
                 />
               ) : null}
-              {activeTab === 'collab' ? <VaultCollabView /> : null}
+              {activeTab === 'collab' ? <VaultCollabView vaultStatus={vaultStatus} /> : null}
               {activeTab === 'decisions' ? (
                 <FilteredMemoryWorkspaceView
                   memoryType="decision"

@@ -11,8 +11,18 @@ import { WorkBoard } from './vault-collab/WorkBoard.js';
 
 type VaultCollabSnapshot = NonNullable<Awaited<ReturnType<typeof window.vaultAPI.getVaultCollabDashboardSnapshot>>['data']>;
 
-export function VaultCollabView() {
+interface VaultCollabViewProps {
+  vaultStatus: VaultStatus | null;
+}
+
+interface RequestAgentProjectOption {
+  project: string;
+  workspacePath: string;
+}
+
+export function VaultCollabView({ vaultStatus }: VaultCollabViewProps) {
   const [snapshot, setSnapshot] = useState<VaultCollabSnapshot | null>(null);
+  const [projectWorkspaces, setProjectWorkspaces] = useState<ProjectWorkspaceConfig[]>([]);
   const [selectedHandoffUid, setSelectedHandoffUid] = useState<string | null>(null);
   const [lastLoadedAt, setLastLoadedAt] = useState<Date | null>(null);
   const [loading, setLoading] = useState(true);
@@ -55,6 +65,37 @@ export function VaultCollabView() {
     [approvedLaunchCommands, dashboardSessionUid, lastLoadedAt, selectedHandoffUid, snapshot],
   );
 
+  const requestAgentProjectOptions = useMemo<RequestAgentProjectOption[]>(() => {
+    const options = new Map<string, RequestAgentProjectOption>();
+
+    for (const project of vaultStatus?.projects ?? []) {
+      options.set(project.name, { project: project.name, workspacePath: '' });
+    }
+
+    for (const workspace of projectWorkspaces) {
+      options.set(workspace.project, {
+        project: workspace.project,
+        workspacePath: workspace.workspacePath,
+      });
+    }
+
+    return Array.from(options.values()).sort((left, right) => left.project.localeCompare(right.project));
+  }, [projectWorkspaces, vaultStatus?.projects]);
+
+  const requestAgentDefault = useMemo(() => {
+    const activeWorkspaceRoot = normalizeWorkspacePath(vaultStatus?.workspaceRoot ?? '');
+    const activeWorkspace = activeWorkspaceRoot
+      ? requestAgentProjectOptions.find((option) => normalizeWorkspacePath(option.workspacePath) === activeWorkspaceRoot)
+      : null;
+    const mappedWorkspace = activeWorkspace
+      ?? requestAgentProjectOptions.find((option) => option.workspacePath.trim().length > 0);
+
+    return {
+      defaultProject: mappedWorkspace?.project ?? '',
+      defaultWorkspacePath: mappedWorkspace?.workspacePath ?? '',
+    };
+  }, [requestAgentProjectOptions, vaultStatus?.workspaceRoot]);
+
   const actions = useVaultCollabActions({
     discussionDraft,
     loadDashboard,
@@ -71,18 +112,24 @@ export function VaultCollabView() {
     setError(null);
 
     try {
-      const response = await window.vaultAPI.getVaultCollabDashboardSnapshot({
-        eventLimit: 48,
-        handoffLimit: 40,
-        launchRequestLimit: 24,
-        sessionLimit: 32,
-      });
+      const [response, workspacesResponse] = await Promise.all([
+        window.vaultAPI.getVaultCollabDashboardSnapshot({
+          eventLimit: 48,
+          handoffLimit: 40,
+          launchRequestLimit: 24,
+          sessionLimit: 32,
+        }),
+        window.vaultAPI.listProjectWorkspaces(),
+      ]);
 
       if (!response.success || !response.data) {
         throw new Error(response.error || 'Failed to load Vault Collab dashboard data');
       }
 
       setSnapshot(response.data);
+      if (workspacesResponse.success) {
+        setProjectWorkspaces(workspacesResponse.data ?? []);
+      }
       setLastLoadedAt(new Date());
       setSelectedHandoffUid((current) => {
         if (response.data!.handoffs.length === 0) {
@@ -157,6 +204,9 @@ export function VaultCollabView() {
               items={model.cockpit.needsYou}
               launchRequests={model.launchRequestRows}
               actionBusy={actions.actionBusy}
+              projectOptions={requestAgentProjectOptions}
+              defaultProject={requestAgentDefault.defaultProject}
+              defaultWorkspacePath={requestAgentDefault.defaultWorkspacePath}
               onRequestAgent={(input) => void actions.requestAgent(input)}
               onLaunchAction={(action, uid) => void actions.runLaunchAction(action, uid)}
               onHandoffAction={(action, uid) => void actions.runHandoffAction(action, uid)}
@@ -185,4 +235,8 @@ export function VaultCollabView() {
       )}
     </div>
   );
+}
+
+function normalizeWorkspacePath(value: string): string {
+  return value.trim().replace(/\\/g, '/').replace(/\/+$/, '').toLocaleLowerCase();
 }

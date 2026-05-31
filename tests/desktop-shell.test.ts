@@ -14,6 +14,7 @@ describe('desktop shell navigation', () => {
   const collabRosterSource = readFileSync(join(process.cwd(), 'packages/desktop/src/components/vault-collab/Roster.tsx'), 'utf8');
   const collabWorkBoardSource = readFileSync(join(process.cwd(), 'packages/desktop/src/components/vault-collab/WorkBoard.tsx'), 'utf8');
   const collabViewModelSource = readFileSync(join(process.cwd(), 'packages/desktop/src/vault-collab-view-model.ts'), 'utf8');
+  const coreVaultCollabTypesSource = readFileSync(join(process.cwd(), 'packages/core/src/types/vault-collab.ts'), 'utf8');
   const collabComponentSurface = [
     collabSource,
     collabConversationSource,
@@ -156,7 +157,7 @@ describe('desktop shell navigation', () => {
     expect(appSource).toContain("id: 'graph', label: 'Graphify'");
     expect(appSource).toContain("id: 'collab', label: 'Vault Collab'");
     expect(appSource).toContain("title: 'Vault Collab'");
-    expect(appSource).toContain("activeTab === 'collab' ? <VaultCollabView />");
+    expect(appSource).toContain("activeTab === 'collab' ? <VaultCollabView vaultStatus={vaultStatus} />");
     expect(collabSource).toContain('window.vaultAPI.getVaultCollabDashboardSnapshot');
     expect(collabComponentSurface).toContain('Agents');
     expect(collabComponentSurface).toContain('Work');
@@ -213,19 +214,56 @@ describe('desktop shell navigation', () => {
 
   it('wires Vault Collab dashboard Request agent through preload, main, and cockpit UI', () => {
     const requestAgentSurface = `${collabSource}\n${collabNeedsYouSource}`;
+    const requestAgentInputType = sourceBlock(
+      coreVaultCollabTypesSource,
+      'export interface VaultCollabAgentRequestInput',
+      'export type VaultCollabDashboardActionInput',
+    );
 
     expect(electronMainSource).toContain("ipcMain.handle('vault:requestVaultCollabAgent'");
     expect(electronPreloadSource).toContain('requestVaultCollabAgent');
     expect(desktopTypesSource).toContain('VaultCollabAgentRequestInput');
     expect(desktopTypesSource).toContain('requestVaultCollabAgent');
+    expect(requestAgentInputType).toContain('project: string');
+    expect(requestAgentInputType).toContain('workspacePath: string');
     expect(requestAgentSurface).toContain('Request agent');
+    expect(requestAgentSurface).toContain('Project');
+    expect(requestAgentSurface).toContain('Workspace');
     expect(requestAgentSurface).toContain("provider: 'codex'");
     expect(requestAgentSurface).toContain("provider: 'claude-code'");
     expect(requestAgentSurface).toContain('onRequestAgent');
+    expect(requestAgentSurface).toContain('defaultProject');
+    expect(requestAgentSurface).toContain('defaultWorkspacePath');
+    expect(requestAgentSurface).toContain('project: trimmedProject');
+    expect(requestAgentSurface).toContain('workspacePath: trimmedWorkspacePath');
     expect(requestAgentSurface).toContain('agentInstructions');
     expect(requestAgentSurface).toContain('requestFormOpen');
     expect(requestAgentSurface).toContain('vault-collab-request-agent-form');
     expect(requestAgentSurface).toContain('Cancel');
+  });
+
+  it('uses explicit project and workspace values for Vault Collab Request agent IPC', () => {
+    const requestAgentParserSource = sourceBlock(
+      electronMainSource,
+      'function parseVaultCollabAgentRequestInput',
+      'function getVaultCollabAgentRequestModel',
+    );
+    const requestAgentHandlerSource = sourceBlock(
+      electronMainSource,
+      "ipcMain.handle('vault:requestVaultCollabAgent'",
+      "ipcMain.handle('vault:approveVaultCollabLaunchRequest'",
+    );
+
+    expect(requestAgentParserSource).toContain('raw.project');
+    expect(requestAgentParserSource).toContain('raw.workspacePath');
+    expect(requestAgentParserSource).toContain('Agent project is required.');
+    expect(requestAgentParserSource).toContain('Agent workspace path is required.');
+    expect(requestAgentParserSource).toContain('return { role, provider, instructions, project, workspacePath }');
+    expect(requestAgentHandlerSource).toContain('project: request.project');
+    expect(requestAgentHandlerSource).toContain('workspacePath: request.workspacePath');
+    expect(requestAgentHandlerSource).toContain('getVaultCollabAgentRequestCommandPreview(request.provider, request.workspacePath)');
+    expect(requestAgentHandlerSource).not.toContain("project: 'the-vault'");
+    expect(requestAgentHandlerSource).not.toContain("const workspacePath = resolve(__dirname, '../../..')");
   });
 
   it('renders Vault Collab permission-needed and attention indicators as read-only UI', () => {
@@ -382,3 +420,11 @@ describe('desktop shell navigation', () => {
     expect(overviewSource).not.toContain('taskPressureScore');
   });
 });
+
+function sourceBlock(source: string, startNeedle: string, endNeedle: string): string {
+  const start = source.indexOf(startNeedle);
+  expect(start).toBeGreaterThanOrEqual(0);
+  const end = source.indexOf(endNeedle, start);
+  expect(end).toBeGreaterThan(start);
+  return source.slice(start, end);
+}
