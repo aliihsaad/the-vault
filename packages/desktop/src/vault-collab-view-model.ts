@@ -153,6 +153,63 @@ export interface VaultCollabSelectedHandoff {
   relatedFiles: string[];
 }
 
+export interface VaultCollabNeedsYouItem {
+  kind: 'launch_approval' | 'handoff_blocked' | 'handoff_awaiting_user' | 'agent_blocked';
+  id: string;
+  title: string;
+  subtitle?: string;
+  actions: VaultCollabActionDescriptor[];
+}
+
+export interface VaultCollabRosterAgent {
+  sessionUid: string;
+  displayName: string;
+  role: string;
+  status: string;
+  currentHandoffUid: string | null;
+  freshness: 'fresh' | 'stale';
+}
+
+export interface VaultCollabRoleGroup {
+  role: string;
+  agents: VaultCollabRosterAgent[];
+}
+
+export type VaultCollabWorkColumnState =
+  | 'available'
+  | 'in_progress'
+  | 'verification_needed'
+  | 'blocked'
+  | 'awaiting_user'
+  | 'resolved';
+
+export interface VaultCollabWorkCard extends VaultCollabHandoffRow {
+  state: VaultCollabWorkColumnState;
+}
+
+export interface VaultCollabWorkColumn {
+  state: VaultCollabWorkColumnState;
+  label: string;
+  cards: VaultCollabWorkCard[];
+}
+
+export interface VaultCollabConversationEntry {
+  id: string;
+  at: string;
+  kind: 'message' | 'event';
+  author?: string;
+  body: string;
+  handoffUid?: string;
+}
+
+export interface VaultCollabCockpitViewModel {
+  needsYou: VaultCollabNeedsYouItem[];
+  roster: VaultCollabRoleGroup[];
+  work: VaultCollabWorkColumn[];
+  conversation: VaultCollabConversationEntry[];
+  selectedHandoff: VaultCollabSelectedHandoff | null;
+}
+
 export interface VaultCollabDashboardViewModelOptions {
   dashboardSessionUid?: string | null;
   approvedLaunchCommands?: Record<string, string>;
@@ -174,6 +231,7 @@ export interface VaultCollabDashboardViewModel {
   handoffRows: VaultCollabHandoffRow[];
   selectedHandoff: VaultCollabSelectedHandoff | null;
   eventRows: VaultCollabEventRow[];
+  cockpit: VaultCollabCockpitViewModel;
 }
 
 export function buildVaultCollabDashboardViewModel(
@@ -223,6 +281,16 @@ export function buildVaultCollabDashboardViewModel(
       && event.eventType === HANDOFF_PERMISSION_REQUESTED_EVENT
     )) ?? null
     : null;
+  const launchRequestRows = snapshot.launchRequests.map((launchRequest) => buildLaunchRequestRow(
+    launchRequest,
+    now,
+    options.approvedLaunchCommands ?? {},
+  ));
+  const handoffRows = snapshot.handoffs.map((handoff) => buildHandoffRow(handoff, now));
+  const selectedHandoffModel = selectedHandoff
+    ? buildSelectedHandoff(selectedHandoff, selectedPermissionEvent, now, options.dashboardSessionUid ?? null)
+    : null;
+  const eventRows = buildEventRows(snapshot.events, selectedHandoff?.handoffUid ?? null, now);
 
   return {
     configured: snapshot.configured,
@@ -242,17 +310,253 @@ export function buildVaultCollabDashboardViewModel(
       now,
       options.dashboardSessionUid ?? null,
     ),
-    launchRequestRows: snapshot.launchRequests.map((launchRequest) => buildLaunchRequestRow(
-      launchRequest,
+    launchRequestRows,
+    handoffRows,
+    selectedHandoff: selectedHandoffModel,
+    eventRows,
+    cockpit: buildCockpitViewModel(
+      snapshot,
+      launchRequestRows,
+      handoffRows,
+      selectedHandoffModel,
+      selectedHandoff?.handoffUid ?? null,
       now,
-      options.approvedLaunchCommands ?? {},
-    )),
-    handoffRows: snapshot.handoffs.map((handoff) => buildHandoffRow(handoff, now)),
-    selectedHandoff: selectedHandoff
-      ? buildSelectedHandoff(selectedHandoff, selectedPermissionEvent, now, options.dashboardSessionUid ?? null)
-      : null,
-    eventRows: buildEventRows(snapshot.events, selectedHandoff?.handoffUid ?? null, now),
+    ),
   };
+}
+
+const WORK_COLUMNS: Array<{ state: VaultCollabWorkColumnState; label: string }> = [
+  { state: 'available', label: 'Available' },
+  { state: 'in_progress', label: 'In progress' },
+  { state: 'verification_needed', label: 'Needs verification' },
+  { state: 'blocked', label: 'Blocked' },
+  { state: 'awaiting_user', label: 'Needs user' },
+  { state: 'resolved', label: 'Resolved' },
+];
+
+function buildCockpitViewModel(
+  snapshot: VaultCollabDashboardSnapshot,
+  launchRequestRows: VaultCollabLaunchRequestRow[],
+  handoffRows: VaultCollabHandoffRow[],
+  selectedHandoff: VaultCollabSelectedHandoff | null,
+  selectedHandoffUid: string | null,
+  now: Date,
+): VaultCollabCockpitViewModel {
+  return {
+    needsYou: buildNeedsYouItems(snapshot, launchRequestRows, handoffRows),
+    roster: buildRoleGroups(snapshot.sessions),
+    work: buildWorkColumns(snapshot.handoffs, handoffRows),
+    conversation: buildConversationEntries(snapshot.handoffs, snapshot.events, selectedHandoffUid, now),
+    selectedHandoff,
+  };
+}
+
+function buildNeedsYouItems(
+  snapshot: VaultCollabDashboardSnapshot,
+  launchRequestRows: VaultCollabLaunchRequestRow[],
+  handoffRows: VaultCollabHandoffRow[],
+): VaultCollabNeedsYouItem[] {
+  const launchRowsByUid = new Map(launchRequestRows.map((row) => [row.uid, row]));
+  const handoffRowsByUid = new Map(handoffRows.map((row) => [row.uid, row]));
+  const items: VaultCollabNeedsYouItem[] = [];
+
+  for (const launchRequest of snapshot.launchRequests) {
+    if (launchRequest.status !== 'requested' && launchRequest.status !== 'approved') {
+      continue;
+    }
+
+    const row = launchRowsByUid.get(launchRequest.launchRequestUid);
+    items.push({
+      kind: 'launch_approval',
+      id: launchRequest.launchRequestUid,
+      title: row?.title ?? launchRequest.model,
+      subtitle: `${formatStatusLabel(launchRequest.status)} / ${launchRequest.project}`,
+      actions: row?.actions ?? buildLaunchRequestActions(launchRequest),
+    });
+  }
+
+  for (const handoff of snapshot.handoffs) {
+    if (handoff.status !== 'blocked' && handoff.status !== 'awaiting_user') {
+      continue;
+    }
+
+    const row = handoffRowsByUid.get(handoff.handoffUid);
+    items.push({
+      kind: handoff.status === 'blocked' ? 'handoff_blocked' : 'handoff_awaiting_user',
+      id: handoff.handoffUid,
+      title: handoff.shortPrompt,
+      subtitle: handoff.progressNote ?? row?.statusLabel,
+      actions: buildHandoffActions(handoff, null),
+    });
+  }
+
+  for (const session of snapshot.sessions) {
+    if (session.effectiveStatus !== 'blocked' || !isLiveRosterSession(session)) {
+      continue;
+    }
+
+    items.push({
+      kind: 'agent_blocked',
+      id: session.sessionUid,
+      title: getSessionDisplayName(session),
+      subtitle: session.statusDetail ?? getSessionRole(session),
+      actions: [],
+    });
+  }
+
+  return items;
+}
+
+function buildRoleGroups(sessions: VaultCollabSessionSnapshot[]): VaultCollabRoleGroup[] {
+  const byRole = new Map<string, VaultCollabRosterAgent[]>();
+  const seenSessionUids = new Set<string>();
+
+  for (const session of sessions) {
+    if (!isLiveRosterSession(session) || seenSessionUids.has(session.sessionUid)) {
+      continue;
+    }
+
+    seenSessionUids.add(session.sessionUid);
+    const role = getSessionRole(session);
+    const agents = byRole.get(role) ?? [];
+    agents.push({
+      sessionUid: session.sessionUid,
+      displayName: getSessionDisplayName(session),
+      role,
+      status: session.effectiveStatus,
+      currentHandoffUid: session.currentHandoffUid,
+      freshness: session.connectionState === 'fresh' ? 'fresh' : 'stale',
+    });
+    byRole.set(role, agents);
+  }
+
+  return Array.from(byRole.entries()).map(([role, agents]) => ({ role, agents }));
+}
+
+function buildWorkColumns(
+  handoffs: VaultCollabHandoffSnapshot[],
+  handoffRows: VaultCollabHandoffRow[],
+): VaultCollabWorkColumn[] {
+  const rowsByUid = new Map(handoffRows.map((row) => [row.uid, row]));
+  const cardsByColumn = new Map<VaultCollabWorkColumnState, VaultCollabWorkCard[]>(
+    WORK_COLUMNS.map((column) => [column.state, []]),
+  );
+
+  for (const handoff of handoffs) {
+    const state = getWorkColumnState(handoff.status);
+    if (!state) {
+      continue;
+    }
+
+    const row = rowsByUid.get(handoff.handoffUid);
+    if (!row) {
+      continue;
+    }
+
+    cardsByColumn.get(state)?.push({ ...row, state });
+  }
+
+  return WORK_COLUMNS.map((column) => ({
+    ...column,
+    cards: cardsByColumn.get(column.state) ?? [],
+  }));
+}
+
+function buildConversationEntries(
+  handoffs: VaultCollabHandoffSnapshot[],
+  events: VaultCollabEventSnapshot[],
+  selectedHandoffUid: string | null,
+  now: Date,
+): VaultCollabConversationEntry[] {
+  const entries: VaultCollabConversationEntry[] = [];
+
+  for (const handoff of handoffs) {
+    if (selectedHandoffUid && handoff.handoffUid !== selectedHandoffUid) {
+      continue;
+    }
+
+    for (const thread of handoff.discussionThreads) {
+      const at = thread.lastMessageAt ?? thread.updatedAt;
+      entries.push({
+        id: `thread:${thread.threadUid}`,
+        at,
+        kind: 'message',
+        author: thread.createdBySessionUid ?? undefined,
+        body: formatConversationThreadBody(thread, now),
+        handoffUid: handoff.handoffUid,
+      });
+    }
+  }
+
+  for (const event of events) {
+    if (selectedHandoffUid && event.handoffUid !== selectedHandoffUid) {
+      continue;
+    }
+
+    entries.push({
+      id: `event:${event.eventId}`,
+      at: event.createdAt,
+      kind: 'event',
+      author: event.sessionUid ?? undefined,
+      body: formatEventPayload(event),
+      handoffUid: event.handoffUid ?? undefined,
+    });
+  }
+
+  return entries.sort((left, right) => new Date(right.at).getTime() - new Date(left.at).getTime());
+}
+
+function getWorkColumnState(status: VaultCollabHandoffSnapshot['status']): VaultCollabWorkColumnState | null {
+  switch (status) {
+    case 'available':
+      return 'available';
+    case 'claimed':
+    case 'in_progress':
+      return 'in_progress';
+    case 'verification_needed':
+      return 'verification_needed';
+    case 'blocked':
+      return 'blocked';
+    case 'awaiting_user':
+      return 'awaiting_user';
+    case 'resolved':
+      return 'resolved';
+    case 'abandoned':
+    case 'stale':
+    default:
+      return null;
+  }
+}
+
+function isLiveRosterSession(session: VaultCollabSessionSnapshot): boolean {
+  return session.connectionState === 'fresh' && session.effectiveStatus !== 'disconnected';
+}
+
+function getSessionRole(session: VaultCollabSessionSnapshot): string {
+  if (session.agentRole?.trim()) {
+    return session.agentRole.trim();
+  }
+
+  const capabilityRole = session.capabilities.role;
+  return typeof capabilityRole === 'string' && capabilityRole.trim().length > 0
+    ? capabilityRole.trim()
+    : 'unassigned';
+}
+
+function getSessionDisplayName(session: VaultCollabSessionSnapshot): string {
+  return session.agentDisplayName || session.agentName || session.displayName;
+}
+
+function formatConversationThreadBody(
+  thread: VaultCollabHandoffSnapshot['discussionThreads'][number],
+  now: Date,
+): string {
+  const messageLabel = `${thread.messageCount} message${thread.messageCount === 1 ? '' : 's'}`;
+  const lastMessageLabel = thread.lastMessageAt
+    ? `last message ${formatRelativeAge(new Date(thread.lastMessageAt), now)}`
+    : 'no messages yet';
+
+  return `${thread.title} / ${messageLabel} / ${lastMessageLabel}`;
 }
 
 function buildLaunchRequestRow(

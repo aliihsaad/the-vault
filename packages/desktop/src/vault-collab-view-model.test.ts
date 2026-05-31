@@ -85,6 +85,136 @@ function snapshot(overrides: Partial<VaultCollabDashboardSnapshot> = {}): VaultC
   };
 }
 
+type SessionSnapshot = VaultCollabDashboardSnapshot['sessions'][number];
+type HandoffSnapshot = VaultCollabDashboardSnapshot['handoffs'][number];
+type LaunchRequestSnapshot = VaultCollabDashboardSnapshot['launchRequests'][number];
+type EventSnapshot = VaultCollabDashboardSnapshot['events'][number];
+type DiscussionThreadSnapshot = HandoffSnapshot['discussionThreads'][number];
+
+function session(overrides: Partial<SessionSnapshot> & { sessionUid: string }): SessionSnapshot {
+  return {
+    sessionUid: overrides.sessionUid,
+    displayName: 'Codex worker',
+    clientType: 'codex',
+    project: 'the-vault',
+    workspacePath: 'C:/workspace/the-vault',
+    status: 'idle',
+    effectiveStatus: 'idle',
+    connectionState: 'fresh',
+    statusDetail: null,
+    capabilities: {},
+    agentUid: null,
+    agentName: null,
+    agentDisplayName: null,
+    agentRole: null,
+    currentHandoffUid: null,
+    delivery: defaultDelivery,
+    lastHeartbeatAt: now.toISOString(),
+    heartbeatAgeMs: 15000,
+    createdAt: now.toISOString(),
+    updatedAt: now.toISOString(),
+    disconnectedAt: null,
+    ...overrides,
+  };
+}
+
+function handoff(overrides: Partial<HandoffSnapshot> & { handoffUid: string }): HandoffSnapshot {
+  return {
+    handoffUid: overrides.handoffUid,
+    vaultMemoryUid: null,
+    shortPrompt: 'Implement dashboard work.',
+    sourceProject: 'the-vault',
+    targetProject: 'the-vault',
+    relatedProjects: [],
+    relatedFiles: [],
+    sourceSessionUid: null,
+    suggestedSessionUid: null,
+    suggestedClientType: null,
+    queueKey: 'default',
+    labels: [],
+    queuePosition: 1000,
+    dependsOnHandoffUid: null,
+    status: 'available',
+    priority: 'normal',
+    urgent: false,
+    claimedBySessionUid: null,
+    leaseExpiresAt: null,
+    progressNote: null,
+    resolutionSummary: null,
+    reopenReason: null,
+    createdAt: '2026-05-30T00:10:00.000Z',
+    updatedAt: '2026-05-30T00:10:00.000Z',
+    resolvedAt: null,
+    staleAt: null,
+    discussionThreads: [],
+    ...overrides,
+  };
+}
+
+function launchRequest(
+  overrides: Partial<LaunchRequestSnapshot> & { launchRequestUid: string },
+): LaunchRequestSnapshot {
+  return {
+    launchRequestUid: overrides.launchRequestUid,
+    provider: 'codex',
+    model: 'gpt-5-codex',
+    effortLevel: 'medium',
+    project: 'the-vault',
+    workspacePath: 'C:/workspace/the-vault',
+    role: 'dashboard implementer',
+    initialInstructions: 'Start a dashboard worker.',
+    permissionMode: 'workspace-write',
+    commandPreview: 'codex -C C:/workspace/the-vault',
+    requestedCapabilities: [],
+    approvalPolicyVersion: null,
+    approvalSnapshot: null,
+    status: 'requested',
+    statusDetail: null,
+    requestedBySessionUid: 'vc_sess_requester_1234567890',
+    approvedBySessionUid: null,
+    rejectedBySessionUid: null,
+    brokerSessionUid: null,
+    launchedSessionUid: null,
+    metadata: {},
+    createdAt: '2026-05-30T00:10:00.000Z',
+    updatedAt: '2026-05-30T00:10:00.000Z',
+    approvedAt: null,
+    rejectedAt: null,
+    startedAt: null,
+    completedAt: null,
+    ...overrides,
+  };
+}
+
+function discussionThread(overrides: Partial<DiscussionThreadSnapshot> & { threadUid: string }): DiscussionThreadSnapshot {
+  return {
+    threadUid: overrides.threadUid,
+    handoffUid: 'vc_handoff_discussion_1234567890',
+    project: 'the-vault',
+    title: 'Review thread',
+    status: 'open',
+    createdBySessionUid: 'vc_sess_reviewer_1234567890',
+    createdAt: '2026-05-30T00:11:00.000Z',
+    updatedAt: '2026-05-30T00:12:00.000Z',
+    resolvedAt: null,
+    messageCount: 2,
+    lastMessageAt: '2026-05-30T00:12:00.000Z',
+    ...overrides,
+  };
+}
+
+function event(overrides: Partial<EventSnapshot> & { eventId: number; eventType: string }): EventSnapshot {
+  return {
+    eventId: overrides.eventId,
+    handoffUid: null,
+    sessionUid: null,
+    eventType: overrides.eventType,
+    payload: {},
+    createdAt: '2026-05-30T00:11:00.000Z',
+    ...overrides,
+  };
+}
+
 describe('Vault Collab dashboard view model', () => {
   it('summarizes readiness and attention into a single operations bar', () => {
     const model = buildVaultCollabDashboardViewModel(snapshot({
@@ -637,6 +767,219 @@ describe('Vault Collab dashboard view model', () => {
       attention: false,
       detail: 'Broker failed before launch.',
     });
+  });
+
+  it('builds Needs You from launch approvals, blocked handoffs, and blocked agents', () => {
+    const model = buildVaultCollabDashboardViewModel(snapshot({
+      sessions: [
+        session({
+          sessionUid: 'vc_sess_blocked_1234567890',
+          displayName: 'Blocked implementer',
+          effectiveStatus: 'blocked',
+          status: 'blocked',
+          statusDetail: 'Needs package install approval.',
+          agentRole: 'implementer',
+        }),
+        session({
+          sessionUid: 'vc_sess_healthy_1234567890',
+          displayName: 'Healthy reviewer',
+          effectiveStatus: 'working',
+          status: 'working',
+          agentRole: 'reviewer',
+        }),
+      ],
+      handoffs: [
+        handoff({
+          handoffUid: 'vc_handoff_blocked_1234567890',
+          shortPrompt: 'Blocked handoff.',
+          status: 'blocked',
+          progressNote: 'Waiting on user confirmation.',
+        }),
+        handoff({
+          handoffUid: 'vc_handoff_awaiting_1234567890',
+          shortPrompt: 'Awaiting user handoff.',
+          status: 'awaiting_user',
+          progressNote: 'Should we proceed?',
+        }),
+        handoff({
+          handoffUid: 'vc_handoff_available_1234567890',
+          shortPrompt: 'Available handoff.',
+          status: 'available',
+        }),
+      ],
+      launchRequests: [
+        launchRequest({
+          launchRequestUid: 'vc_launch_requested_1234567890',
+          role: 'smoke tester',
+          status: 'requested',
+          updatedAt: '2026-05-30T00:18:00.000Z',
+        }),
+        launchRequest({
+          launchRequestUid: 'vc_launch_approved_1234567890',
+          role: 'designer',
+          status: 'approved',
+          statusDetail: 'Approved; copy command is ready.',
+          approvedAt: '2026-05-30T00:17:00.000Z',
+          updatedAt: '2026-05-30T00:17:00.000Z',
+        }),
+      ],
+    }), now);
+
+    expect(model.cockpit.needsYou.map((item) => [item.kind, item.id])).toEqual([
+      ['launch_approval', 'vc_launch_requested_1234567890'],
+      ['launch_approval', 'vc_launch_approved_1234567890'],
+      ['handoff_blocked', 'vc_handoff_blocked_1234567890'],
+      ['handoff_awaiting_user', 'vc_handoff_awaiting_1234567890'],
+      ['agent_blocked', 'vc_sess_blocked_1234567890'],
+    ]);
+    expect(model.cockpit.needsYou[0]).toMatchObject({
+      title: 'smoke tester / gpt-5-codex',
+      subtitle: 'requested / the-vault',
+    });
+    expect(model.cockpit.needsYou[0].actions[0]).toEqual(expect.objectContaining({ action: 'approve', label: 'Approve' }));
+    expect(buildVaultCollabDashboardViewModel(snapshot(), now).cockpit.needsYou).toEqual([]);
+  });
+
+  it('groups live roster agents by role and excludes stale, disconnected, and duplicate sessions', () => {
+    const model = buildVaultCollabDashboardViewModel(snapshot({
+      sessions: [
+        session({
+          sessionUid: 'vc_sess_impl_1234567890',
+          displayName: 'Codex implementer',
+          agentRole: 'implementer',
+          effectiveStatus: 'working',
+          currentHandoffUid: 'vc_handoff_impl',
+        }),
+        session({
+          sessionUid: 'vc_sess_impl_1234567890',
+          displayName: 'Codex implementer duplicate',
+          agentRole: 'implementer',
+          effectiveStatus: 'working',
+          currentHandoffUid: 'vc_handoff_impl',
+        }),
+        session({
+          sessionUid: 'vc_sess_review_1234567890',
+          displayName: 'Claude reviewer',
+          clientType: 'claude-code',
+          capabilities: { role: 'reviewer' },
+          effectiveStatus: 'idle',
+        }),
+        session({
+          sessionUid: 'vc_sess_stale_1234567890',
+          displayName: 'Stale worker',
+          agentRole: 'implementer',
+          connectionState: 'stale',
+        }),
+        session({
+          sessionUid: 'vc_sess_closed_1234567890',
+          displayName: 'Closed worker',
+          agentRole: 'reviewer',
+          connectionState: 'disconnected',
+          effectiveStatus: 'disconnected',
+          status: 'disconnected',
+        }),
+      ],
+    }), now);
+
+    expect(model.cockpit.roster).toEqual([
+      {
+        role: 'implementer',
+        agents: [
+          expect.objectContaining({
+            sessionUid: 'vc_sess_impl_1234567890',
+            displayName: 'Codex implementer',
+            status: 'working',
+            currentHandoffUid: 'vc_handoff_impl',
+            freshness: 'fresh',
+          }),
+        ],
+      },
+      {
+        role: 'reviewer',
+        agents: [
+          expect.objectContaining({
+            sessionUid: 'vc_sess_review_1234567890',
+            displayName: 'Claude reviewer',
+            status: 'idle',
+            freshness: 'fresh',
+          }),
+        ],
+      },
+    ]);
+  });
+
+  it('groups handoffs into fixed work columns', () => {
+    const model = buildVaultCollabDashboardViewModel(snapshot({
+      handoffs: [
+        handoff({ handoffUid: 'vc_handoff_resolved_1234567890', status: 'resolved', shortPrompt: 'Resolved work.' }),
+        handoff({ handoffUid: 'vc_handoff_claimed_1234567890', status: 'claimed', shortPrompt: 'Claimed work.' }),
+        handoff({ handoffUid: 'vc_handoff_available_1234567890', status: 'available', shortPrompt: 'Available work.' }),
+        handoff({ handoffUid: 'vc_handoff_verification_1234567890', status: 'verification_needed', shortPrompt: 'Verify work.' }),
+        handoff({ handoffUid: 'vc_handoff_blocked_1234567890', status: 'blocked', shortPrompt: 'Blocked work.' }),
+        handoff({ handoffUid: 'vc_handoff_awaiting_1234567890', status: 'awaiting_user', shortPrompt: 'Awaiting work.' }),
+      ],
+    }), now);
+
+    expect(model.cockpit.work.map((column) => [column.state, column.label, column.cards.map((card) => card.uid)])).toEqual([
+      ['available', 'Available', ['vc_handoff_available_1234567890']],
+      ['in_progress', 'In progress', ['vc_handoff_claimed_1234567890']],
+      ['verification_needed', 'Needs verification', ['vc_handoff_verification_1234567890']],
+      ['blocked', 'Blocked', ['vc_handoff_blocked_1234567890']],
+      ['awaiting_user', 'Needs user', ['vc_handoff_awaiting_1234567890']],
+      ['resolved', 'Resolved', ['vc_handoff_resolved_1234567890']],
+    ]);
+  });
+
+  it('merges discussion summaries and key events into a newest-first conversation stream', () => {
+    const selectedHandoffUid = 'vc_handoff_selected_1234567890';
+    const model = buildVaultCollabDashboardViewModel(snapshot({
+      handoffs: [
+        handoff({
+          handoffUid: selectedHandoffUid,
+          shortPrompt: 'Selected handoff.',
+          discussionThreads: [
+            discussionThread({
+              threadUid: 'vc_thread_selected_1234567890',
+              handoffUid: selectedHandoffUid,
+              title: 'Verification notes',
+              messageCount: 3,
+              lastMessageAt: '2026-05-30T00:16:00.000Z',
+            }),
+          ],
+        }),
+      ],
+      events: [
+        event({
+          eventId: 11,
+          handoffUid: selectedHandoffUid,
+          sessionUid: 'vc_sess_worker_1234567890',
+          eventType: 'handoff.claimed',
+          payload: { handoffUid: selectedHandoffUid },
+          createdAt: '2026-05-30T00:14:00.000Z',
+        }),
+        event({
+          eventId: 12,
+          handoffUid: selectedHandoffUid,
+          sessionUid: 'vc_sess_worker_1234567890',
+          eventType: 'handoff.resolved',
+          payload: { summary: 'All gates passed.' },
+          createdAt: '2026-05-30T00:18:00.000Z',
+        }),
+        event({
+          eventId: 13,
+          handoffUid: 'vc_handoff_other_1234567890',
+          eventType: 'handoff.claimed',
+          payload: {},
+          createdAt: '2026-05-30T00:19:00.000Z',
+        }),
+      ],
+    }), now, selectedHandoffUid);
+
+    expect(model.cockpit.conversation.map((entry) => [entry.kind, entry.id, entry.body])).toEqual([
+      ['event', 'event:12', 'summary: All gates passed.'],
+      ['message', 'thread:vc_thread_selected_1234567890', 'Verification notes / 3 messages / last message 4m ago'],
+      ['event', 'event:11', `handoffUid: ${selectedHandoffUid}`],
+    ]);
   });
 
   it('shortens long Vault Collab identifiers consistently', () => {
