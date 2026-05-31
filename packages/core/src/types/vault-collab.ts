@@ -199,6 +199,16 @@ export interface VaultCollabLaunchRequestSnapshot {
   completedAt: string | null;
 }
 
+export interface VaultCollabLaunchCommand {
+  provider: string;
+  role: string;
+  workspacePath: string;
+  command: string;
+  args: string[];
+  display: string;
+  env?: Record<string, string>;
+}
+
 export interface VaultCollabDashboardCounts {
   sessions: number;
   activeSessions: number;

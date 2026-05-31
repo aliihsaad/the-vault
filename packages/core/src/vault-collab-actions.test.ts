@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  buildVaultCollabLaunchCommand,
   buildVaultCollabActionInvocation,
   buildVaultCollabDashboardSessionInvocation,
   buildVaultCollabHandoffActionsInvocation,
@@ -9,7 +10,7 @@ import {
   executeVaultCollabHandoffActions,
   redactVaultCollabActionInvocation,
 } from './services/vault-collab-actions.service.js';
-import type { VaultCollabRuntimeConfig } from './types/vault-collab.js';
+import type { VaultCollabLaunchRequestSnapshot, VaultCollabRuntimeConfig } from './types/vault-collab.js';
 
 const config: VaultCollabRuntimeConfig = {
   runtimeMode: 'localSource',
@@ -24,7 +25,73 @@ const actor = {
   sessionToken: 'dashboard-secret-token',
 };
 
+function makeLaunchRequest(
+  overrides: Partial<VaultCollabLaunchRequestSnapshot> = {},
+): VaultCollabLaunchRequestSnapshot {
+  return {
+    launchRequestUid: 'vc_launch_123',
+    provider: 'codex',
+    model: 'gpt-5-codex',
+    effortLevel: 'medium',
+    project: 'the-vault',
+    workspacePath: 'C:\\Users\\Mini\\Desktop\\Projects\\the-vault',
+    role: 'implementation-worker',
+    initialInstructions: 'Implement the launch task. sessionToken: super-secret-token',
+    permissionMode: 'workspace-write',
+    commandPreview: null,
+    requestedCapabilities: ['vault_collab', 'attention_receiver'],
+    approvalPolicyVersion: null,
+    approvalSnapshot: null,
+    status: 'approved',
+    statusDetail: null,
+    requestedBySessionUid: 'vc_sess_requester',
+    approvedBySessionUid: 'vc_sess_dashboard',
+    rejectedBySessionUid: null,
+    brokerSessionUid: null,
+    launchedSessionUid: null,
+    metadata: {},
+    createdAt: '2026-05-31T09:00:00.000Z',
+    updatedAt: '2026-05-31T09:01:00.000Z',
+    approvedAt: '2026-05-31T09:01:00.000Z',
+    rejectedAt: null,
+    startedAt: null,
+    completedAt: null,
+    ...overrides,
+  };
+}
+
 describe('Vault Collab dashboard action invocation', () => {
+  it('builds token-free Codex launch commands with workspace and role context', () => {
+    const launchCommand = buildVaultCollabLaunchCommand(makeLaunchRequest());
+
+    expect(launchCommand.provider).toBe('codex');
+    expect(launchCommand.role).toBe('implementation-worker');
+    expect(launchCommand.workspacePath).toBe('C:\\Users\\Mini\\Desktop\\Projects\\the-vault');
+    expect(launchCommand.command).toBe('codex');
+    expect(launchCommand.args).toEqual(expect.arrayContaining([
+      '--no-alt-screen',
+      '-C',
+      'C:\\Users\\Mini\\Desktop\\Projects\\the-vault',
+    ]));
+    expect(launchCommand.display).toContain('codex');
+    expect(launchCommand.display).toContain('C:\\Users\\Mini\\Desktop\\Projects\\the-vault');
+    expect(launchCommand.display).toContain('implementation-worker');
+    expect(JSON.stringify(launchCommand)).not.toContain('super-secret-token');
+  });
+
+  it('builds a generic launch command for unknown providers instead of throwing', () => {
+    const launchCommand = buildVaultCollabLaunchCommand(makeLaunchRequest({
+      provider: 'again-provider' as VaultCollabLaunchRequestSnapshot['provider'],
+      role: null,
+    }));
+
+    expect(launchCommand.provider).toBe('again-provider');
+    expect(launchCommand.role).toBe('worker');
+    expect(launchCommand.command).toBe('again-provider');
+    expect(launchCommand.display).toContain('again-provider');
+    expect(launchCommand.display).toContain('worker');
+  });
+
   it('builds token-owned handoff action commands without exposing the token in display output', () => {
     const invocation = buildVaultCollabActionInvocation(config, actor, {
       kind: 'handoff',

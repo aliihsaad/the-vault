@@ -7,6 +7,8 @@ import type {
   VaultCollabDashboardActionInput,
   VaultCollabDashboardActor,
   VaultCollabHandoffActionSet,
+  VaultCollabLaunchCommand,
+  VaultCollabLaunchRequestSnapshot,
   VaultCollabRuntimeConfig,
 } from '../types/vault-collab.js';
 
@@ -36,6 +38,25 @@ export interface VaultCollabDashboardSessionRegistrationResult {
     invocation: VaultCollabActionInvocation;
     sessionUid: string | null;
     error: string | null;
+  };
+}
+
+export function buildVaultCollabLaunchCommand(
+  launchRequest: VaultCollabLaunchRequestSnapshot,
+): VaultCollabLaunchCommand {
+  const provider = String(launchRequest.provider || 'agent');
+  const role = launchRequest.role?.trim() || 'worker';
+  const instructions = buildLaunchInstructions(launchRequest, role);
+  const command = getLaunchCommandForProvider(provider);
+  const args = getLaunchArgsForProvider(provider, launchRequest.workspacePath, instructions);
+
+  return {
+    provider,
+    role,
+    workspacePath: launchRequest.workspacePath,
+    command,
+    args,
+    display: formatLaunchDisplay(command, args),
   };
 }
 
@@ -294,6 +315,75 @@ function buildBaseInvocation(config: VaultCollabRuntimeConfig): VaultCollabActio
     command: 'node',
     args: [cliPath],
   };
+}
+
+function buildLaunchInstructions(
+  launchRequest: VaultCollabLaunchRequestSnapshot,
+  role: string,
+): string {
+  return redactLaunchSecretText([
+    'Use Vault Collab for this session.',
+    `Project: ${launchRequest.project}`,
+    `Workspace: ${launchRequest.workspacePath}`,
+    `Launch request UID: ${launchRequest.launchRequestUid}`,
+    `Role: ${role}`,
+    '',
+    'Register a new Vault Collab session for this project and workspace, then check your attention feed and inbox before starting work.',
+    'Keep progress updated through Vault Collab. Do not push unless the user explicitly approves.',
+    '',
+    'Launch request instructions:',
+    launchRequest.initialInstructions,
+  ].join('\n'));
+}
+
+function getLaunchCommandForProvider(provider: string): string {
+  if (provider === 'claude-code' || provider === 'claude-desktop') {
+    return 'claude';
+  }
+
+  if (provider === 'codex') {
+    return 'codex';
+  }
+
+  return provider.trim() || 'agent';
+}
+
+function getLaunchArgsForProvider(
+  provider: string,
+  workspacePath: string,
+  instructions: string,
+): string[] {
+  if (provider === 'codex') {
+    return ['--no-alt-screen', '-C', workspacePath, instructions];
+  }
+
+  if (provider === 'claude-code' || provider === 'claude-desktop') {
+    return ['--add-dir', workspacePath, instructions];
+  }
+
+  return [instructions];
+}
+
+function formatLaunchDisplay(command: string, args: string[]): string {
+  return [command, ...args].map(formatShellArg).join(' ');
+}
+
+function formatShellArg(value: string): string {
+  if (!value) {
+    return '""';
+  }
+
+  if (/^[A-Za-z0-9_./:=@-]+$/.test(value)) {
+    return value;
+  }
+
+  return `"${value.replace(/"/g, '\\"').replace(/\r?\n/g, '\\n')}"`;
+}
+
+function redactLaunchSecretText(value: string): string {
+  return value
+    .replace(/(--(?:session-token|actor-session-token)\s+)("[^"]*"|'[^']*'|[^\s]+)/gi, '$1[redacted]')
+    .replace(/((?:session[_-]?token|actor[_-]?session[_-]?token|token|secret)\s*[:=]\s*)("[^"]*"|'[^']*'|[^\s]+)/gi, '$1[redacted]');
 }
 
 function buildActionArgs(

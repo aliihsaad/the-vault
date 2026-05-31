@@ -191,6 +191,7 @@ export type {
   VaultCollabHandoffSnapshot,
   VaultCollabHandoffStatus,
   VaultCollabJsonRecord,
+  VaultCollabLaunchCommand,
   VaultCollabLaunchRequestSnapshot,
   VaultCollabLaunchRequestStatus,
   VaultCollabRuntimeConfig,
@@ -262,6 +263,7 @@ export {
 } from './services/vault-collab-dashboard.service.js';
 
 export {
+  buildVaultCollabLaunchCommand,
   buildVaultCollabDashboardSessionInvocation,
   buildVaultCollabActionInvocation,
   buildVaultCollabHandoffActionsInvocation,
