@@ -16,8 +16,11 @@ import type { IPty } from 'node-pty';
 // stub. Loading it via createRequire at runtime keeps it a real CommonJS
 // require so node-pty resolves its prebuilt native module from node_modules.
 const requireFromMain = createRequire(import.meta.url);
-const { spawn: spawnPty } = requireFromMain('node-pty') as typeof import('node-pty');
+type NodePtySpawn = typeof import('node-pty')['spawn'];
+let lazySpawnPty: NodePtySpawn | null = null;
 import {
+  approveVaultCollabLaunchRequest,
+  buildVaultCollabLaunchCommand,
   detectDuplicates,
   GraphifyBuildQueue,
   OpenRouterClient,
@@ -58,6 +61,8 @@ import type {
   VaultCollabDashboardActor,
   VaultCollabHandoffActionSet,
   VaultCollabDashboardOptions,
+  VaultCollabLaunchApprovalResult,
+  VaultCollabLaunchCommand,
   VaultCollabLaunchRequestSnapshot,
   VaultCollabRuntimeConfig,
   SaveVaultCollabRuntimeConfigInput,
@@ -153,6 +158,20 @@ interface ManagedVaultCollabTerminal {
 const managedVaultCollabTerminals = new Map<string, ManagedVaultCollabTerminal>();
 const MANAGED_TERMINAL_ATTENTION_POLL_MS = 3000;
 const MANAGED_TERMINAL_IDLE_WRITE_MS = 2500;
+
+function getManagedVaultCollabSpawnPty(): NodePtySpawn {
+  if (!lazySpawnPty) {
+    const nodePty = requireFromMain('node-pty') as typeof import('node-pty');
+    lazySpawnPty = nodePty.spawn;
+  }
+
+  return lazySpawnPty;
+}
+
+function isExperimentalManagedVaultCollabSpawnEnabled(): boolean {
+  const value = process.env.VAULT_COLLAB_EXPERIMENTAL_MANAGED_SPAWN;
+  return value === '1' || value?.toLowerCase() === 'true';
+}
 
 protocol.registerSchemesAsPrivileged([
   {
@@ -501,7 +520,7 @@ function startManagedVaultCollabTerminal(
   const isWindows = process.platform === 'win32';
   const ptyFile = isWindows ? process.env.COMSPEC ?? 'cmd.exe' : 'codex';
   const ptyArgs = isWindows ? ['/c', 'codex', ...codexArgs] : codexArgs;
-  const ptyProcess = spawnPty(ptyFile, ptyArgs, {
+  const ptyProcess = getManagedVaultCollabSpawnPty()(ptyFile, ptyArgs, {
     name: 'xterm-256color',
     cols: 120,
     rows: 40,
@@ -2477,6 +2496,35 @@ app.whenReady().then(() => {
     }
   });
 
+  ipcMain.handle('vault:approveVaultCollabLaunchRequest', async (_, launchRequestUid) => {
+    try {
+      if (typeof launchRequestUid !== 'string' || !launchRequestUid.trim()) {
+        throw new Error('Launch request UID is required.');
+      }
+
+      const config = getVaultCollabDashboardActionRuntimeConfig();
+      const actor = await ensureVaultCollabDashboardActor();
+      const snapshot = vault.getVaultCollabDashboardSnapshot({
+        launchRequestLimit: 100,
+        sessionLimit: 5,
+        handoffLimit: 5,
+        eventLimit: 5,
+      });
+      const launchRequest = snapshot.launchRequests.find((request) => request.launchRequestUid === launchRequestUid);
+      if (!launchRequest) {
+        throw new Error(`Launch request not found: ${launchRequestUid}`);
+      }
+      if (launchRequest.status !== 'requested') {
+        throw new Error(`Launch request must be requested before approval. Current status: ${launchRequest.status}`);
+      }
+
+      const data = await approveVaultCollabLaunchRequest(config, actor, launchRequest);
+      return { success: data.ok, data: data as VaultCollabLaunchApprovalResult, error: data.error || undefined };
+    } catch (e: any) {
+      return { success: false, error: e.message };
+    }
+  });
+
   ipcMain.handle('vault:getVaultCollabHandoffActions', async (_, handoffUid) => {
     try {
       if (typeof handoffUid !== 'string' || !handoffUid.trim()) {
@@ -2516,11 +2564,27 @@ app.whenReady().then(() => {
       if (launchRequest.status !== 'approved') {
         throw new Error(`Launch request must be approved before The Vault can start it. Current status: ${launchRequest.status}`);
       }
-      if (launchRequest.provider !== 'codex') {
-        throw new Error(`The Vault launch broker currently supports Codex requests only. Provider was ${launchRequest.provider}.`);
-      }
       if (!existsSync(launchRequest.workspacePath)) {
         throw new Error(`Launch workspace does not exist: ${launchRequest.workspacePath}`);
+      }
+
+      const launchCommand = buildVaultCollabLaunchCommand(launchRequest);
+      if (!isExperimentalManagedVaultCollabSpawnEnabled()) {
+        return {
+          success: true,
+          data: {
+            launchRequestUid,
+            launchedSessionUid: null,
+            command: launchCommand.command,
+            args: launchCommand.args,
+            display: launchCommand.display,
+            launchCommand,
+          },
+        };
+      }
+
+      if (launchRequest.provider !== 'codex') {
+        throw new Error(`The experimental managed launch broker currently supports Codex requests only. Provider was ${launchRequest.provider}.`);
       }
 
       const launching = await executeVaultCollabAction(config, actor, {
@@ -2555,6 +2619,8 @@ app.whenReady().then(() => {
             launchedSessionUid: managedSession.sessionUid,
             command: 'codex',
             args: ['--no-alt-screen', '-C', launchRequest.workspacePath, '[prompt delivered over PTY]'],
+            display: launchCommand.display,
+            launchCommand,
           },
         };
       } catch (error) {

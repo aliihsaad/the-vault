@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  approveVaultCollabLaunchRequest,
   buildVaultCollabLaunchCommand,
   buildVaultCollabActionInvocation,
   buildVaultCollabDashboardSessionInvocation,
@@ -90,6 +91,40 @@ describe('Vault Collab dashboard action invocation', () => {
     expect(launchCommand.command).toBe('again-provider');
     expect(launchCommand.display).toContain('again-provider');
     expect(launchCommand.display).toContain('worker');
+  });
+
+  it('approves launch requests and returns a command without broker lifecycle actions', async () => {
+    const invocations: string[][] = [];
+
+    const result = await approveVaultCollabLaunchRequest(
+      config,
+      actor,
+      makeLaunchRequest({ status: 'requested' }),
+      async (invocation) => {
+        invocations.push(invocation.args);
+        return {
+          exitCode: 0,
+          stdout: JSON.stringify({
+            launchRequestUid: 'vc_launch_123',
+            status: 'approved',
+          }),
+          stderr: '',
+        };
+      },
+    );
+
+    expect(result.ok).toBe(true);
+    expect(result.launchCommand?.command).toBe('codex');
+    expect(result.launchCommand?.display).toContain('implementation-worker');
+    expect(invocations).toHaveLength(1);
+    expect(invocations[0]).toEqual(expect.arrayContaining([
+      'launch-approve',
+      '--launch-request-uid',
+      'vc_launch_123',
+      '--session-token',
+      'dashboard-secret-token',
+    ]));
+    expect(invocations[0]).not.toContain('launch-mark-launching');
   });
 
   it('builds token-owned handoff action commands without exposing the token in display output', () => {

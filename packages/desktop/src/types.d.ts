@@ -20,6 +20,8 @@ import type {
   VaultCollabDashboardSnapshot,
   VaultCollabHandoffActionSet,
   VaultCollabInstallPlan,
+  VaultCollabLaunchApprovalResult,
+  VaultCollabLaunchCommand,
   VaultCollabRuntimeConfig,
   VaultCollabRuntimeStatus,
 } from '@the-vault/core';
@@ -729,11 +731,14 @@ declare global {
     getVaultCollabDashboardSnapshot: (options?: VaultCollabDashboardOptions) => Promise<VaultResponse<VaultCollabDashboardSnapshot>>;
     getVaultCollabHandoffActions: (handoffUid: string) => Promise<VaultResponse<VaultCollabHandoffActionSet | null>>;
     performVaultCollabDashboardAction: (input: VaultCollabDashboardActionInput) => Promise<VaultResponse<VaultCollabActionResult>>;
+    approveVaultCollabLaunchRequest: (launchRequestUid: string) => Promise<VaultResponse<VaultCollabLaunchApprovalResult>>;
     startVaultCollabLaunchRequest: (launchRequestUid: string) => Promise<VaultResponse<{
       launchRequestUid: string;
-      launchedSessionUid: string;
+      launchedSessionUid: string | null;
       command: string;
       args: string[];
+      display: string;
+      launchCommand: VaultCollabLaunchCommand;
     }>>;
     getVaultCollabManagedTerminals: () => Promise<VaultResponse<VaultCollabManagedTerminalStatus[]>>;
     controlVaultCollabManagedTerminal: (input: {

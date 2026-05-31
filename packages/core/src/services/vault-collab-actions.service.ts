@@ -41,6 +41,10 @@ export interface VaultCollabDashboardSessionRegistrationResult {
   };
 }
 
+export interface VaultCollabLaunchApprovalResult extends VaultCollabActionResult {
+  launchCommand: VaultCollabLaunchCommand | null;
+}
+
 export function buildVaultCollabLaunchCommand(
   launchRequest: VaultCollabLaunchRequestSnapshot,
 ): VaultCollabLaunchCommand {
@@ -57,6 +61,34 @@ export function buildVaultCollabLaunchCommand(
     command,
     args,
     display: formatLaunchDisplay(command, args),
+  };
+}
+
+export async function approveVaultCollabLaunchRequest(
+  config: VaultCollabRuntimeConfig,
+  actor: VaultCollabDashboardActor,
+  launchRequest: VaultCollabLaunchRequestSnapshot,
+  runner: VaultCollabActionRunner = runVaultCollabActionInvocation,
+): Promise<VaultCollabLaunchApprovalResult> {
+  const result = await executeVaultCollabAction(
+    config,
+    actor,
+    {
+      kind: 'launch',
+      action: 'approve',
+      launchRequestUid: launchRequest.launchRequestUid,
+      detail: 'Approved from The Vault dashboard.',
+    },
+    runner,
+  );
+
+  return {
+    ...result,
+    launchCommand: result.ok ? buildVaultCollabLaunchCommand({
+      ...launchRequest,
+      status: 'approved',
+      approvedBySessionUid: actor.sessionUid,
+    }) : null,
   };
 }
 

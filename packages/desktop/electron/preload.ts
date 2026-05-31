@@ -72,6 +72,7 @@ contextBridge.exposeInMainWorld('vaultAPI', {
   getVaultCollabDashboardSnapshot: (options?: unknown) => ipcRenderer.invoke('vault:getVaultCollabDashboardSnapshot', options),
   getVaultCollabHandoffActions: (handoffUid: string) => ipcRenderer.invoke('vault:getVaultCollabHandoffActions', handoffUid),
   performVaultCollabDashboardAction: (input: unknown) => ipcRenderer.invoke('vault:performVaultCollabDashboardAction', input),
+  approveVaultCollabLaunchRequest: (launchRequestUid: string) => ipcRenderer.invoke('vault:approveVaultCollabLaunchRequest', launchRequestUid),
   startVaultCollabLaunchRequest: (launchRequestUid: string) => ipcRenderer.invoke('vault:startVaultCollabLaunchRequest', launchRequestUid),
   getVaultCollabManagedTerminals: () => ipcRenderer.invoke('vault:getVaultCollabManagedTerminals'),
   controlVaultCollabManagedTerminal: (input: unknown) => ipcRenderer.invoke('vault:controlVaultCollabManagedTerminal', input),

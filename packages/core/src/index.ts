@@ -263,6 +263,7 @@ export {
 } from './services/vault-collab-dashboard.service.js';
 
 export {
+  approveVaultCollabLaunchRequest,
   buildVaultCollabLaunchCommand,
   buildVaultCollabDashboardSessionInvocation,
   buildVaultCollabActionInvocation,
@@ -278,6 +279,7 @@ export type {
   VaultCollabActionRunnerResult,
   VaultCollabDashboardSessionInput,
   VaultCollabDashboardSessionRegistrationResult,
+  VaultCollabLaunchApprovalResult,
 } from './services/vault-collab-actions.service.js';
 
 export type {
