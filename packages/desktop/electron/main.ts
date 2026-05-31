@@ -1,19 +1,38 @@
 // electron/main.ts
 import { app, BrowserWindow, dialog, ipcMain, net, protocol, safeStorage, shell } from 'electron';
-import { spawn } from 'node:child_process';
+import { spawn as spawnProcess } from 'node:child_process';
 import { createCipheriv, createDecipheriv, createHash, randomBytes, scryptSync } from 'node:crypto';
-import { existsSync, watch as fsWatch, type FSWatcher } from 'node:fs';
+import { existsSync, readFileSync, watch as fsWatch, type FSWatcher } from 'node:fs';
 import { access, copyFile, mkdir, readFile, readdir, stat, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { basename, dirname, extname, isAbsolute, join, relative, resolve } from 'node:path';
+import { createRequire } from 'node:module';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import type { IPty } from 'node-pty';
+
+// node-pty is a native CJS addon. In the packaged ESM main process, a static
+// `import ... from 'node-pty'` gets caught by Rollup's commonjs plugin, which
+// rewrites node-pty's internal dynamic require of conpty.node into a throwing
+// stub. Loading it via createRequire at runtime keeps it a real CommonJS
+// require so node-pty resolves its prebuilt native module from node_modules.
+const requireFromMain = createRequire(import.meta.url);
+type NodePtySpawn = typeof import('node-pty')['spawn'];
+let lazySpawnPty: NodePtySpawn | null = null;
 import {
+  approveVaultCollabLaunchRequest,
+  buildVaultCollabLaunchCommand,
   detectDuplicates,
   GraphifyBuildQueue,
   OpenRouterClient,
+  executeVaultCollabAction,
+  executeVaultCollabDashboardSessionRegistration,
+  executeVaultCollabHandoffActions,
   portableDecrypt,
   portableEncrypt,
+  getVaultCollabExtensionPaths,
   resolveGraphifyCommandForRuntimeConfig,
+  resolveVaultCollabCliPath,
+  resolveVaultCollabMcpServerPath,
   Vault,
 } from '@the-vault/core';
 import type { MemoryItemDetail, MemoryPack, ModelRoutingTable, RecallQuery } from '@the-vault/core';
@@ -37,6 +56,16 @@ import type {
   GraphifyBuildProcessResult,
   GraphifyCommandResult,
   GraphifyHtmlArtifactResult,
+  VaultCollabActionResult,
+  VaultCollabDashboardActionInput,
+  VaultCollabDashboardActor,
+  VaultCollabHandoffActionSet,
+  VaultCollabDashboardOptions,
+  VaultCollabLaunchApprovalResult,
+  VaultCollabLaunchCommand,
+  VaultCollabLaunchRequestSnapshot,
+  VaultCollabRuntimeConfig,
+  SaveVaultCollabRuntimeConfigInput,
 } from '@the-vault/core';
 
 // Recreate __dirname for ESM
@@ -100,6 +129,49 @@ const DEFAULT_RECALL_CONTEXT_LIMIT = 6;
 const DEFAULT_RECALL_TOP_MATCH_LIMIT = 4;
 const DEFAULT_RECALL_DETAIL_EXPANSION_LIMIT = 2;
 const DEFAULT_RECALL_SIDE_CHANNEL_LIMIT = 2;
+
+interface VaultCollabSourcePathDetection {
+  detected: boolean;
+  path: string | null;
+  reason: string;
+}
+
+let vaultCollabDashboardActor: VaultCollabDashboardActor | null = null;
+
+interface ManagedVaultCollabTerminal {
+  launchRequestUid: string;
+  sessionUid: string;
+  sessionToken: string;
+  workspacePath: string;
+  pty: IPty;
+  startedAt: string;
+  lastOutputAt: number;
+  lastAttentionEventId: number;
+  pollTimer: ReturnType<typeof setInterval> | null;
+  polling: boolean;
+  paused: boolean;
+  // Set when the worker is being stopped intentionally (Stop button / broker
+  // cleanup) so onExit can record a clean `stop` instead of a `fail`.
+  stopping: boolean;
+}
+
+const managedVaultCollabTerminals = new Map<string, ManagedVaultCollabTerminal>();
+const MANAGED_TERMINAL_ATTENTION_POLL_MS = 3000;
+const MANAGED_TERMINAL_IDLE_WRITE_MS = 2500;
+
+function getManagedVaultCollabSpawnPty(): NodePtySpawn {
+  if (!lazySpawnPty) {
+    const nodePty = requireFromMain('node-pty') as typeof import('node-pty');
+    lazySpawnPty = nodePty.spawn;
+  }
+
+  return lazySpawnPty;
+}
+
+function isExperimentalManagedVaultCollabSpawnEnabled(): boolean {
+  const value = process.env.VAULT_COLLAB_EXPERIMENTAL_MANAGED_SPAWN;
+  return value === '1' || value?.toLowerCase() === 'true';
+}
 
 protocol.registerSchemesAsPrivileged([
   {
@@ -217,6 +289,519 @@ function disposeGraphifyAutoBuild(): void {
   graphifyBuildQueue.dispose();
 }
 
+function detectVaultCollabSourcePath(): VaultCollabSourcePathDetection {
+  const candidates = Array.from(new Set([
+    process.env.VAULT_COLLAB_SOURCE,
+    resolve(__dirname, '../../../..', 'vault-collab'),
+    resolve(process.cwd(), '..', 'vault-collab'),
+    join(homedir(), 'Desktop', 'Projects', 'vault-collab'),
+  ].filter((candidate): candidate is string => Boolean(candidate?.trim()))));
+
+  for (const candidate of candidates) {
+    if (isVaultCollabSourceRoot(candidate)) {
+      return {
+        detected: true,
+        path: candidate,
+        reason: 'Found a local vault-collab source checkout.',
+      };
+    }
+  }
+
+  return {
+    detected: false,
+    path: null,
+    reason: 'No local vault-collab source checkout was found. Use managed install when available, or choose a source folder manually.',
+  };
+}
+
+function isVaultCollabSourceRoot(candidate: string): boolean {
+  const packagePath = join(candidate, 'package.json');
+  if (!existsSync(packagePath)) {
+    return false;
+  }
+
+  try {
+    const parsed = JSON.parse(readFileSync(packagePath, 'utf8')) as Record<string, unknown>;
+    return parsed.name === 'vault-collab';
+  } catch {
+    return false;
+  }
+}
+
+function getVaultCollabDashboardActionRuntimeConfig(): VaultCollabRuntimeConfig {
+  const config = vault.getVaultCollabRuntimeConfig();
+  if (config.runtimeMode !== 'managed') {
+    return config;
+  }
+
+  const detected = detectVaultCollabSourcePath();
+  const localCliPath = detected.path ? join(detected.path, 'dist', 'cli.js') : null;
+  if (!detected.path || !localCliPath || !existsSync(localCliPath)) {
+    return config;
+  }
+
+  return {
+    ...config,
+    runtimeMode: 'localSource',
+    localSourceCheckoutPath: detected.path,
+  };
+}
+
+function buildVaultCollabCliCommand(config: VaultCollabRuntimeConfig): { command: string; args: string[] } {
+  if (config.runtimeMode === 'managed') {
+    return {
+      command: 'npm',
+      args: ['exec', '--yes', '--package', 'https://github.com/aliihsaad/vault-collab', '--', 'vault-collab'],
+    };
+  }
+
+  const cliPath = resolveVaultCollabCliPath(config);
+  if (!cliPath) {
+    throw new Error('Vault Collab CLI path is not configured.');
+  }
+
+  return {
+    command: 'node',
+    args: [cliPath],
+  };
+}
+
+function runProcessCapture(
+  command: string,
+  args: string[],
+  options: {
+    cwd?: string;
+    timeoutMs?: number;
+  } = {},
+): Promise<{ exitCode: number; stdout: string; stderr: string }> {
+  return new Promise((resolveResult) => {
+    const child = spawnProcess(command, args, {
+      cwd: options.cwd,
+      windowsHide: true,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    const chunks: Buffer[] = [];
+    const errorChunks: Buffer[] = [];
+    let settled = false;
+    const timeout = options.timeoutMs
+      ? setTimeout(() => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        child.kill();
+        resolveResult({
+          exitCode: 124,
+          stdout: Buffer.concat(chunks).toString('utf8'),
+          stderr: `Process timed out after ${options.timeoutMs}ms.`,
+        });
+      }, options.timeoutMs)
+      : null;
+
+    child.stdout?.on('data', (chunk: Buffer) => chunks.push(chunk));
+    child.stderr?.on('data', (chunk: Buffer) => errorChunks.push(chunk));
+    child.on('error', (error) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      if (timeout) {
+        clearTimeout(timeout);
+      }
+      resolveResult({
+        exitCode: 1,
+        stdout: Buffer.concat(chunks).toString('utf8'),
+        stderr: error.message,
+      });
+    });
+    child.on('close', (code) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      if (timeout) {
+        clearTimeout(timeout);
+      }
+      resolveResult({
+        exitCode: code ?? 0,
+        stdout: Buffer.concat(chunks).toString('utf8'),
+        stderr: Buffer.concat(errorChunks).toString('utf8'),
+      });
+    });
+  });
+}
+
+function parseJsonOutput<T>(stdout: string, label: string): T {
+  const trimmed = stdout.trim();
+  if (!trimmed) {
+    throw new Error(`${label} returned no JSON output.`);
+  }
+
+  return JSON.parse(trimmed) as T;
+}
+
+function formatCodexLaunchPrompt(launchRequest: VaultCollabLaunchRequestSnapshot, sessionUid: string, sessionToken: string): string {
+  return [
+    'You are a The Vault-launched Codex worker.',
+    '',
+    'Use Vault Collab for this session. The Vault already registered your managed worker session:',
+    `sessionUid: ${sessionUid}`,
+    `sessionToken: ${sessionToken}`,
+    `launchRequestUid: ${launchRequest.launchRequestUid}`,
+    '',
+    'Immediately inspect Vault Collab attention and the launch request context. Update progress through Vault Collab while working.',
+    'Do not push unless the user explicitly approves.',
+    '',
+    'Launch request instructions:',
+    launchRequest.initialInstructions,
+  ].join('\n');
+}
+
+async function registerVaultCollabManagedCodexSession(
+  config: VaultCollabRuntimeConfig,
+  launchRequest: VaultCollabLaunchRequestSnapshot,
+): Promise<{ sessionUid: string; sessionToken: string }> {
+  const base = buildVaultCollabCliCommand(config);
+  const result = await runProcessCapture(base.command, [
+    ...base.args,
+    'register',
+    '--db',
+    config.databasePath,
+    '--display-name',
+    `The Vault launched Codex - ${launchRequest.model}`,
+    '--client-type',
+    'codex',
+    '--project',
+    launchRequest.project,
+    '--workspace-path',
+    launchRequest.workspacePath,
+    '--delivery-mode',
+    'managed_process',
+    '--wakeable',
+    '--capability',
+    `launchedBy=${launchRequest.launchRequestUid}`,
+    '--capability',
+    'managedBy=the-vault',
+    '--capability',
+    'codexExec=true',
+  ], { timeoutMs: 30_000 });
+
+  if (result.exitCode !== 0) {
+    throw new Error(result.stderr.trim() || `Vault Collab managed session registration failed with exit code ${result.exitCode}.`);
+  }
+
+  const parsed = parseJsonOutput<{ sessionUid?: unknown; sessionToken?: unknown }>(result.stdout, 'Vault Collab register');
+  if (typeof parsed.sessionUid !== 'string' || typeof parsed.sessionToken !== 'string') {
+    throw new Error('Vault Collab register did not return a managed session owner token.');
+  }
+
+  return {
+    sessionUid: parsed.sessionUid,
+    sessionToken: parsed.sessionToken,
+  };
+}
+
+function startManagedVaultCollabTerminal(
+  config: VaultCollabRuntimeConfig,
+  actor: VaultCollabDashboardActor,
+  launchRequest: VaultCollabLaunchRequestSnapshot,
+  managedSession: { sessionUid: string; sessionToken: string },
+): ManagedVaultCollabTerminal {
+  if (managedVaultCollabTerminals.has(managedSession.sessionUid)) {
+    throw new Error(`Managed terminal already exists for session ${managedSession.sessionUid}.`);
+  }
+
+  const prompt = formatCodexLaunchPrompt(launchRequest, managedSession.sessionUid, managedSession.sessionToken);
+  // On Windows the codex CLI is installed as an npm .cmd/.ps1 shim, not a .exe.
+  // node-pty spawns via CreateProcessW, which only auto-appends .exe and cannot
+  // run a .cmd shim, so a bare 'codex' fails with ERROR_FILE_NOT_FOUND (code 2).
+  // Route through cmd.exe on Windows so PATHEXT resolves the shim.
+  const codexArgs = ['--no-alt-screen', '-C', launchRequest.workspacePath];
+  const isWindows = process.platform === 'win32';
+  const ptyFile = isWindows ? process.env.COMSPEC ?? 'cmd.exe' : 'codex';
+  const ptyArgs = isWindows ? ['/c', 'codex', ...codexArgs] : codexArgs;
+  const ptyProcess = getManagedVaultCollabSpawnPty()(ptyFile, ptyArgs, {
+    name: 'xterm-256color',
+    cols: 120,
+    rows: 40,
+    cwd: launchRequest.workspacePath,
+    env: {
+      ...process.env,
+      VAULT_COLLAB_MANAGED_SESSION_UID: managedSession.sessionUid,
+      VAULT_COLLAB_LAUNCH_REQUEST_UID: launchRequest.launchRequestUid,
+    },
+  });
+
+  const terminal: ManagedVaultCollabTerminal = {
+    launchRequestUid: launchRequest.launchRequestUid,
+    sessionUid: managedSession.sessionUid,
+    sessionToken: managedSession.sessionToken,
+    workspacePath: launchRequest.workspacePath,
+    pty: ptyProcess,
+    startedAt: new Date().toISOString(),
+    lastOutputAt: Date.now(),
+    lastAttentionEventId: 0,
+    pollTimer: null,
+    polling: false,
+    paused: false,
+    stopping: false,
+  };
+
+  managedVaultCollabTerminals.set(managedSession.sessionUid, terminal);
+
+  ptyProcess.onData((data) => {
+    terminal.lastOutputAt = Date.now();
+    win?.webContents.send('vault:taskEvent', {
+      type: 'vault-collab-terminal-output',
+      taskUid: managedSession.sessionUid,
+      task: null,
+      timestamp: new Date().toISOString(),
+      message: data.slice(-2000),
+      metadata: {
+        launchRequestUid: launchRequest.launchRequestUid,
+        sessionUid: managedSession.sessionUid,
+      },
+    });
+  });
+
+  ptyProcess.onExit(({ exitCode }) => {
+    const intentional = terminal.stopping;
+    stopManagedVaultCollabTerminal(managedSession.sessionUid);
+    void executeVaultCollabAction(config, actor, {
+      kind: 'session',
+      action: 'close',
+      targetSessionUid: managedSession.sessionUid,
+      reason: `Managed Codex terminal exited with code ${exitCode}.`,
+    });
+    // Close out the launch request so it does not linger as `running`.
+    // A user/broker stop or a clean exit is a `stop`; an unexpected non-zero
+    // exit is a `fail`. (`stop` requires the launch-stop transition shipped in
+    // the vault-collab extension; until then a clean stop simply stays running.)
+    const cleanEnd = intentional || exitCode === 0;
+    void executeVaultCollabAction(
+      config,
+      actor,
+      cleanEnd
+        ? {
+            kind: 'launch',
+            action: 'stop',
+            launchRequestUid: launchRequest.launchRequestUid,
+            detail: intentional
+              ? 'Managed Codex worker stopped from The Vault.'
+              : `Managed Codex worker exited cleanly (code ${exitCode}).`,
+            exitCode,
+          }
+        : {
+            kind: 'launch',
+            action: 'fail',
+            launchRequestUid: launchRequest.launchRequestUid,
+            reason: `Managed Codex worker exited with code ${exitCode}.`,
+          },
+    );
+  });
+
+  setTimeout(() => {
+    if (managedVaultCollabTerminals.has(managedSession.sessionUid)) {
+      ptyProcess.write(`${prompt}\r`);
+    }
+  }, 1500);
+
+  resumeManagedVaultCollabTerminalPolling(config, terminal);
+
+  return terminal;
+}
+
+function stopManagedVaultCollabTerminal(sessionUid: string): void {
+  const terminal = managedVaultCollabTerminals.get(sessionUid);
+  if (!terminal) {
+    return;
+  }
+
+  if (terminal.pollTimer) {
+    clearInterval(terminal.pollTimer);
+  }
+  managedVaultCollabTerminals.delete(sessionUid);
+}
+
+function pauseManagedVaultCollabTerminal(sessionUid: string): ManagedVaultCollabTerminal {
+  const terminal = requireManagedVaultCollabTerminal(sessionUid);
+  if (terminal.pollTimer) {
+    clearInterval(terminal.pollTimer);
+    terminal.pollTimer = null;
+  }
+  terminal.paused = true;
+  return terminal;
+}
+
+function resumeManagedVaultCollabTerminalPolling(
+  config: VaultCollabRuntimeConfig,
+  terminal: ManagedVaultCollabTerminal,
+): ManagedVaultCollabTerminal {
+  if (terminal.pollTimer) {
+    clearInterval(terminal.pollTimer);
+  }
+  terminal.paused = false;
+  terminal.pollTimer = setInterval(() => {
+    void deliverManagedVaultCollabAttention(config, terminal);
+  }, MANAGED_TERMINAL_ATTENTION_POLL_MS);
+  return terminal;
+}
+
+function requireManagedVaultCollabTerminal(sessionUid: string): ManagedVaultCollabTerminal {
+  const terminal = managedVaultCollabTerminals.get(sessionUid);
+  if (!terminal) {
+    throw new Error(`Managed terminal is not running for session ${sessionUid}.`);
+  }
+
+  return terminal;
+}
+
+function mapManagedVaultCollabTerminal(terminal: ManagedVaultCollabTerminal): {
+  sessionUid: string;
+  launchRequestUid: string;
+  workspacePath: string;
+  startedAt: string;
+  paused: boolean;
+  lastOutputAt: string;
+  lastAttentionEventId: number;
+} {
+  return {
+    sessionUid: terminal.sessionUid,
+    launchRequestUid: terminal.launchRequestUid,
+    workspacePath: terminal.workspacePath,
+    startedAt: terminal.startedAt,
+    paused: terminal.paused,
+    lastOutputAt: new Date(terminal.lastOutputAt).toISOString(),
+    lastAttentionEventId: terminal.lastAttentionEventId,
+  };
+}
+
+function killManagedVaultCollabTerminal(sessionUid: string): void {
+  const terminal = managedVaultCollabTerminals.get(sessionUid);
+  if (!terminal) {
+    return;
+  }
+
+  // Mark before kill so the pty's onExit records a clean stop, not a failure.
+  terminal.stopping = true;
+  stopManagedVaultCollabTerminal(sessionUid);
+  try {
+    terminal.pty.kill();
+  } catch {
+    // The process may already have exited.
+  }
+}
+
+async function deliverManagedVaultCollabAttention(
+  config: VaultCollabRuntimeConfig,
+  terminal: ManagedVaultCollabTerminal,
+): Promise<void> {
+  if (terminal.polling || !managedVaultCollabTerminals.has(terminal.sessionUid)) {
+    return;
+  }
+
+  if (Date.now() - terminal.lastOutputAt < MANAGED_TERMINAL_IDLE_WRITE_MS) {
+    return;
+  }
+
+  terminal.polling = true;
+  try {
+    const base = buildVaultCollabCliCommand(config);
+    const attention = await runProcessCapture(base.command, [
+      ...base.args,
+      'attention',
+      '--db',
+      config.databasePath,
+      '--session-uid',
+      terminal.sessionUid,
+      '--since-event-id',
+      String(terminal.lastAttentionEventId),
+    ], { timeoutMs: 30_000 });
+
+    if (attention.exitCode !== 0) {
+      return;
+    }
+
+    const feed = parseJsonOutput<{
+      latestEventId?: unknown;
+      items?: Array<{
+        kind?: unknown;
+        event?: { eventId?: unknown; payload?: Record<string, unknown> };
+        handoff?: { handoffUid?: unknown; shortPrompt?: unknown };
+        launchRequest?: { launchRequestUid?: unknown; model?: unknown };
+      }>;
+    }>(attention.stdout, 'Vault Collab attention');
+    const latestEventId = typeof feed.latestEventId === 'number' ? feed.latestEventId : terminal.lastAttentionEventId;
+    const items = Array.isArray(feed.items) ? feed.items : [];
+    if (items.length === 0 || latestEventId <= terminal.lastAttentionEventId) {
+      terminal.lastAttentionEventId = Math.max(terminal.lastAttentionEventId, latestEventId);
+      return;
+    }
+
+    terminal.pty.write(`\r${composeManagedAttentionPrompt(items)}\r`);
+
+    const ack = await runProcessCapture(base.command, [
+      ...base.args,
+      'attention-ack',
+      '--db',
+      config.databasePath,
+      '--session-uid',
+      terminal.sessionUid,
+      '--session-token',
+      terminal.sessionToken,
+      '--latest-event-id',
+      String(latestEventId),
+    ], { timeoutMs: 30_000 });
+
+    if (ack.exitCode === 0) {
+      terminal.lastAttentionEventId = latestEventId;
+    }
+  } catch (error) {
+    win?.webContents.send('vault:taskEvent', {
+      type: 'vault-collab-terminal-attention-error',
+      taskUid: terminal.sessionUid,
+      task: null,
+      timestamp: new Date().toISOString(),
+      message: error instanceof Error ? error.message : String(error),
+      metadata: {
+        launchRequestUid: terminal.launchRequestUid,
+        sessionUid: terminal.sessionUid,
+      },
+    });
+  } finally {
+    terminal.polling = false;
+  }
+}
+
+function composeManagedAttentionPrompt(items: Array<{
+  kind?: unknown;
+  event?: { eventId?: unknown; payload?: Record<string, unknown> };
+  handoff?: { handoffUid?: unknown; shortPrompt?: unknown };
+  launchRequest?: { launchRequestUid?: unknown; model?: unknown };
+}>): string {
+  const lines = [
+    '',
+    'Vault Collab attention received. Inspect this before continuing:',
+  ];
+
+  for (const item of items) {
+    const kind = typeof item.kind === 'string' ? item.kind : 'attention';
+    const fragments = [kind];
+    const payloadMessage = item.event?.payload?.message;
+    if (typeof payloadMessage === 'string') {
+      fragments.push(payloadMessage);
+    } else if (item.handoff) {
+      fragments.push(`${String(item.handoff.handoffUid ?? '')}: ${String(item.handoff.shortPrompt ?? '')}`.trim());
+    } else if (item.launchRequest) {
+      fragments.push(`${String(item.launchRequest.launchRequestUid ?? '')}: ${String(item.launchRequest.model ?? '')}`.trim());
+    }
+    lines.push(`- ${fragments.filter(Boolean).join(' - ')}`);
+  }
+
+  lines.push('Use Vault Collab tools to inspect details, update progress, and only claim/act when appropriate.');
+  return lines.join('\n');
+}
+
 function registerGraphifyArtifactProtocol(): void {
   protocol.handle('vault-graphify', async (request) => {
     try {
@@ -302,7 +887,7 @@ function runProcess(
     let stdout = '';
     let stderr = '';
     let settled = false;
-    const child = spawn(command, args, {
+  const child = spawnProcess(command, args, {
       cwd: options.cwd,
       shell: false,
       windowsHide: true,
@@ -1832,6 +2417,327 @@ app.whenReady().then(() => {
     }
   });
 
+  ipcMain.handle('vault:getVaultCollabRuntimeConfig', () => {
+    try {
+      return { success: true, data: vault.getVaultCollabRuntimeConfig() };
+    } catch (e: any) {
+      return { success: false, error: e.message };
+    }
+  });
+
+  ipcMain.handle('vault:saveVaultCollabRuntimeConfig', (_, input) => {
+    try {
+      return { success: true, data: vault.saveVaultCollabRuntimeConfig((input || {}) as SaveVaultCollabRuntimeConfigInput) };
+    } catch (e: any) {
+      return { success: false, error: e.message };
+    }
+  });
+
+  ipcMain.handle('vault:resetVaultCollabRuntimeConfig', () => {
+    try {
+      return { success: true, data: vault.resetVaultCollabRuntimeConfig() };
+    } catch (e: any) {
+      return { success: false, error: e.message };
+    }
+  });
+
+  ipcMain.handle('vault:detectVaultCollabRuntime', () => {
+    try {
+      return { success: true, data: vault.detectVaultCollabRuntime() };
+    } catch (e: any) {
+      return { success: false, error: e.message };
+    }
+  });
+
+  ipcMain.handle('vault:planVaultCollabInstall', () => {
+    try {
+      return { success: true, data: vault.planVaultCollabInstall() };
+    } catch (e: any) {
+      return { success: false, error: e.message };
+    }
+  });
+
+  ipcMain.handle('vault:getVaultCollabDashboardSnapshot', (_, options) => {
+    try {
+      const input = options && typeof options === 'object' ? options as VaultCollabDashboardOptions : undefined;
+      return { success: true, data: vault.getVaultCollabDashboardSnapshot(input) };
+    } catch (e: any) {
+      return { success: false, error: e.message };
+    }
+  });
+
+  async function ensureVaultCollabDashboardActor(): Promise<VaultCollabDashboardActor> {
+    if (vaultCollabDashboardActor) {
+      return vaultCollabDashboardActor;
+    }
+
+    const registration = await executeVaultCollabDashboardSessionRegistration(
+      getVaultCollabDashboardActionRuntimeConfig(),
+      {
+        project: 'the-vault',
+        workspacePath: resolve(__dirname, '../../..'),
+      },
+    );
+    vaultCollabDashboardActor = registration.actor;
+    return registration.actor;
+  }
+
+  ipcMain.handle('vault:performVaultCollabDashboardAction', async (_, input) => {
+    try {
+      const actor = await ensureVaultCollabDashboardActor();
+      const data = await executeVaultCollabAction(
+        getVaultCollabDashboardActionRuntimeConfig(),
+        actor,
+        (input || {}) as VaultCollabDashboardActionInput,
+      ) as VaultCollabActionResult;
+      return { success: data.ok, data, error: data.error || undefined };
+    } catch (e: any) {
+      return { success: false, error: e.message };
+    }
+  });
+
+  ipcMain.handle('vault:approveVaultCollabLaunchRequest', async (_, launchRequestUid) => {
+    try {
+      if (typeof launchRequestUid !== 'string' || !launchRequestUid.trim()) {
+        throw new Error('Launch request UID is required.');
+      }
+
+      const config = getVaultCollabDashboardActionRuntimeConfig();
+      const actor = await ensureVaultCollabDashboardActor();
+      const snapshot = vault.getVaultCollabDashboardSnapshot({
+        launchRequestLimit: 100,
+        sessionLimit: 5,
+        handoffLimit: 5,
+        eventLimit: 5,
+      });
+      const launchRequest = snapshot.launchRequests.find((request) => request.launchRequestUid === launchRequestUid);
+      if (!launchRequest) {
+        throw new Error(`Launch request not found: ${launchRequestUid}`);
+      }
+      if (launchRequest.status !== 'requested') {
+        throw new Error(`Launch request must be requested before approval. Current status: ${launchRequest.status}`);
+      }
+
+      const data = await approveVaultCollabLaunchRequest(config, actor, launchRequest);
+      return { success: data.ok, data: data as VaultCollabLaunchApprovalResult, error: data.error || undefined };
+    } catch (e: any) {
+      return { success: false, error: e.message };
+    }
+  });
+
+  ipcMain.handle('vault:getVaultCollabHandoffActions', async (_, handoffUid) => {
+    try {
+      if (typeof handoffUid !== 'string' || !handoffUid.trim()) {
+        throw new Error('Handoff UID is required.');
+      }
+
+      const actor = await ensureVaultCollabDashboardActor();
+      const data = await executeVaultCollabHandoffActions(
+        getVaultCollabDashboardActionRuntimeConfig(),
+        actor,
+        handoffUid,
+      );
+      return { success: data.ok, data: data.data as VaultCollabHandoffActionSet | null, error: data.error || undefined };
+    } catch (e: any) {
+      return { success: false, error: e.message };
+    }
+  });
+
+  ipcMain.handle('vault:startVaultCollabLaunchRequest', async (_, launchRequestUid) => {
+    try {
+      if (typeof launchRequestUid !== 'string' || !launchRequestUid.trim()) {
+        throw new Error('Launch request UID is required.');
+      }
+
+      const config = getVaultCollabDashboardActionRuntimeConfig();
+      const actor = await ensureVaultCollabDashboardActor();
+      const snapshot = vault.getVaultCollabDashboardSnapshot({
+        launchRequestLimit: 100,
+        sessionLimit: 5,
+        handoffLimit: 5,
+        eventLimit: 5,
+      });
+      const launchRequest = snapshot.launchRequests.find((request) => request.launchRequestUid === launchRequestUid);
+      if (!launchRequest) {
+        throw new Error(`Launch request not found: ${launchRequestUid}`);
+      }
+      if (launchRequest.status !== 'approved') {
+        throw new Error(`Launch request must be approved before The Vault can start it. Current status: ${launchRequest.status}`);
+      }
+      if (!existsSync(launchRequest.workspacePath)) {
+        throw new Error(`Launch workspace does not exist: ${launchRequest.workspacePath}`);
+      }
+
+      const launchCommand = buildVaultCollabLaunchCommand(launchRequest);
+      if (!isExperimentalManagedVaultCollabSpawnEnabled()) {
+        return {
+          success: true,
+          data: {
+            launchRequestUid,
+            launchedSessionUid: null,
+            command: launchCommand.command,
+            args: launchCommand.args,
+            display: launchCommand.display,
+            launchCommand,
+          },
+        };
+      }
+
+      if (launchRequest.provider !== 'codex') {
+        throw new Error(`The experimental managed launch broker currently supports Codex requests only. Provider was ${launchRequest.provider}.`);
+      }
+
+      const launching = await executeVaultCollabAction(config, actor, {
+        kind: 'launch',
+        action: 'mark_launching',
+        launchRequestUid,
+        detail: 'The Vault broker accepted the approved launch request.',
+      });
+      if (!launching.ok) {
+        throw new Error(launching.error || 'Could not mark launch request launching.');
+      }
+
+      let managedSession: { sessionUid: string; sessionToken: string } | null = null;
+      try {
+        managedSession = await registerVaultCollabManagedCodexSession(config, launchRequest);
+        startManagedVaultCollabTerminal(config, actor, launchRequest, managedSession);
+        const running = await executeVaultCollabAction(config, actor, {
+          kind: 'launch',
+          action: 'mark_running',
+          launchRequestUid,
+          launchedSessionUid: managedSession.sessionUid,
+          detail: 'The Vault started a managed Codex PTY and attached the wakeable session.',
+        });
+        if (!running.ok) {
+          throw new Error(running.error || 'Could not mark launch request running.');
+        }
+
+        return {
+          success: true,
+          data: {
+            launchRequestUid,
+            launchedSessionUid: managedSession.sessionUid,
+            command: 'codex',
+            args: ['--no-alt-screen', '-C', launchRequest.workspacePath, '[prompt delivered over PTY]'],
+            display: launchCommand.display,
+            launchCommand,
+          },
+        };
+      } catch (error) {
+        if (managedSession) {
+          killManagedVaultCollabTerminal(managedSession.sessionUid);
+        }
+        await executeVaultCollabAction(config, actor, {
+          kind: 'launch',
+          action: 'fail',
+          launchRequestUid,
+          reason: error instanceof Error ? error.message : String(error),
+        });
+        throw error;
+      }
+    } catch (e: any) {
+      return { success: false, error: e.message };
+    }
+  });
+
+  ipcMain.handle('vault:getVaultCollabManagedTerminals', () => {
+    try {
+      return {
+        success: true,
+        data: Array.from(managedVaultCollabTerminals.values()).map(mapManagedVaultCollabTerminal),
+      };
+    } catch (e: any) {
+      return { success: false, error: e.message };
+    }
+  });
+
+  ipcMain.handle('vault:controlVaultCollabManagedTerminal', async (_, input) => {
+    try {
+      const raw = input && typeof input === 'object' ? input as Record<string, unknown> : {};
+      const sessionUid = typeof raw.sessionUid === 'string' ? raw.sessionUid.trim() : '';
+      const action = raw.action;
+      if (!sessionUid) {
+        throw new Error('Managed session UID is required.');
+      }
+
+      if (action === 'pause') {
+        return { success: true, data: mapManagedVaultCollabTerminal(pauseManagedVaultCollabTerminal(sessionUid)) };
+      }
+
+      if (action === 'resume') {
+        const terminal = requireManagedVaultCollabTerminal(sessionUid);
+        return {
+          success: true,
+          data: mapManagedVaultCollabTerminal(resumeManagedVaultCollabTerminalPolling(getVaultCollabDashboardActionRuntimeConfig(), terminal)),
+        };
+      }
+
+      if (action === 'stop') {
+        const actor = await ensureVaultCollabDashboardActor();
+        killManagedVaultCollabTerminal(sessionUid);
+        await executeVaultCollabAction(getVaultCollabDashboardActionRuntimeConfig(), actor, {
+          kind: 'session',
+          action: 'close',
+          targetSessionUid: sessionUid,
+          reason: 'Stopped from The Vault dashboard.',
+        });
+        return { success: true, data: null };
+      }
+
+      throw new Error(`Unsupported managed terminal action: ${String(action)}`);
+    } catch (e: any) {
+      return { success: false, error: e.message };
+    }
+  });
+
+  ipcMain.handle('vault:detectVaultCollabSourcePath', () => {
+    try {
+      return { success: true, data: detectVaultCollabSourcePath() };
+    } catch (e: any) {
+      return { success: false, error: e.message };
+    }
+  });
+
+  ipcMain.handle('vault:useDetectedVaultCollabSourcePath', () => {
+    try {
+      const detected = detectVaultCollabSourcePath();
+      if (!detected.path) {
+        throw new Error(detected.reason);
+      }
+
+      const data = vault.saveVaultCollabRuntimeConfig({
+        runtimeMode: 'localSource',
+        localSourceCheckoutPath: detected.path,
+        databasePath: getVaultCollabExtensionPaths(vault.getVaultRoot()).database,
+      });
+      return { success: true, data };
+    } catch (e: any) {
+      return { success: false, error: e.message };
+    }
+  });
+
+  ipcMain.handle('vault:chooseVaultCollabSourcePath', async () => {
+    try {
+      const selection = await dialog.showOpenDialog({
+        title: 'Choose Vault Collab source folder',
+        properties: ['openDirectory'],
+      });
+      if (selection.canceled || selection.filePaths.length === 0) {
+        return { success: true, data: null };
+      }
+
+      const sourceRoot = selection.filePaths[0];
+      const data = vault.saveVaultCollabRuntimeConfig({
+        runtimeMode: 'localSource',
+        localSourceCheckoutPath: sourceRoot,
+        databasePath: getVaultCollabExtensionPaths(vault.getVaultRoot()).database,
+      });
+      return { success: true, data };
+    } catch (e: any) {
+      return { success: false, error: e.message };
+    }
+  });
+
   ipcMain.handle('vault:getOpenRouterModels', async (_, apiKey) => {
     try {
       return { success: true, data: await getOpenRouterModels(apiKey) };
@@ -1906,7 +2812,11 @@ app.whenReady().then(() => {
   const claudeMdPath = join(homedir(), '.claude', 'CLAUDE.md');
   const claudeUserSkillDir = join(homedir(), '.claude', 'skills', 'vault-memory');
   const claudeUserSkillPath = join(claudeUserSkillDir, 'SKILL.md');
+  const claudeCommandsDir = join(homedir(), '.claude', 'commands');
+  const claudeVaultCollabCommandPath = join(claudeCommandsDir, 'vault-collab.md');
   const codexConfigPath = join(homedir(), '.codex', 'config.toml');
+  const codexCommandsDir = join(homedir(), '.codex', 'commands');
+  const codexVaultCollabCommandPath = join(codexCommandsDir, 'vault-collab.md');
   const claudeSkillPath = resolve(skillsPath, 'claude-vault-skill.md');
   const codexAgentsPath = join(homedir(), '.codex', 'AGENTS.md');
   const codexSkillPath = resolve(skillsPath, 'codex-vault-skill.md');
@@ -1923,7 +2833,7 @@ app.whenReady().then(() => {
   async function readJsonFile(filePath: string): Promise<{ exists: boolean; data: Record<string, any> | null; error?: string }> {
     try {
       const content = await readFile(filePath, 'utf8');
-      return { exists: true, data: JSON.parse(content) };
+      return { exists: true, data: JSON.parse(stripUtf8Bom(content)) };
     } catch (err: any) {
       if (err.code === 'ENOENT') {
         return { exists: false, data: null };
@@ -1933,6 +2843,10 @@ app.whenReady().then(() => {
       }
       throw err;
     }
+  }
+
+  function stripUtf8Bom(content: string): string {
+    return content.charCodeAt(0) === 0xfeff ? content.slice(1) : content;
   }
 
   async function readTextFileIfExists(filePath: string): Promise<string | null> {
@@ -1976,6 +2890,66 @@ app.whenReady().then(() => {
     };
   }
 
+  function getVaultCollabMcpLaunchConfig(): McpLaunchConfig {
+    const config = vault.getVaultCollabRuntimeConfig();
+    const serverPath = resolveVaultCollabMcpServerPath(config);
+
+    if (config.runtimeMode === 'managed') {
+      return {
+        mode: 'development',
+        command: 'npm',
+        args: [
+          'exec',
+          '--yes',
+          '--package',
+          'https://github.com/aliihsaad/vault-collab',
+          '--',
+          'vault-collab-mcp',
+          '--db',
+          config.databasePath,
+        ],
+        requiredPaths: [],
+        displayPath: `vault-collab-mcp --db ${config.databasePath}`,
+      };
+    }
+
+    return {
+      mode: 'development',
+      command: 'node',
+      args: [serverPath || '', '--db', config.databasePath],
+      requiredPaths: serverPath ? [serverPath] : ['Vault Collab MCP server path is not configured'],
+      displayPath: serverPath || 'Vault Collab MCP server path is not configured',
+    };
+  }
+
+  function getServerDisplayName(serverName: string): string {
+    return serverName === 'vault-collab' ? 'Vault Collab MCP' : 'Vault memory MCP';
+  }
+
+  function escapeRegExp(value: string): string {
+    return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  }
+
+  function buildVaultCollabCommandContent(): string {
+    return [
+      '---',
+      'description: Register this session with Vault Collab, show active inbox state, and ask before claiming handoffs.',
+      '---',
+      '',
+      '# Vault Collab',
+      '',
+      'Use Vault Collab MCP for this session.',
+      '',
+      '1. If `vault_collab_register_session` is unavailable, say that Vault Collab MCP is not connected and tell the user to run Vault Settings -> Client setup -> Connect Vault Collab MCP.',
+      '2. If this session is not registered, call `vault_collab_register_session` with the current client type, project, workspace path, and capabilities.',
+      '3. Report the current registered session state.',
+      '4. Call `vault_collab_list_inbox` for the current project and related project context.',
+      '5. Show available handoffs briefly and ask before calling `vault_collab_claim_handoff`.',
+      '6. Do not claim, resolve, reopen, or execute risky work without user approval.',
+      '',
+    ].join('\n');
+  }
+
   async function validateMcpRuntime(steps: ConnectStep[], launchConfig: McpLaunchConfig): Promise<boolean> {
     const missingPaths: string[] = [];
     for (const requiredPath of launchConfig.requiredPaths) {
@@ -2007,32 +2981,55 @@ app.whenReady().then(() => {
   }
 
   function hasCodexVaultEntry(content: string): boolean {
-    return /\[mcp_servers(?:\."vault-memory"|\.vault-memory)\]/.test(content);
+    return hasCodexMcpEntry(content, 'vault-memory');
   }
 
   function removeCodexVaultEntry(content: string): string {
+    return removeCodexMcpEntry(content, 'vault-memory');
+  }
+
+  function hasCodexMcpEntry(content: string, serverName: string): boolean {
+    const escaped = escapeRegExp(serverName);
+    return new RegExp(`\\[mcp_servers(?:\\."${escaped}"|\\.${escaped})\\]`).test(content);
+  }
+
+  function removeCodexMcpEntry(content: string, serverName: string): string {
+    const escaped = escapeRegExp(serverName);
     return content
-      .replace(/\n*\[mcp_servers(?:\."vault-memory"|\.vault-memory)\]\n[\s\S]*?(?=\n\[|$)/g, '\n')
+      .replace(new RegExp(`\\n*\\[mcp_servers(?:\\."${escaped}"|\\.${escaped})\\]\\n[\\s\\S]*?(?=\\n\\[|$)`, 'g'), '\n')
       .replace(/\n{3,}/g, '\n\n')
       .trimEnd();
   }
 
   function hasCurrentCodexVaultEntry(content: string, launchConfig: McpLaunchConfig): boolean {
-    return content.includes(buildCodexVaultEntry(launchConfig).trim());
+    return hasCurrentCodexMcpEntry(content, 'vault-memory', launchConfig);
   }
 
   function buildCodexVaultEntry(launchConfig: McpLaunchConfig): string {
+    return buildCodexMcpEntry('vault-memory', launchConfig);
+  }
+
+  function hasCurrentCodexMcpEntry(content: string, serverName: string, launchConfig: McpLaunchConfig): boolean {
+    return content.includes(buildCodexMcpEntry(serverName, launchConfig).trim());
+  }
+
+  function buildCodexMcpEntry(serverName: string, launchConfig: McpLaunchConfig): string {
     return [
-      '[mcp_servers.vault-memory]',
+      `[mcp_servers.${serverName}]`,
       `command = ${JSON.stringify(launchConfig.command)}`,
       `args = [${launchConfig.args.map((arg) => JSON.stringify(arg)).join(', ')}]`,
       '',
     ].join('\n');
   }
 
-  async function connectMcpToConfig(configPath: string, label: string): Promise<{ success: boolean; steps: ConnectStep[]; backupPath?: string }> {
+  async function connectMcpToConfig(
+    configPath: string,
+    label: string,
+    serverName = 'vault-memory',
+    launchConfig = getMcpLaunchConfig(),
+  ): Promise<{ success: boolean; steps: ConnectStep[]; backupPath?: string }> {
     const steps: ConnectStep[] = [];
-    const launchConfig = getMcpLaunchConfig();
+    const displayName = getServerDisplayName(serverName);
 
     // Step 1: Locate MCP server
     const mcpExists = await validateMcpRuntime(steps, launchConfig);
@@ -2065,7 +3062,7 @@ app.whenReady().then(() => {
     });
 
     // Step 3: Check if already configured
-    const existingEntry = config.mcpServers?.['vault-memory'];
+    const existingEntry = config.mcpServers?.[serverName];
     if (mcpEntriesMatch(existingEntry, launchConfig)) {
       steps.push({ id: 'check-existing', label: 'Check existing entry', status: 'success', detail: 'Already configured with correct path' });
       steps.push({ id: 'backup', label: 'Backup config', status: 'skipped', detail: 'No changes needed' });
@@ -2077,7 +3074,7 @@ app.whenReady().then(() => {
       id: 'check-existing',
       label: 'Check existing entry',
       status: 'success',
-      detail: existingEntry ? 'Entry exists but path differs — will update' : 'No existing vault-memory entry',
+      detail: existingEntry ? 'Entry exists but path differs — will update' : `No existing ${serverName} entry`,
     });
 
     // Step 4: Backup
@@ -2100,14 +3097,14 @@ app.whenReady().then(() => {
     // Step 5: Merge and write
     try {
       config.mcpServers = config.mcpServers || {};
-      config.mcpServers['vault-memory'] = {
+      config.mcpServers[serverName] = {
         command: launchConfig.command,
         args: launchConfig.args,
       };
 
       await mkdir(dirname(configPath), { recursive: true });
       await writeFile(configPath, JSON.stringify(config, null, 2), 'utf8');
-      steps.push({ id: 'write-config', label: 'Write MCP entry', status: 'success', detail: 'vault-memory entry written' });
+      steps.push({ id: 'write-config', label: 'Write MCP entry', status: 'success', detail: `${serverName} entry written` });
     } catch (err: any) {
       steps.push({ id: 'write-config', label: 'Write MCP entry', status: 'fail', detail: err.message });
       steps.push({ id: 'verify', label: 'Verify config', status: 'skipped' });
@@ -2117,7 +3114,7 @@ app.whenReady().then(() => {
     // Step 6: Verify
     try {
       const verifyResult = await readJsonFile(configPath);
-      if (mcpEntriesMatch(verifyResult.data?.mcpServers?.['vault-memory'], launchConfig)) {
+      if (mcpEntriesMatch(verifyResult.data?.mcpServers?.[serverName], launchConfig)) {
         steps.push({ id: 'verify', label: 'Verify config', status: 'success', detail: 'Entry confirmed in config file' });
       } else {
         steps.push({ id: 'verify', label: 'Verify config', status: 'fail', detail: 'Entry not found after write' });
@@ -2128,12 +3125,18 @@ app.whenReady().then(() => {
       return { success: false, steps, backupPath };
     }
 
+    if (serverName === 'vault-collab') {
+      steps.push({ id: 'next-step', label: 'Restart client', status: 'success', detail: `${displayName} will be available after the client restarts or reloads MCP servers.` });
+    }
     return { success: true, steps, backupPath };
   }
 
-  async function connectMcpToCodexConfig(): Promise<{ success: boolean; steps: ConnectStep[]; backupPath?: string }> {
+  async function connectMcpToCodexConfig(
+    serverName = 'vault-memory',
+    launchConfig = getMcpLaunchConfig(),
+  ): Promise<{ success: boolean; steps: ConnectStep[]; backupPath?: string }> {
     const steps: ConnectStep[] = [];
-    const launchConfig = getMcpLaunchConfig();
+    const displayName = getServerDisplayName(serverName);
 
     const mcpExists = await validateMcpRuntime(steps, launchConfig);
     if (!mcpExists) {
@@ -2164,7 +3167,7 @@ app.whenReady().then(() => {
       }
     }
 
-    if (hasCurrentCodexVaultEntry(configContent, launchConfig)) {
+    if (hasCurrentCodexMcpEntry(configContent, serverName, launchConfig)) {
       steps.push({ id: 'check-existing', label: 'Check existing entry', status: 'success', detail: 'Already configured with correct path' });
       steps.push({ id: 'backup', label: 'Backup config', status: 'skipped', detail: 'No changes needed' });
       steps.push({ id: 'write-config', label: 'Write MCP entry', status: 'skipped', detail: 'No changes needed' });
@@ -2175,7 +3178,7 @@ app.whenReady().then(() => {
       id: 'check-existing',
       label: 'Check existing entry',
       status: 'success',
-      detail: hasCodexVaultEntry(configContent) ? 'Entry exists but path differs — will update' : 'No existing vault-memory entry',
+      detail: hasCodexMcpEntry(configContent, serverName) ? 'Entry exists but path differs — will update' : `No existing ${serverName} entry`,
     });
 
     let backupPath: string | undefined;
@@ -2195,11 +3198,11 @@ app.whenReady().then(() => {
     }
 
     try {
-      const cleaned = removeCodexVaultEntry(configContent);
-      const nextContent = `${cleaned.trimEnd()}${cleaned.trim() ? '\n\n' : ''}${buildCodexVaultEntry(launchConfig)}`;
+      const cleaned = removeCodexMcpEntry(configContent, serverName);
+      const nextContent = `${cleaned.trimEnd()}${cleaned.trim() ? '\n\n' : ''}${buildCodexMcpEntry(serverName, launchConfig)}`;
       await mkdir(dirname(codexConfigPath), { recursive: true });
       await writeFile(codexConfigPath, nextContent, 'utf8');
-      steps.push({ id: 'write-config', label: 'Write MCP entry', status: 'success', detail: 'vault-memory entry written to config.toml' });
+      steps.push({ id: 'write-config', label: 'Write MCP entry', status: 'success', detail: `${serverName} entry written to config.toml` });
     } catch (err: any) {
       steps.push({ id: 'write-config', label: 'Write MCP entry', status: 'fail', detail: err.message });
       steps.push({ id: 'verify', label: 'Verify config', status: 'skipped' });
@@ -2208,8 +3211,11 @@ app.whenReady().then(() => {
 
     try {
       const verifyContent = await readFile(codexConfigPath, 'utf8');
-      if (hasCurrentCodexVaultEntry(verifyContent, launchConfig)) {
+      if (hasCurrentCodexMcpEntry(verifyContent, serverName, launchConfig)) {
         steps.push({ id: 'verify', label: 'Verify config', status: 'success', detail: 'Entry confirmed in config.toml' });
+        if (serverName === 'vault-collab') {
+          steps.push({ id: 'next-step', label: 'Restart client', status: 'success', detail: `${displayName} will be available after Codex restarts or reloads tool servers.` });
+        }
         return { success: true, steps, backupPath };
       }
 
@@ -2224,14 +3230,17 @@ app.whenReady().then(() => {
   ipcMain.handle('vault:checkConnectionStatus', async () => {
     try {
       const launchConfig = getMcpLaunchConfig();
+      const vaultCollabLaunchConfig = getVaultCollabMcpLaunchConfig();
 
       // Check Claude Desktop
       const desktopResult = await readJsonFile(claudeDesktopConfigPath);
       const desktopConfigured = mcpEntriesMatch(desktopResult.data?.mcpServers?.['vault-memory'], launchConfig);
+      const vaultCollabDesktopConfigured = mcpEntriesMatch(desktopResult.data?.mcpServers?.['vault-collab'], vaultCollabLaunchConfig);
 
       // Check Claude Code
       const codeResult = await readJsonFile(claudeCodeSettingsPath);
       const codeConfigured = mcpEntriesMatch(codeResult.data?.mcpServers?.['vault-memory'], launchConfig);
+      const vaultCollabCodeConfigured = mcpEntriesMatch(codeResult.data?.mcpServers?.['vault-collab'], vaultCollabLaunchConfig);
 
       // Check the active Claude Code skill vector only. Legacy CLAUDE.md references
       // are migration signals, not proof that Claude Code will load the skill.
@@ -2245,14 +3254,16 @@ app.whenReady().then(() => {
         // File doesn't exist — not installed
       }
 
+      const codexConfigContent = await readTextFileIfExists(codexConfigPath);
+
       return {
         success: true,
         data: {
           claudeDesktop: { configured: desktopConfigured, configPath: claudeDesktopConfigPath },
           claudeCode: { configured: codeConfigured, configPath: claudeCodeSettingsPath },
           codex: {
-            configured: await fileExists(codexConfigPath)
-              ? hasCurrentCodexVaultEntry(await readFile(codexConfigPath, 'utf8'), launchConfig)
+            configured: codexConfigContent !== null
+              ? hasCurrentCodexVaultEntry(codexConfigContent, launchConfig)
               : false,
             configPath: codexConfigPath,
           },
@@ -2268,6 +3279,29 @@ app.whenReady().then(() => {
             claudeSkillPath: claudeUserSkillPath,
             codexInstalled: codexSkillInstalled,
             codexAgentsPath,
+          },
+          vaultCollab: {
+            claudeDesktop: { configured: vaultCollabDesktopConfigured, configPath: claudeDesktopConfigPath },
+            claudeCode: { configured: vaultCollabCodeConfigured, configPath: claudeCodeSettingsPath },
+            codex: {
+              configured: codexConfigContent !== null
+                ? hasCurrentCodexMcpEntry(codexConfigContent, 'vault-collab', vaultCollabLaunchConfig)
+                : false,
+              configPath: codexConfigPath,
+            },
+            mcpRuntime: {
+              mode: vaultCollabLaunchConfig.mode,
+              command: vaultCollabLaunchConfig.command,
+              args: vaultCollabLaunchConfig.args,
+              displayPath: vaultCollabLaunchConfig.displayPath,
+            },
+            command: {
+              claudeInstalled: await fileExists(claudeVaultCollabCommandPath),
+              claudeCommandPath: claudeVaultCollabCommandPath,
+              codexSlashCommandSupported: false,
+              codexLegacyCommandPresent: await fileExists(codexVaultCollabCommandPath),
+              codexLegacyCommandPath: codexVaultCollabCommandPath,
+            },
           },
         },
       };
@@ -2297,6 +3331,15 @@ app.whenReady().then(() => {
   ipcMain.handle('vault:connectCodex', async () => {
     try {
       const result = await connectMcpToCodexConfig();
+      return { success: true, data: result };
+    } catch (e: any) {
+      return { success: false, error: e.message };
+    }
+  });
+
+  ipcMain.handle('vault:connectVaultCollabClients', async () => {
+    try {
+      const result = await connectVaultCollabClients();
       return { success: true, data: result };
     } catch (e: any) {
       return { success: false, error: e.message };
@@ -2455,6 +3498,105 @@ app.whenReady().then(() => {
     }
   }
 
+  async function installVaultCollabCommandFiles(): Promise<ConnectStep[]> {
+    const steps: ConnectStep[] = [];
+    const content = buildVaultCollabCommandContent();
+    const targets = [
+      { label: 'Claude Code /vault-collab command', dir: claudeCommandsDir, path: claudeVaultCollabCommandPath },
+    ];
+
+    for (const target of targets) {
+      const targetId = target.label.toLowerCase().replace(/[^a-z0-9]+/g, '-');
+      try {
+        await mkdir(target.dir, { recursive: true });
+        if (await fileExists(target.path)) {
+          const existing = await readFile(target.path, 'utf8');
+          if (existing.trim() === content.trim()) {
+            steps.push({ id: `${targetId}-up-to-date`, label: target.label, status: 'success', detail: 'Already installed' });
+            continue;
+          }
+          await copyFile(target.path, `${target.path}.vault-backup-${Date.now()}`);
+        }
+        await writeFile(target.path, content, 'utf8');
+        steps.push({ id: `${targetId}-write`, label: target.label, status: 'success', detail: target.path });
+      } catch (err: any) {
+        steps.push({ id: `${targetId}-write`, label: target.label, status: 'fail', detail: err.message });
+      }
+    }
+
+    steps.push({
+      id: 'codex-slash-command-note',
+      label: 'Codex shortcut',
+      status: 'skipped',
+      detail: 'Codex does not currently load personal unprefixed slash commands from ~/.codex/commands; use a normal prompt like "use vault collab" after MCP restart.',
+    });
+
+    return steps;
+  }
+
+  async function removeVaultCollabCommandFiles(): Promise<ConnectStep[]> {
+    const steps: ConnectStep[] = [];
+    const targets = [
+      { label: 'Claude Code /vault-collab command', path: claudeVaultCollabCommandPath },
+      { label: 'Legacy Codex /vault-collab command file', path: codexVaultCollabCommandPath },
+    ];
+    const { unlink } = await import('node:fs/promises');
+
+    for (const target of targets) {
+      const targetId = target.label.toLowerCase().replace(/[^a-z0-9]+/g, '-');
+      if (!(await fileExists(target.path))) {
+        steps.push({ id: `${targetId}-remove`, label: target.label, status: 'skipped', detail: 'Not installed' });
+        continue;
+      }
+
+      try {
+        await copyFile(target.path, `${target.path}.vault-backup-${Date.now()}`);
+        await unlink(target.path);
+        steps.push({ id: `${targetId}-remove`, label: target.label, status: 'success', detail: target.path });
+      } catch (err: any) {
+        steps.push({ id: `${targetId}-remove`, label: target.label, status: 'fail', detail: err.message });
+      }
+    }
+
+    return steps;
+  }
+
+  async function connectVaultCollabClients(): Promise<{ success: boolean; steps: ConnectStep[]; backupPath?: string }> {
+    const steps: ConnectStep[] = [];
+    const backupPaths: string[] = [];
+    const launchConfig = getVaultCollabMcpLaunchConfig();
+
+    try {
+      await mkdir(dirname(vault.getVaultCollabRuntimeConfig().databasePath), { recursive: true });
+    } catch (err: any) {
+      steps.push({ id: 'prepare-database-dir', label: 'Prepare Vault Collab database directory', status: 'fail', detail: err.message });
+      return { success: false, steps };
+    }
+    steps.push({ id: 'prepare-database-dir', label: 'Prepare Vault Collab database directory', status: 'success', detail: vault.getVaultCollabRuntimeConfig().databasePath });
+
+    const targets = [
+      { label: 'Claude Desktop', run: () => connectMcpToConfig(claudeDesktopConfigPath, 'Claude Desktop', 'vault-collab', launchConfig) },
+      { label: 'Claude Code', run: () => connectMcpToConfig(claudeCodeSettingsPath, 'Claude Code', 'vault-collab', launchConfig) },
+      { label: 'Codex', run: () => connectMcpToCodexConfig('vault-collab', launchConfig) },
+    ];
+
+    for (const target of targets) {
+      const result = await target.run();
+      steps.push(...result.steps.map((step) => ({ ...step, id: `vault-collab-${target.label.toLowerCase().replace(/\s+/g, '-')}-${step.id}`, label: `${target.label}: ${step.label}` })));
+      if (result.backupPath) {
+        backupPaths.push(result.backupPath);
+      }
+    }
+
+    steps.push(...await installVaultCollabCommandFiles());
+
+    return {
+      success: steps.every((step) => step.status !== 'fail'),
+      steps,
+      backupPath: backupPaths.join('; ') || undefined,
+    };
+  }
+
   function logAutoMigration(label: string, result: { success: boolean; steps: ConnectStep[]; backupPath?: string }): void {
     const changed = result.steps.some((step) => step.status === 'success' && (
       step.id === 'write-config'
@@ -2532,31 +3674,112 @@ app.whenReady().then(() => {
 
   // --- Disconnect handlers ---
 
-  async function disconnectMcpFromConfig(configPath: string, label: string): Promise<{ success: boolean; steps: ConnectStep[]; backupPath?: string }> {
+  async function disconnectMcpFromCodexConfig(serverName = 'vault-memory'): Promise<{ success: boolean; steps: ConnectStep[]; backupPath?: string }> {
     const steps: ConnectStep[] = [];
 
-    // Step 1: Read config
-    const configResult = await readJsonFile(configPath);
-    if (!configResult.exists || !configResult.data) {
-      steps.push({ id: 'read-config', label: `Read ${label} config`, status: 'fail', detail: configResult.error || 'Config file not found' });
-      steps.push({ id: 'check-existing', label: 'Check vault-memory entry', status: 'skipped' });
+    let configContent = '';
+    try {
+      configContent = await readFile(codexConfigPath, 'utf8');
+      steps.push({ id: 'read-config', label: 'Read Codex config', status: 'success', detail: codexConfigPath });
+    } catch (err: any) {
+      if (err.code === 'ENOENT') {
+        steps.push({ id: 'read-config', label: 'Read Codex config', status: 'success', detail: 'File does not exist — nothing to remove' });
+        steps.push({ id: 'check-existing', label: `Check ${serverName} entry`, status: 'skipped' });
+        steps.push({ id: 'backup', label: 'Backup config', status: 'skipped' });
+        steps.push({ id: 'remove-entry', label: 'Remove MCP entry', status: 'skipped' });
+        steps.push({ id: 'verify', label: 'Verify removal', status: 'success', detail: 'Already disconnected' });
+        return { success: true, steps };
+      }
+
+      steps.push({ id: 'read-config', label: 'Read Codex config', status: 'fail', detail: err.message });
+      steps.push({ id: 'check-existing', label: `Check ${serverName} entry`, status: 'skipped' });
       steps.push({ id: 'backup', label: 'Backup config', status: 'skipped' });
       steps.push({ id: 'remove-entry', label: 'Remove MCP entry', status: 'skipped' });
       steps.push({ id: 'verify', label: 'Verify removal', status: 'skipped' });
       return { success: false, steps };
     }
-    steps.push({ id: 'read-config', label: `Read ${label} config`, status: 'success', detail: configPath });
 
-    // Step 2: Check if vault-memory exists
-    const config = configResult.data;
-    if (!config.mcpServers?.['vault-memory']) {
-      steps.push({ id: 'check-existing', label: 'Check vault-memory entry', status: 'success', detail: 'No vault-memory entry found — already disconnected' });
+    if (!hasCodexMcpEntry(configContent, serverName)) {
+      steps.push({ id: 'check-existing', label: `Check ${serverName} entry`, status: 'success', detail: `No ${serverName} entry found — already disconnected` });
       steps.push({ id: 'backup', label: 'Backup config', status: 'skipped', detail: 'No changes needed' });
       steps.push({ id: 'remove-entry', label: 'Remove MCP entry', status: 'skipped', detail: 'No changes needed' });
       steps.push({ id: 'verify', label: 'Verify removal', status: 'success', detail: 'Already disconnected' });
       return { success: true, steps };
     }
-    steps.push({ id: 'check-existing', label: 'Check vault-memory entry', status: 'success', detail: 'Entry found — will remove' });
+    steps.push({ id: 'check-existing', label: `Check ${serverName} entry`, status: 'success', detail: 'Entry found — will remove' });
+
+    let backupPath: string | undefined;
+    try {
+      backupPath = `${codexConfigPath}.vault-backup-${Date.now()}`;
+      await copyFile(codexConfigPath, backupPath);
+      steps.push({ id: 'backup', label: 'Backup config', status: 'success', detail: backupPath });
+    } catch (err: any) {
+      steps.push({ id: 'backup', label: 'Backup config', status: 'fail', detail: err.message });
+      steps.push({ id: 'remove-entry', label: 'Remove MCP entry', status: 'skipped' });
+      steps.push({ id: 'verify', label: 'Verify removal', status: 'skipped' });
+      return { success: false, steps, backupPath };
+    }
+
+    try {
+      const cleaned = removeCodexMcpEntry(configContent, serverName);
+      await writeFile(codexConfigPath, cleaned ? `${cleaned}\n` : '', 'utf8');
+      steps.push({ id: 'remove-entry', label: 'Remove MCP entry', status: 'success', detail: `${serverName} entry removed from config.toml` });
+    } catch (err: any) {
+      steps.push({ id: 'remove-entry', label: 'Remove MCP entry', status: 'fail', detail: err.message });
+      steps.push({ id: 'verify', label: 'Verify removal', status: 'skipped' });
+      return { success: false, steps, backupPath };
+    }
+
+    try {
+      const verifyContent = await readFile(codexConfigPath, 'utf8');
+      if (!hasCodexMcpEntry(verifyContent, serverName)) {
+        steps.push({ id: 'verify', label: 'Verify removal', status: 'success', detail: 'Entry confirmed removed from config.toml' });
+        return { success: true, steps, backupPath };
+      }
+
+      steps.push({ id: 'verify', label: 'Verify removal', status: 'fail', detail: 'Entry still present after write' });
+      return { success: false, steps, backupPath };
+    } catch (err: any) {
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
+        steps.push({ id: 'verify', label: 'Verify removal', status: 'success', detail: 'Config file absent after removal' });
+        return { success: true, steps, backupPath };
+      }
+
+      steps.push({ id: 'verify', label: 'Verify removal', status: 'fail', detail: err.message });
+      return { success: false, steps, backupPath };
+    }
+  }
+
+  async function disconnectMcpFromConfig(
+    configPath: string,
+    label: string,
+    serverName = 'vault-memory',
+  ): Promise<{ success: boolean; steps: ConnectStep[]; backupPath?: string }> {
+    const steps: ConnectStep[] = [];
+
+    // Step 1: Read config
+    const configResult = await readJsonFile(configPath);
+    if (!configResult.exists || !configResult.data) {
+      const readStatus = configResult.error ? 'fail' : 'success';
+      steps.push({ id: 'read-config', label: `Read ${label} config`, status: readStatus, detail: configResult.error || 'File does not exist — nothing to remove' });
+      steps.push({ id: 'check-existing', label: `Check ${serverName} entry`, status: configResult.error ? 'skipped' : 'success', detail: configResult.error ? undefined : 'Already disconnected' });
+      steps.push({ id: 'backup', label: 'Backup config', status: 'skipped' });
+      steps.push({ id: 'remove-entry', label: 'Remove MCP entry', status: 'skipped' });
+      steps.push({ id: 'verify', label: 'Verify removal', status: configResult.error ? 'skipped' : 'success', detail: configResult.error ? undefined : 'Already disconnected' });
+      return { success: !configResult.error, steps };
+    }
+    steps.push({ id: 'read-config', label: `Read ${label} config`, status: 'success', detail: configPath });
+
+    // Step 2: Check if vault-memory exists
+    const config = configResult.data;
+    if (!config.mcpServers?.[serverName]) {
+      steps.push({ id: 'check-existing', label: `Check ${serverName} entry`, status: 'success', detail: `No ${serverName} entry found — already disconnected` });
+      steps.push({ id: 'backup', label: 'Backup config', status: 'skipped', detail: 'No changes needed' });
+      steps.push({ id: 'remove-entry', label: 'Remove MCP entry', status: 'skipped', detail: 'No changes needed' });
+      steps.push({ id: 'verify', label: 'Verify removal', status: 'success', detail: 'Already disconnected' });
+      return { success: true, steps };
+    }
+    steps.push({ id: 'check-existing', label: `Check ${serverName} entry`, status: 'success', detail: 'Entry found — will remove' });
 
     // Step 3: Backup
     let backupPath: string | undefined;
@@ -2573,13 +3796,13 @@ app.whenReady().then(() => {
 
     // Step 4: Remove entry and write
     try {
-      delete config.mcpServers['vault-memory'];
+      delete config.mcpServers[serverName];
       // Clean up empty mcpServers object
       if (Object.keys(config.mcpServers).length === 0) {
         delete config.mcpServers;
       }
       await writeFile(configPath, JSON.stringify(config, null, 2), 'utf8');
-      steps.push({ id: 'remove-entry', label: 'Remove MCP entry', status: 'success', detail: 'vault-memory entry removed' });
+      steps.push({ id: 'remove-entry', label: 'Remove MCP entry', status: 'success', detail: `${serverName} entry removed` });
     } catch (err: any) {
       steps.push({ id: 'remove-entry', label: 'Remove MCP entry', status: 'fail', detail: err.message });
       steps.push({ id: 'verify', label: 'Verify removal', status: 'skipped' });
@@ -2589,7 +3812,7 @@ app.whenReady().then(() => {
     // Step 5: Verify
     try {
       const verifyResult = await readJsonFile(configPath);
-      if (!verifyResult.data?.mcpServers?.['vault-memory']) {
+      if (!verifyResult.data?.mcpServers?.[serverName]) {
         steps.push({ id: 'verify', label: 'Verify removal', status: 'success', detail: 'Entry confirmed removed from config' });
       } else {
         steps.push({ id: 'verify', label: 'Verify removal', status: 'fail', detail: 'Entry still present after write' });
@@ -2602,6 +3825,45 @@ app.whenReady().then(() => {
 
     return { success: true, steps, backupPath };
   }
+
+  async function disconnectVaultCollabClients(): Promise<{ success: boolean; steps: ConnectStep[]; backupPath?: string }> {
+    const steps: ConnectStep[] = [];
+    const backupPaths: string[] = [];
+    const targets = [
+      { label: 'Claude Desktop', run: () => disconnectMcpFromConfig(claudeDesktopConfigPath, 'Claude Desktop', 'vault-collab') },
+      { label: 'Claude Code', run: () => disconnectMcpFromConfig(claudeCodeSettingsPath, 'Claude Code', 'vault-collab') },
+      { label: 'Codex', run: () => disconnectMcpFromCodexConfig('vault-collab') },
+    ];
+
+    for (const target of targets) {
+      const result = await target.run();
+      steps.push(...result.steps.map((step) => ({
+        ...step,
+        id: `vault-collab-${target.label.toLowerCase().replace(/\s+/g, '-')}-${step.id}`,
+        label: `${target.label}: ${step.label}`,
+      })));
+      if (result.backupPath) {
+        backupPaths.push(result.backupPath);
+      }
+    }
+
+    steps.push(...await removeVaultCollabCommandFiles());
+
+    return {
+      success: steps.every((step) => step.status !== 'fail'),
+      steps,
+      backupPath: backupPaths.join('; ') || undefined,
+    };
+  }
+
+  ipcMain.handle('vault:disconnectVaultCollabClients', async () => {
+    try {
+      const result = await disconnectVaultCollabClients();
+      return { success: true, data: result };
+    } catch (e: any) {
+      return { success: false, error: e.message };
+    }
+  });
 
   ipcMain.handle('vault:disconnectClaudeDesktop', async () => {
     try {

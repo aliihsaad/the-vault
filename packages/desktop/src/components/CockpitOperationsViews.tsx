@@ -51,7 +51,12 @@ import {
   extractTopScore,
   extractTotalCandidates,
   formatCompactNumber,
+  getOperationalAnalyticsDateFrom,
+  getRecallAnalyticsDateFrom,
   getRecallPackingSettings,
+  OPERATIONAL_ANALYTICS_DAYS,
+  OPERATIONAL_ANALYTICS_LOG_LIMIT,
+  RECALL_ANALYTICS_LOG_LIMIT,
   type ProjectCockpitRow,
 } from '../cockpit-metrics.js';
 import {
@@ -890,7 +895,7 @@ export function GraphOperationsView({
   }, [selectedProject, graphifyModel?.preferredTab]);
 
   return (
-    <div className="ops-layout">
+    <div className="ops-layout graphify-workspace">
       <OpsIntro
         label="Graph"
         title="Graphify project graph"
@@ -904,7 +909,7 @@ export function GraphOperationsView({
         loading={loading}
       />
 
-      <section className="panel graphify-dashboard">
+      <section className="graphify-dashboard">
         <div className="graphify-dashboard-top">
           <div className="toolbar-row">
             <label className="select-field">
@@ -961,7 +966,7 @@ export function GraphOperationsView({
               <p>{projectStatus?.sourceRootCandidate?.message || projectStatus?.message}</p>
               {projectStatus?.sourceRootCandidate ? <span className="text-mono">{projectStatus.sourceRootCandidate.path}</span> : null}
             </div>
-            <div className="inline-actions">
+            <div className="inline-actions graphify-source-actions">
               <button
                 type="button"
                 className="primary-button"
@@ -979,6 +984,9 @@ export function GraphOperationsView({
                   Use workspace
                 </button>
               ) : null}
+              <button type="button" className="header-button" onClick={() => void setGraphifyEnabled(false)}>
+                Disable for project
+              </button>
             </div>
           </div>
         ) : graphifyModel?.sourceRoot && graphifyModel.state !== 'disabled' ? (
@@ -988,16 +996,21 @@ export function GraphOperationsView({
               <p>Graphify builds from this saved folder.</p>
               <span className="text-mono">{graphifyModel.sourceRoot}</span>
             </div>
-            <button
-              type="button"
-              className="header-button"
-              aria-label="Change folder"
-              onClick={() => void chooseGraphifyProjectSourceRoot()}
-              disabled={!graphifyModel.actions.changeSourceRoot.enabled}
-            >
-              <FolderOpen size={15} />
-              {graphifyModel.actions.changeSourceRoot.label}
-            </button>
+            <div className="inline-actions graphify-source-actions">
+              <button
+                type="button"
+                className="header-button"
+                aria-label="Change folder"
+                onClick={() => void chooseGraphifyProjectSourceRoot()}
+                disabled={!graphifyModel.actions.changeSourceRoot.enabled}
+              >
+                <FolderOpen size={15} />
+                {graphifyModel.actions.changeSourceRoot.label}
+              </button>
+              <button type="button" className="header-button" onClick={() => void setGraphifyEnabled(false)}>
+                Disable for project
+              </button>
+            </div>
           </div>
         ) : null}
 
@@ -1009,12 +1022,6 @@ export function GraphOperationsView({
             </div>
             <button type="button" className="primary-button" onClick={() => void setGraphifyEnabled(true)}>
               Enable Graphify
-            </button>
-          </div>
-        ) : graphifyModel ? (
-          <div className="inline-actions graphify-disable-row">
-            <button type="button" className="header-button" onClick={() => void setGraphifyEnabled(false)}>
-              Disable for project
             </button>
           </div>
         ) : null}
@@ -1100,7 +1107,7 @@ export function RecallOperationsView() {
     setLoading(true);
     try {
       const [logsResponse, settingsResponse] = await Promise.all([
-        window.vaultAPI.getRecentLogs(420, { actionType: 'recall' }),
+        window.vaultAPI.getRecentLogs(RECALL_ANALYTICS_LOG_LIMIT, { actionType: 'recall', dateFrom: getRecallAnalyticsDateFrom() }),
         window.vaultAPI.getAllSettings(),
       ]);
       if (logsResponse.success) setLogs(logsResponse.data || []);
@@ -1230,7 +1237,7 @@ export function AnalyticsOperationsView() {
     setLoading(true);
     try {
       const [logsResponse, latestResponse, queueResponse] = await Promise.all([
-        window.vaultAPI.getRecentLogs(500),
+        window.vaultAPI.getRecentLogs(OPERATIONAL_ANALYTICS_LOG_LIMIT, { dateFrom: getOperationalAnalyticsDateFrom() }),
         window.vaultAPI.getLatest(undefined, 220),
         window.vaultAPI.getTaskQueueStats(),
       ]);
@@ -1242,7 +1249,7 @@ export function AnalyticsOperationsView() {
     }
   }
 
-  const activitySeries = useMemo(() => buildActivitySeries(logs, 14), [logs]);
+  const activitySeries = useMemo(() => buildActivitySeries(logs, OPERATIONAL_ANALYTICS_DAYS), [logs]);
   const typeMetrics = useMemo(() => buildMemoryTypeMetrics(latest), [latest]);
   const statusMetrics = useMemo(() => buildStatusMetrics(latest), [latest]);
   const queueTotal = queueStats

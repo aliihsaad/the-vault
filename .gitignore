@@ -3,6 +3,7 @@ dist/
 dist-renderer/
 dist-electron/
 *.tsbuildinfo
+/main.js
 .env
 .env.local
 .env.*
@@ -28,6 +29,9 @@ desktop.ini
 *.d.ts.map
 mcp-standalone/
 scripts/_oneoff_deps/
+.tmp/
+packages/desktop/dist-*/
+packages/desktop/dist-fixed/
 
 # Test
 coverage/

@@ -13,11 +13,14 @@ The Vault is a local-first memory operating system for AI-assisted work. It give
 
 It ships as a TypeScript workspace with a shared core engine, command-line interface, MCP server, and Electron desktop console. Windows releases also bundle their own `vault-memory` MCP runtime, so installed users can connect Codex, Claude Desktop, or Claude Code without keeping the source repo on disk.
 
+The Vault also includes an optional Graphify extension. When enabled for a project, Vault manages the Graphify runtime and artifacts, embeds Graphify's generated project graph in the desktop app, and exposes graph-aware MCP tools so agents can ask structural questions before reading large parts of a repository.
+
 ## The 60-Second Version
 
 - AI agents forget between sessions, even when the project has a long history.
 - The Vault stores project memory outside the model, on your machine.
 - Agents ask the Vault MCP server for relevant context instead of reading the whole memory store.
+- Graphify can add a local project graph so agents can narrow file reads through graph queries, paths, neighbors, and impact checks.
 - Work can continue later from Codex, Claude Desktop, Claude Code, or another MCP client.
 - Vault does not launch local Codex or Claude terminal agents; those clients stay external and connect through MCP.
 - You stay in control because memory is local, inspectable, and important cleanup changes are reviewable.
@@ -186,6 +189,7 @@ The Vault is:
 | Recall packs | Ranked, compact sets of relevant memories returned for a task or session. |
 | MCP clients | Tools such as Codex, Claude Desktop, and Claude Code that connect to Vault through the `vault-memory` MCP server. |
 | Agent skills | Client-facing guide files that teach agents when to recall, when to save, and how to structure memory. |
+| Graphify extension | Optional Vault-managed graph runtime that builds project graph artifacts, serves `graph.html`, and powers graph-aware recall. |
 | Task executor | A Vault runtime that can process queued tasks, store results, and expose task status through MCP and desktop surfaces. |
 | Project hygiene | Naming, relationship, duplicate, and canonical-decision workflows that keep project memory organized. |
 | Lifecycle states | Reversible memory states such as `active`, `stale`, `archived`, and `pending_delete` before final deletion. |
@@ -195,9 +199,11 @@ The Vault is:
 | Area | What The Vault Provides |
 | --- | --- |
 | Structured memory | Saves typed records with project, subject, summary, tags, keywords, priority, status, related files, and next steps. |
-| Smart recall | Returns ranked memory packs using project match, keywords, tags, memory type, recency, promoted decisions, and related context. |
-| Desktop console | Electron app with overview, memory browser, recall, loops, graph, analytics, Vault task runtime, settings, and client setup. |
-| MCP integration | `vault-memory` MCP server for external agents and clients. |
+| Smart recall | Returns ranked memory packs using project match, keywords, tags, memory type, explicit memory UID matches, recency, promoted decisions, and related context. |
+| Graphify extension | Optional project graph integration that detects or installs Graphify, stores artifacts under Vault-managed paths, embeds real `graph.html`, and keeps the rest of Vault working when Graphify is missing or failed. |
+| Graph-aware recall | Combines Vault memory recall with Graphify context when a fresh or usable graph exists, while logging graph use, fallback reasons, and token-savings telemetry locally. |
+| Desktop console | Electron app with overview, memory browser, recall, loops, Graphify project graph, analytics, Vault task runtime, settings, and client setup. |
+| MCP integration | `vault-memory` MCP server for external agents and clients, including memory tools, task tools, and Vault-owned Graphify graph tools. |
 | One-click client setup | Desktop Settings -> Client setup can connect Codex, Claude Desktop, and Claude Code to the bundled runtime. |
 | CLI access | Command-line entry point over the same core APIs. |
 | Project hygiene | Project descriptions, project listing, naming drift handling, duplicate project merging, and relationship tracking. |
@@ -224,11 +230,12 @@ The desktop app currently includes:
 - **Overview**: local memory status, activity, recall, open loops, relationship graph, and project radar in one cockpit.
 - **Recall**: inspect recall activity, candidate pruning, prompt packing efficiency, and compact recall logs.
 - **Memory Bank**: browse and inspect saved memory items.
+- **Graph**: choose a project source folder, build or rebuild Graphify artifacts, inspect graph freshness, open reports, and view the real Graphify graph.
 - **Agent Runtime**: inspect Vault's built-in task runtime, delegated task queue, and executor events. External Codex and Claude clients stay connected through MCP.
 - **Agent Review**: review project proposals and pending-delete flows.
 - **Activity**: inspect operational logs.
 - **Vault Files**: browse saved memory files on disk.
-- **Settings**: configure runtime behavior, lifecycle policy, prompt guides, model routing, and client setup.
+- **Settings**: configure runtime behavior, lifecycle policy, Graphify extension detection/install, prompt guides, model routing, and client setup.
 - **Client setup**: connect/disconnect Codex, Claude Desktop, Claude Code, install agent guide references, and troubleshoot MCP.
 
 ### Operations Overview
@@ -245,13 +252,15 @@ The Loops page turns unfinished work into an explicit queue. Operators can filte
 
 ### Recall Efficiency
 
-Recall shows how much prompt context Vault avoided sending to the agent window: estimated tokens saved, candidate pruning, recall volume, signal strength, and a compact signal log.
+Recall shows how much prompt context Vault avoided sending to the agent window: estimated tokens saved, candidate pruning, recall volume, signal strength, and a compact signal log. When Graphify is enabled, recall activity also records graph-aware context use so operators can see when the project graph is contributing to the answer path.
 
 ![The Vault Recall page showing estimated tokens saved, candidate reduction, recall volume, signal strength, a pruning trend chart, and compact recall log](assets/screenshots/recall-efficiency.png)
 
-### Relationship Graph
+![The Vault Recall page after Graphify integration showing graph-aware recall telemetry and the Graphify-on annotation](assets/screenshots/graphify-extension-on.png)
 
-The Graph page previews loaded relationships between projects, memories, files, and related memory IDs so operators can see whether the memory store is connected or drifting.
+### Graphify Project Graph
+
+The Graph page is now Graphify-aware. Vault keeps Graphify optional, but when it is installed and enabled for a project, Vault stores graph artifacts under managed extension paths, embeds Graphify's generated `graph.html`, preserves the last good graph when rebuilds fail, and asks for a source folder before building projects that do not yet have one.
 
 ![The Vault Graph page showing a relationship map and linked memory records](assets/screenshots/relationship-graph.png)
 
@@ -367,7 +376,48 @@ Installed releases package these guide files under app resources. The desktop **
 - Claude Code: `%USERPROFILE%\.claude\skills\vault-memory\SKILL.md`
 - Codex: `%USERPROFILE%\.codex\AGENTS.md`
 
-The guides teach agents when to recall, when to save, how to structure memory, and how to use queued Vault tasks.
+The guides teach agents when to recall, when to save, how to structure memory, how to bootstrap client brain projects, and how to use queued Vault tasks.
+
+Client brain projects are provider-specific operating memory, not fixed roles:
+
+- Codex uses `Codex-brain`.
+- Claude Code uses `claude-code-brain`.
+- Claude Desktop uses `claude-desktop-brain`.
+
+Each guide tells the client to call `vault_list_projects` first, create one canonical bootstrap memory if its brain project is missing, recall the brain for durable operating lessons, and keep ordinary implementation facts in the relevant project memory.
+
+They also include Graphify routing guidance. For code structure, dependency, path, neighbor, and impact questions, agents should call Vault's Graphify MCP tools first instead of jumping straight to broad file search. Vault remains the interface; agents should not call the raw Graphify CLI during normal use.
+
+They also include optional Vault Collab MCP guidance. Vault MCP stays the durable memory layer; Vault Collab MCP is the live session and handoff inbox layer when its `vault_collab_*` tools are attached. Clients should register sessions, check the inbox only when idle or user-approved, claim handoffs deliberately, and save full execution briefs back to Vault memory.
+
+## Graphify Extension
+
+Graphify is integrated as an optional local extension, not vendored into The Vault. Vault owns the lifecycle and policy surface, while Graphify owns graph extraction and the generated graph UI.
+
+What Vault manages:
+
+- runtime detection and install guidance from **Settings -> Extensions -> Graphify**
+- per-project source folder selection
+- Graphify builds into Vault-managed extension directories
+- artifact discovery for `graph.json`, `GRAPH_REPORT.md`, and `graph.html`
+- safe desktop embedding of the generated graph
+- stale, failed, or missing graph fallback without breaking memory save/recall
+- local telemetry for graph-aware recall and token-saving estimates
+
+Graphify adds these agent-facing MCP tools through Vault:
+
+| Tool | Purpose |
+| --- | --- |
+| `vault_recall_with_graph_context` | Combine ranked Vault memory with graph-guided project context. |
+| `vault_graphify_status` | Check runtime, project graph state, freshness, and artifact availability. |
+| `vault_graphify_build_project_graph` | Queue or run a project graph build through Vault's managed pipeline. |
+| `vault_graphify_query` | Ask a structural graph question for a project. |
+| `vault_graphify_get_node` | Fetch a file or symbol node and compact metadata. |
+| `vault_graphify_get_neighbors` | Expand context around a known graph node. |
+| `vault_graphify_shortest_path` | Find the graph path between two files or symbols. |
+| `vault_graphify_explain_impact` | Estimate likely affected files and tests for a proposed change. |
+
+If Graphify is not installed, disabled, stale, or failed, Vault keeps normal memory features working and reports the fallback reason instead of hiding the failure.
 
 ## Memory Model
 
@@ -496,6 +546,7 @@ The Vault is local-first:
 - memory data is stored locally
 - SQLite is used for registry and operational state
 - memory files live under the configured Vault root
+- Graphify runtime state and graph artifacts live under Vault-managed local extension paths
 - client config writes are local machine changes
 - generated build output and local vault data should not be committed
 
@@ -543,13 +594,14 @@ The Vault is usable today for:
 - desktop workflows
 - client setup
 - recall and save flows
+- optional Graphify project graphs and graph-aware MCP context
 - task records
 - Windows installer releases
 
 It is still evolving in these areas:
 
 - recall explainability
-- richer graph and project relationship views
+- Graphify graph quality, semantic mode tuning, and project relationship views
 - analytics for usage, recall quality, and project activity
 - onboarding polish
 - release hardening
@@ -559,7 +611,7 @@ See `docs/master-plan-status.md` for a more detailed implementation status map.
 
 ## Project Tags
 
-`local-first` `ai-memory` `agent-memory` `mcp-server` `codex` `claude` `electron` `sqlite` `typescript` `developer-tools` `workflow-continuity` `knowledge-management` `task-delegation` `project-context`
+`local-first` `ai-memory` `agent-memory` `mcp-server` `graphify` `project-graph` `codex` `claude` `electron` `sqlite` `typescript` `developer-tools` `workflow-continuity` `knowledge-management` `task-delegation` `project-context`
 
 ## Repository Discipline
 

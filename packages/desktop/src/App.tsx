@@ -9,6 +9,7 @@ import {
   FolderKanban,
   FolderTree,
   GitBranch,
+  Inbox,
   LayoutDashboard,
   ListChecks,
   Network,
@@ -32,6 +33,7 @@ import { MemoryView } from './components/MemoryView.js';
 import { OverviewCockpitView } from './components/OverviewCockpitView.js';
 import { SettingsView } from './components/SettingsView.js';
 import { VaultAgentView } from './components/VaultAgentView.js';
+import { VaultCollabView } from './components/VaultCollabView.js';
 import { VaultStructureView } from './components/VaultStructureView.js';
 import './app.css';
 
@@ -40,6 +42,7 @@ type PrimaryTab =
   | 'memories'
   | 'projects'
   | 'handoffs'
+  | 'collab'
   | 'decisions'
   | 'loops'
   | 'graph'
@@ -58,18 +61,31 @@ type NavItem<T extends AppTab = AppTab> = {
   icon: typeof LayoutDashboard;
 };
 
-const PRIMARY_NAV: Array<NavItem<PrimaryTab>> = [
+const OPERATIONS_NAV: Array<NavItem<PrimaryTab>> = [
   { id: 'overview', label: 'Overview', description: 'Local memory cockpit', icon: LayoutDashboard },
   { id: 'memories', label: 'Memories', description: 'Browse and curate context', icon: Database },
   { id: 'projects', label: 'Projects', description: 'Project radar and workspaces', icon: FolderKanban },
   { id: 'handoffs', label: 'Handoffs', description: 'Filtered transfer notes', icon: GitBranch },
   { id: 'decisions', label: 'Decisions', description: 'Promoted choices and rationale', icon: ShieldCheck },
   { id: 'loops', label: 'Loops', description: 'Open-loop control surface', icon: ListChecks },
-  { id: 'graph', label: 'Graph', description: 'Graphify project graph', icon: Network },
   { id: 'recall', label: 'Recall', description: 'Recall efficiency and logs', icon: Search },
   { id: 'analytics', label: 'Analytics', description: 'Operational telemetry', icon: BrainCircuit },
+];
+
+const EXTENSION_NAV: Array<NavItem<PrimaryTab>> = [
+  { id: 'graph', label: 'Graphify', description: 'Project graph extension', icon: Network },
+  { id: 'collab', label: 'Vault Collab', description: 'Agent Inbox and sessions', icon: Inbox },
+];
+
+const RUNTIME_NAV: Array<NavItem<PrimaryTab>> = [
   { id: 'agent', label: 'Agent', description: 'Runtime, queue, executor', icon: Bot },
   { id: 'settings', label: 'Settings', description: 'Local configuration', icon: Settings },
+];
+
+const PRIMARY_NAV_SECTIONS: Array<{ label: string; items: Array<NavItem<PrimaryTab>> }> = [
+  { label: 'Operations', items: OPERATIONS_NAV },
+  { label: 'Extensions', items: EXTENSION_NAV },
+  { label: 'Runtime', items: RUNTIME_NAV },
 ];
 
 const SECONDARY_NAV: Array<NavItem<SecondaryTab>> = [
@@ -94,6 +110,10 @@ const TAB_META: Record<AppTab, { title: string; description: string }> = {
   handoffs: {
     title: 'Handoffs',
     description: 'A filtered workspace for handoff memories and the next actions they preserve.',
+  },
+  collab: {
+    title: 'Vault Collab',
+    description: 'Inspect active agent sessions, open handoffs, and provider-neutral collaboration events.',
   },
   decisions: {
     title: 'Decisions',
@@ -243,19 +263,21 @@ function App() {
           </div>
 
           <nav className="nav-stack" aria-label="Primary">
-            <div className="nav-section">
-              <span className="nav-section-label">Operations</span>
-              <div className="nav-section-items">
-                {PRIMARY_NAV.map((item) => (
-                  <NavButton
-                    key={item.id}
-                    item={item}
-                    active={activeTab === item.id}
-                    onClick={() => setActiveTab(item.id)}
-                  />
-                ))}
+            {PRIMARY_NAV_SECTIONS.map((section) => (
+              <div key={section.label} className="nav-section">
+                <span className="nav-section-label">{section.label}</span>
+                <div className="nav-section-items">
+                  {section.items.map((item) => (
+                    <NavButton
+                      key={item.id}
+                      item={item}
+                      active={activeTab === item.id}
+                      onClick={() => setActiveTab(item.id)}
+                    />
+                  ))}
+                </div>
               </div>
-            </div>
+            ))}
           </nav>
 
           <div className="sidebar-tools">
@@ -337,10 +359,10 @@ function App() {
             </div>
           </header>
 
-          <div className="content-scroll">
+          <div className={`content-scroll ${activeTab === 'graph' ? 'content-scroll-graph' : ''} ${activeTab === 'collab' ? 'content-scroll-collab' : ''}`}>
             {statusError ? <div className="panel empty-state empty-state-error">{statusError}</div> : null}
 
-            <div className="content-surface">
+            <div className={`content-surface ${activeTab === 'graph' ? 'content-surface-graph' : ''} ${activeTab === 'collab' ? 'content-surface-collab' : ''}`}>
               {activeTab === 'overview' ? (
                 <OverviewCockpitView
                   vaultStatus={vaultStatus}
@@ -368,6 +390,7 @@ function App() {
                   onOpenMemory={openMemoryItem}
                 />
               ) : null}
+              {activeTab === 'collab' ? <VaultCollabView /> : null}
               {activeTab === 'decisions' ? (
                 <FilteredMemoryWorkspaceView
                   memoryType="decision"

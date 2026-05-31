@@ -17,6 +17,7 @@ Same tools as Claude (via MCP):
 - `vault_find_memory` — Search for specific items
 - `vault_get_latest` — See recent project activity
 - `vault_get_memory_detail` — Get full content of an item
+- `vault_list_projects` — Check known projects before creating new project names or brain memory
 - `vault_update_memory` — Update existing items
 - `vault_promote_memory` — Mark important items
 - `vault_archive_memory` — Archive outdated items
@@ -51,6 +52,51 @@ Project graph tools (Graphify) — code structure, dependencies, and impact:
 - `vault_graphify_shortest_path` — Find how two files/symbols are connected
 - `vault_graphify_explain_impact` — Estimate blast radius: likely affected files/tests for a proposed change
 - `vault_graphify_build_project_graph` — Queue or run a graph build (usually automatic; use when missing or stale)
+
+---
+
+## Codex-Brain Memory
+
+Codex has a Vault project named `Codex-brain` for durable assistant operating memory. This is not a permanent agent role and it is not a replacement for project memory. Use it only for cross-project assistant lessons, verified workflows, user preferences, tool-quality findings, stable operating policies, and recurring mistakes to avoid.
+
+At session start when Vault MCP is attached:
+
+1. Call `vault_list_projects`.
+2. If `Codex-brain` is missing, create one bootstrap brain memory with `vault_save_memory`:
+   - `project`: `Codex-brain`
+   - `memory_type`: `reference`
+   - `priority`: `canonical`
+   - `source_app`: `codex`
+   - `subject`: `Codex durable operating memory`
+   - `summary`: Explain that this project stores durable Codex operating lessons, verified workflows, user preferences, tool behavior notes, and cross-project policies.
+3. Recall `Codex-brain` for operating rules and user preferences.
+4. Recall the current project for implementation context.
+
+Do not save ordinary project implementation details to Codex-brain. Save feature notes, file paths, handoffs, plans, and debugging outcomes to the relevant project. Grow `Codex-brain` deliberately at natural breakpoints, not as a noisy activity log.
+
+---
+
+## Vault Collab MCP
+
+Vault MCP is the durable memory and project context layer. Vault Collab MCP is the optional live session and handoff inbox layer for active Codex, Claude, Claude Desktop, and other MCP client sessions. Use it when the `vault_collab_*` tools are attached; if they are missing, continue with normal Vault memory tools.
+
+Recommended live-session flow:
+
+1. On the first meaningful project-work turn, if Vault Collab MCP tools are attached and the user has not already chosen for this session, ask one short opt-in question: `Vault Collab is available for this workspace. Use Vault Collab for this session? I can register presence and watch handoffs, or continue solo.`
+2. If the user opts in or explicitly asks for collaboration, call `vault_collab_register_session` with client type, current project, workspace path, and capabilities.
+3. If the user opts out, continue with normal Vault memory and do not ask again in the same session unless the user mentions handoffs, collaboration, inbox, or another active agent.
+4. Keep state current with the available session-state tool when you become `working`, `idle`, `blocked`, `awaiting_user`, `verification_needed`, or `complete`.
+5. When idle, call `vault_collab_list_inbox` to inspect available handoffs for the current project or related projects.
+6. Never auto-claim while actively working. Claim only when idle or when the user explicitly approves an urgent interruption.
+7. To receive work, inspect the handoff, read the linked Vault memory with `vault_get_memory_detail`, then call `vault_collab_claim_handoff`.
+8. While working, publish short progress updates through Vault Collab and save durable findings or full execution briefs through `vault_save_memory`.
+9. When handing off, save the full brief as a Vault `handoff` memory first, then publish the short inbox item through Vault Collab with the linked memory UID.
+10. Ask the user before risky or cross-project destructive work. Use an `awaiting_user` or equivalent state when human confirmation is required.
+11. Resolve only after the work is actually complete. Reopen or update the handoff if verification fails.
+
+Operator shortcut: if the user asks `use vault collab`, `vault collab`, or equivalent, treat it as explicit opt-in for this session. Register if needed, report the current session state, list available inbox items, and ask before claiming anything. Do not rely on `/vault-collab` inside Codex CLI because current Codex builds reject unknown unprefixed slash commands before the prompt reaches the agent.
+
+Vault Collab should coordinate sessions, not assign fixed roles. Codex can publish, claim, update, resolve, or hand off work depending on current context.
 
 ---
 

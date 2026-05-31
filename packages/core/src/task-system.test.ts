@@ -572,6 +572,36 @@ describe('task delegation system', () => {
     ).toBe(true);
   });
 
+  it('treats an explicit memory UID as a high-confidence recall signal', async () => {
+    const target = vault.saveMemory({
+      title: 'UID-targeted implementation handoff',
+      project: 'Vault',
+      memoryType: 'handoff',
+      subject: 'quiet implementation detail',
+      summary: 'This memory has intentionally generic copy so only its UID should identify it.',
+      sourceApp: 'codex',
+    });
+
+    const distractor = vault.saveMemory({
+      title: 'Promoted unrelated architecture decision',
+      project: 'Vault',
+      memoryType: 'decision',
+      subject: 'unrelated promoted decision',
+      summary: 'This promoted memory should not outrank an exact UID lookup.',
+      priority: 'critical',
+      sourceApp: 'codex',
+    });
+    vault.promoteMemory(distractor.item.itemUid);
+
+    const pack = await vault.recallContext({
+      queryText: `please recall ${target.item.itemUid}`,
+      limit: 1,
+    });
+
+    expect(pack.topMatches[0]?.item.itemUid).toBe(target.item.itemUid);
+    expect(pack.topMatches[0]?.reasons).toContain('exact memory UID match');
+  });
+
   it('logs agent retrieval tools as recall activity only when explicitly requested', () => {
     const saved = vault.saveMemory({
       title: 'Agent recall telemetry note',

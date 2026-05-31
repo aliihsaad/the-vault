@@ -25,7 +25,12 @@ import type {
   GraphifyInstallPlan,
   GraphifyRuntimeConfig,
   GraphifyRuntimeStatus,
+  VaultCollabInstallPlan,
+  VaultCollabRuntimeConfig,
+  VaultCollabRuntimeStatus,
 } from '@the-vault/core';
+
+const DEFAULT_VAULT_COLLAB_REPOSITORY_URL = 'https://github.com/aliihsaad/vault-collab';
 
 type EditableSettings = Pick<
   VaultSettings,
@@ -218,32 +223,36 @@ const SKILL_ENTRIES: SkillEntry[] = [
     id: 'codex-skill',
     title: 'Codex skill',
     path: 'skills/codex-vault-skill.md',
-    summary: 'Install this when Codex should recall prior implementation work and save structured handoffs consistently.',
+    summary: 'Install this when Codex should recall prior work, bootstrap Codex-brain if needed, and save structured handoffs consistently.',
     snippet: [
       'Best practice:',
       '- Install the full Markdown file, not just the short notes.',
       '- Keep it close to Codex project instructions or workspace guidance.',
       '- Use it with Vault MCP tools so Codex can recall and save directly.',
+      '- Let Codex verify Codex-brain with vault_list_projects before it saves durable assistant lessons.',
+      '- Use Vault Collab MCP tools only when the optional live inbox server is attached.',
     ].join('\n'),
     assistantPrompt: [
       'Use the file skills/codex-vault-skill.md as the operating guide for Codex.',
-      'Tell me where Codex project instructions should store it, how to reference it, and how to verify Vault recall/save behavior after installation.',
+      'Tell me where Codex project instructions should store it, how to reference it, how to bootstrap Codex-brain if missing, and how to verify Vault recall/save plus Vault Collab MCP behavior after installation.',
     ].join('\n'),
   },
   {
     id: 'claude-skill',
     title: 'Claude skill',
     path: 'skills/claude-vault-skill.md',
-    summary: 'Install this when Claude should recall continuity at session start and save higher-signal decisions, plans, and handoffs.',
+    summary: 'Install this when Claude should recall continuity, bootstrap claude-code-brain or claude-desktop-brain, and save higher-signal decisions.',
     snippet: [
       'Best practice:',
       '- Install the full Markdown file into Claude instructions or project guidance.',
       '- Keep the file path stable so later setup prompts can reference it directly.',
       '- Use it alongside the Vault MCP server config, not instead of it.',
+      '- Let Claude verify claude-code-brain or claude-desktop-brain with vault_list_projects before it saves durable operating lessons.',
+      '- Use Vault Collab MCP tools only when the optional live inbox server is attached.',
     ].join('\n'),
     assistantPrompt: [
       'Use the file skills/claude-vault-skill.md as the operating guide for Claude.',
-      'Tell me where Claude instructions should store it, how to connect Vault MCP beside it, and how to verify recall and save flows afterwards.',
+      'Tell me where Claude instructions should store it, how to connect Vault MCP beside it, how to bootstrap claude-code-brain or claude-desktop-brain if missing, and how to verify recall/save plus Vault Collab MCP flows afterwards.',
     ].join('\n'),
   },
 ];
@@ -302,6 +311,18 @@ const PROMPT_SNIPPETS = [
       'Use real file names, function names, and module names in keywords.',
     ].join('\n'),
   },
+  {
+    id: 'brain-collab-prompt',
+    title: 'Brain + Collab setup',
+    description: 'Use this after MCP is connected so the client creates its brain and registers with the live inbox.',
+    snippet: [
+      'Use the installed Vault guide as your operating protocol.',
+      'First run vault_list_projects. If your client brain is missing, create one bootstrap brain memory: Codex-brain for Codex, claude-code-brain for Claude Code, or claude-desktop-brain for Claude Desktop.',
+      'Recall your brain for durable operating lessons, then recall the current project for task context.',
+      'If Vault Collab MCP tools are attached, ask once whether to use it for this session. Shortcut: /vault-collab means opt in, register with vault_collab_register_session, show current state, and list available work with vault_collab_list_inbox.',
+      'Call vault_collab_claim_handoff only after user approval or when the session is clearly idle.',
+    ].join('\n'),
+  },
 ] as const;
 
 function WorkflowCard({
@@ -352,10 +373,17 @@ export function SettingsView({ vaultStatus }: { vaultStatus: VaultStatus | null 
   const [graphifyInstallPlan, setGraphifyInstallPlan] = useState<GraphifyInstallPlan | null>(null);
   const [graphifyError, setGraphifyError] = useState<string | null>(null);
   const [loadingGraphify, setLoadingGraphify] = useState(false);
+  const [vaultCollabConfig, setVaultCollabConfig] = useState<VaultCollabRuntimeConfig | null>(null);
+  const [vaultCollabRuntimeStatus, setVaultCollabRuntimeStatus] = useState<VaultCollabRuntimeStatus | null>(null);
+  const [vaultCollabInstallPlan, setVaultCollabInstallPlan] = useState<VaultCollabInstallPlan | null>(null);
+  const [vaultCollabDetectedSource, setVaultCollabDetectedSource] = useState<VaultCollabSourcePathDetection | null>(null);
+  const [vaultCollabError, setVaultCollabError] = useState<string | null>(null);
+  const [loadingVaultCollab, setLoadingVaultCollab] = useState(false);
 
   useEffect(() => {
     void loadSettings();
     void loadGraphifyExtension();
+    void loadVaultCollabExtension();
   }, []);
 
   async function loadSettings() {
@@ -464,6 +492,114 @@ export function SettingsView({ vaultStatus }: { vaultStatus: VaultStatus | null 
       setGraphifyInstallPlan(null);
     } finally {
       setLoadingGraphify(false);
+    }
+  }
+
+  async function loadVaultCollabExtension() {
+    setLoadingVaultCollab(true);
+    setVaultCollabError(null);
+
+    try {
+      const configResponse = await window.vaultAPI.getVaultCollabRuntimeConfig();
+      if (!configResponse.success || !configResponse.data) {
+        throw new Error(configResponse.error || 'Failed to load Vault Collab config');
+      }
+
+      setVaultCollabConfig(configResponse.data);
+
+      const [runtimeResponse, installPlanResponse, sourcePathResponse] = await Promise.all([
+        window.vaultAPI.detectVaultCollabRuntime(),
+        window.vaultAPI.planVaultCollabInstall(),
+        window.vaultAPI.detectVaultCollabSourcePath(),
+      ]);
+
+      if (runtimeResponse.success && runtimeResponse.data) {
+        setVaultCollabRuntimeStatus(runtimeResponse.data);
+      } else {
+        setVaultCollabRuntimeStatus(null);
+        setVaultCollabError(runtimeResponse.error || 'Vault Collab detection failed');
+      }
+
+      if (installPlanResponse.success && installPlanResponse.data) {
+        setVaultCollabInstallPlan(installPlanResponse.data);
+      }
+
+      if (sourcePathResponse.success && sourcePathResponse.data) {
+        setVaultCollabDetectedSource(sourcePathResponse.data);
+      }
+    } catch (err) {
+      setVaultCollabError(err instanceof Error ? err.message : 'Failed to load Vault Collab extension');
+      setVaultCollabRuntimeStatus(null);
+      setVaultCollabInstallPlan(null);
+      setVaultCollabDetectedSource(null);
+    } finally {
+      setLoadingVaultCollab(false);
+    }
+  }
+
+  async function useDetectedVaultCollabSourcePath() {
+    setLoadingVaultCollab(true);
+    setVaultCollabError(null);
+    setMessage(null);
+
+    try {
+      const response = await window.vaultAPI.useDetectedVaultCollabSourcePath();
+      if (!response.success || !response.data) {
+        throw new Error(response.error || 'Failed to use the detected Vault Collab repo');
+      }
+
+      setVaultCollabConfig(response.data);
+      setMessage('Detected Vault Collab repo saved.');
+      await loadVaultCollabExtension();
+    } catch (err) {
+      setVaultCollabError(err instanceof Error ? err.message : 'Failed to use the detected Vault Collab repo');
+    } finally {
+      setLoadingVaultCollab(false);
+    }
+  }
+
+  async function useManagedVaultCollabRuntime() {
+    setLoadingVaultCollab(true);
+    setVaultCollabError(null);
+    setMessage(null);
+
+    try {
+      const response = await window.vaultAPI.resetVaultCollabRuntimeConfig();
+      if (!response.success || !response.data) {
+        throw new Error(response.error || 'Failed to switch Vault Collab to managed GitHub install');
+      }
+
+      setVaultCollabConfig(response.data);
+      setMessage('Vault Collab managed GitHub install selected.');
+      await loadVaultCollabExtension();
+    } catch (err) {
+      setVaultCollabError(err instanceof Error ? err.message : 'Failed to switch Vault Collab to managed GitHub install');
+    } finally {
+      setLoadingVaultCollab(false);
+    }
+  }
+
+  async function chooseVaultCollabSourcePath() {
+    setLoadingVaultCollab(true);
+    setVaultCollabError(null);
+    setMessage(null);
+
+    try {
+      const response = await window.vaultAPI.chooseVaultCollabSourcePath();
+      if (!response.success) {
+        throw new Error(response.error || 'Failed to choose Vault Collab source folder');
+      }
+
+      if (response.data) {
+        setVaultCollabConfig(response.data);
+        setMessage('Vault Collab source folder saved.');
+      }
+
+      await loadVaultCollabExtension();
+    } catch (err) {
+      setVaultCollabError(err instanceof Error ? err.message : 'Failed to choose Vault Collab source folder');
+    } finally {
+      setLoadingVaultCollab(false);
     }
   }
 
@@ -1392,21 +1528,61 @@ export function SettingsView({ vaultStatus }: { vaultStatus: VaultStatus | null 
       : graphifyModel?.state === 'failed'
         ? AlertTriangle
         : Network;
+    const vaultCollabReady = Boolean(vaultCollabRuntimeStatus?.ready);
+    const vaultCollabConfigured = Boolean(vaultCollabRuntimeStatus?.configured);
+    const vaultCollabStatusBadge = vaultCollabReady ? 'installed' : vaultCollabConfigured ? 'needs install' : 'not installed';
+    const VaultCollabStateIcon = vaultCollabReady
+      ? CheckCircle2
+      : vaultCollabConfigured
+        ? AlertTriangle
+        : Bot;
+    const currentVaultCollabSourcePath = vaultCollabConfig?.localSourceCheckoutPath || vaultCollabConfig?.managedRuntimePath || null;
+    const vaultCollabUsesManagedInstall = vaultCollabConfig?.runtimeMode === 'managed';
+    const vaultCollabInstallSourceLabel = vaultCollabUsesManagedInstall ? 'GitHub managed install' : 'Developer local source';
+    const vaultCollabRepositoryUrl = vaultCollabInstallPlan?.repositoryUrl || DEFAULT_VAULT_COLLAB_REPOSITORY_URL;
+    const vaultCollabRuntimeSource = vaultCollabUsesManagedInstall
+      ? vaultCollabRepositoryUrl
+      : vaultCollabRuntimeStatus?.sourceRoot.path || vaultCollabConfig?.localSourceCheckoutPath || vaultCollabConfig?.managedRuntimePath || 'unresolved';
+    const vaultCollabPackageLabel = vaultCollabUsesManagedInstall
+      ? vaultCollabReady ? 'GitHub npm exec checked' : 'GitHub npm exec'
+      : vaultCollabRuntimeStatus?.packageInfo.available
+        ? `${vaultCollabRuntimeStatus.packageInfo.name || 'vault-collab'} ${vaultCollabRuntimeStatus.packageInfo.version || ''}`.trim()
+        : 'missing';
+    const vaultCollabCliLabel = vaultCollabUsesManagedInstall
+      ? vaultCollabReady ? 'npm exec checked' : 'npm exec preview'
+      : vaultCollabRuntimeStatus?.cli.available ? 'available' : 'missing';
+    const vaultCollabMcpLabel = vaultCollabUsesManagedInstall
+      ? 'npm exec command'
+      : vaultCollabRuntimeStatus?.mcpServer.available ? 'available' : 'missing';
+    const detectedVaultCollabSourceAvailable = Boolean(
+      vaultCollabDetectedSource?.detected
+      && vaultCollabDetectedSource.path
+      && vaultCollabDetectedSource.path !== currentVaultCollabSourcePath,
+    );
 
     return (
       <div className="settings-tab-panel">
         <section className="section-intro">
           <div className="section-intro-copy">
             <span className="section-intro-eyebrow">Extensions</span>
-            <div className="section-intro-title">Graphify stays optional and managed by Vault</div>
-            <p className="section-intro-text">This panel detects the local Graphify runtime, shows the managed runtime plan, and keeps install/build decisions explicit.</p>
+            <div className="section-intro-title">Extensions stay optional, local, and explicitly installed</div>
+            <p className="section-intro-text">Detect Graphify and Vault Collab runtimes, inspect install plans, and keep every extension boundary visible before the dashboard uses it.</p>
           </div>
           <div className="section-intro-meta">
             <span className="section-intro-chip">optional runtime</span>
             <span className="section-intro-chip">managed artifacts</span>
-            <button type="button" className="header-button header-button-compact" onClick={() => void loadGraphifyExtension()} disabled={loadingGraphify}>
+            <span className="section-intro-chip">manual install</span>
+            <button
+              type="button"
+              className="header-button header-button-compact"
+              onClick={() => {
+                void loadGraphifyExtension();
+                void loadVaultCollabExtension();
+              }}
+              disabled={loadingGraphify || loadingVaultCollab}
+            >
               <RefreshCw size={15} />
-              <span>{loadingGraphify ? 'Detecting' : 'Detect'}</span>
+              <span>{loadingGraphify || loadingVaultCollab ? 'Detecting' : 'Detect'}</span>
             </button>
           </div>
         </section>
@@ -1514,6 +1690,152 @@ export function SettingsView({ vaultStatus }: { vaultStatus: VaultStatus | null 
             </>
           )}
         </section>
+
+        <section className="panel settings-section graphify-settings-panel vault-collab-settings-panel">
+          <div className="panel-header">
+            <div>
+              <div className="panel-title">Vault Collab</div>
+              <div className="panel-subtitle">Install from the public GitHub repo, or point Vault at a local checkout while developing the extension.</div>
+            </div>
+            <VaultCollabStateIcon size={18} className="panel-icon" />
+          </div>
+
+          {!vaultCollabConfig ? (
+            <div className="empty-state">{loadingVaultCollab ? 'Detecting Vault Collab runtime...' : 'Vault Collab extension status is unavailable.'}</div>
+          ) : (
+            <>
+              <div className={`graphify-status-card vault-collab-status-card ${vaultCollabReady ? 'vault-collab-status-card-ready' : ''}`}>
+                <div className="graphify-status-main">
+                  <span className="graphify-status-icon">
+                    <VaultCollabStateIcon size={18} />
+                  </span>
+                  <div>
+                    <strong>{vaultCollabReady ? 'Ready for dashboard wiring' : vaultCollabConfigured ? 'Configuration needs install' : 'Choose a runtime source'}</strong>
+                    <p>{vaultCollabRuntimeStatus?.message || vaultCollabError || 'Vault Collab has not been detected yet.'}</p>
+                  </div>
+                </div>
+                <div className="graphify-status-meta">
+                  <span>{vaultCollabInstallSourceLabel}</span>
+                  <strong>{vaultCollabStatusBadge}</strong>
+                </div>
+              </div>
+
+              <div className="note-card">
+                <p>Default install source: {vaultCollabRepositoryUrl}</p>
+                <p>Managed mode is the normal user flow. Local repo mode is only a developer shortcut for this machine or another manually cloned checkout.</p>
+              </div>
+
+              {vaultCollabError ? (
+                <div className="note-card note-card-warning">
+                  <p>{vaultCollabError}</p>
+                </div>
+              ) : null}
+
+              <div className="settings-card-grid">
+                <div className="snippet-card">
+                  <div className="snippet-head">
+                    <div>
+                      <div className="field-label">Runtime source</div>
+                      <div className="field-help">{vaultCollabRuntimeSource}</div>
+                    </div>
+                    <FolderRoot size={17} />
+                  </div>
+                  <ul className="settings-guide-list">
+                    <li>Mode: {vaultCollabInstallSourceLabel}</li>
+                    <li>Repository: {vaultCollabRepositoryUrl}</li>
+                    <li>CLI: {vaultCollabCliLabel}</li>
+                    <li>MCP server: {vaultCollabMcpLabel}</li>
+                  </ul>
+                  {vaultCollabDetectedSource ? (
+                    <p className="field-help">
+                      {vaultCollabDetectedSource.detected && vaultCollabDetectedSource.path
+                        ? `Detected repo: ${vaultCollabDetectedSource.path}`
+                        : vaultCollabDetectedSource.reason}
+                    </p>
+                  ) : null}
+                  <div className="inline-actions">
+                    {!vaultCollabUsesManagedInstall ? (
+                      <button type="button" className="primary-button" onClick={() => void useManagedVaultCollabRuntime()} disabled={loadingVaultCollab}>
+                        <Download size={16} />
+                        <span>Use GitHub install</span>
+                      </button>
+                    ) : null}
+                    {detectedVaultCollabSourceAvailable ? (
+                      <button type="button" className="header-button" onClick={() => void useDetectedVaultCollabSourcePath()} disabled={loadingVaultCollab}>
+                        <CheckCircle2 size={16} />
+                        <span>Use local repo</span>
+                      </button>
+                    ) : null}
+                    <button type="button" className="header-button" onClick={() => void chooseVaultCollabSourcePath()} disabled={loadingVaultCollab}>
+                      <FolderRoot size={16} />
+                      <span>{loadingVaultCollab ? 'Opening...' : 'Choose local source'}</span>
+                    </button>
+                    <button type="button" className="header-button" onClick={() => void loadVaultCollabExtension()} disabled={loadingVaultCollab}>
+                      <RefreshCw size={16} />
+                      <span>{loadingVaultCollab ? 'Detecting...' : 'Detect'}</span>
+                    </button>
+                  </div>
+                </div>
+
+                <div className="snippet-card">
+                  <div className="snippet-head">
+                    <div>
+                      <div className="field-label">Local database</div>
+                      <div className="field-help">{vaultCollabConfig.databasePath}</div>
+                    </div>
+                    <Terminal size={17} />
+                  </div>
+                  <div className="graphify-tool-grid">
+                    {[
+                      ['Package', vaultCollabPackageLabel],
+                      ['Database', vaultCollabRuntimeStatus?.database.available ? 'exists' : 'will be created'],
+                      ['CLI', vaultCollabUsesManagedInstall ? 'GitHub npm exec' : vaultCollabRuntimeStatus?.cli.path || 'unresolved'],
+                    ].map(([label, value]) => (
+                      <div key={label} className="graphify-tool-row">
+                        <span>{label}</span>
+                        <strong>{value}</strong>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+
+              <div className="snippet-card">
+                <div className="snippet-head">
+                  <div>
+                    <div className="field-label">Install preview</div>
+                    <div className="field-help">
+                      {vaultCollabUsesManagedInstall
+                        ? 'Normal user flow: run the verified GitHub npm exec health check and open the local SQLite database.'
+                        : 'Developer shortcut: build the selected local checkout. Switch back to GitHub install for the normal user flow.'}
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    className="header-button"
+                    onClick={() => void copyText('vault-collab-install-plan', vaultCollabInstallPlan?.commands.join('\n') || '')}
+                    disabled={!vaultCollabInstallPlan || vaultCollabInstallPlan.commands.length === 0}
+                  >
+                    <Copy size={16} />
+                    <span>{copiedToken === 'vault-collab-install-plan' ? 'Copied' : 'Copy plan'}</span>
+                  </button>
+                </div>
+                <pre className="snippet-block">
+                  {vaultCollabInstallPlan?.commands.length
+                    ? vaultCollabInstallPlan.commands.join('\n')
+                    : 'Choose a Vault Collab source folder to generate an install plan.'}
+                </pre>
+                {vaultCollabInstallPlan?.notes.length ? (
+                  <ul className="settings-guide-list">
+                    {vaultCollabInstallPlan.notes.map((note) => (
+                      <li key={note}>{note}</li>
+                    ))}
+                  </ul>
+                ) : null}
+              </div>
+            </>
+          )}
+        </section>
       </div>
     );
   }
@@ -1546,7 +1868,7 @@ export function SettingsView({ vaultStatus }: { vaultStatus: VaultStatus | null 
           <div className="section-intro-copy">
             <span className="section-intro-eyebrow">Skills</span>
             <div className="section-intro-title">Install the full guidance file, not a shortened reminder</div>
-            <p className="section-intro-text">These files teach Codex or Claude when to recall, when to save, and now how to think about queued work and executor state. They are meant to be copied whole.</p>
+            <p className="section-intro-text">These files teach Codex or Claude when to recall, when to save, how brain bootstrap works, and how to use queued work, executor state, and the optional Vault Collab inbox. They are meant to be copied whole.</p>
           </div>
           <div className="section-intro-meta">
             <span className="section-intro-chip">full markdown files</span>

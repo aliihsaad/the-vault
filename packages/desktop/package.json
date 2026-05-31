@@ -1,6 +1,6 @@
 {
   "name": "@the-vault/desktop",
-  "version": "0.3.0",
+  "version": "0.3.5",
   "private": true,
   "description": "Desktop cockpit for The Vault local-first AI memory system",
   "author": "Ali Saad",
@@ -67,6 +67,7 @@
     "d3-force": "^3.0.0",
     "date-fns": "^4.1.0",
     "lucide-react": "^0.475.0",
+    "node-pty": "^1.1.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
     "recharts": "^3.8.1"
