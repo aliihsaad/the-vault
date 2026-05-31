@@ -157,6 +157,7 @@ export function VaultCollabView() {
               items={model.cockpit.needsYou}
               launchRequests={model.launchRequestRows}
               actionBusy={actions.actionBusy}
+              onRequestAgent={(input) => void actions.requestAgent(input)}
               onLaunchAction={(action, uid) => void actions.runLaunchAction(action, uid)}
               onHandoffAction={(action, uid) => void actions.runHandoffAction(action, uid)}
               onCopyLaunchCommand={(uid, command) => void actions.copyLaunchCommand(uid, command)}

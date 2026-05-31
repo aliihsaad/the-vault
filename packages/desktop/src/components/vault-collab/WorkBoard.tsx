@@ -40,9 +40,10 @@ export function WorkBoard({ columns, selectedHandoffUid, onSelectHandoff }: Work
                 <span className={`queue-status-rail ${card.railClass}`} />
                 <span className="vault-collab-work-card-main">
                   <span className="vault-collab-row-title">
-                    <strong>{card.prompt}</strong>
+                    <strong>{card.title}</strong>
                     <span className={`badge ${card.badgeClass}`}>{card.statusLabel}</span>
                   </span>
+                  <span className="vault-collab-work-card-preview">{card.promptPreview}</span>
                   <span className="vault-collab-row-meta">
                     <span className="text-mono">{card.queueLabel}</span>
                     <span>{card.priorityLabel}</span>

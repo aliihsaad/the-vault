@@ -8,7 +8,20 @@ describe('desktop shell navigation', () => {
   const operationsSource = readFileSync(join(process.cwd(), 'packages/desktop/src/components/CockpitOperationsViews.tsx'), 'utf8');
   const settingsSource = readFileSync(join(process.cwd(), 'packages/desktop/src/components/SettingsView.tsx'), 'utf8');
   const collabSource = readFileSync(join(process.cwd(), 'packages/desktop/src/components/VaultCollabView.tsx'), 'utf8');
+  const collabConversationSource = readFileSync(join(process.cwd(), 'packages/desktop/src/components/vault-collab/ConversationStream.tsx'), 'utf8');
+  const collabHandoffDetailSource = readFileSync(join(process.cwd(), 'packages/desktop/src/components/vault-collab/HandoffDetail.tsx'), 'utf8');
+  const collabNeedsYouSource = readFileSync(join(process.cwd(), 'packages/desktop/src/components/vault-collab/NeedsYou.tsx'), 'utf8');
+  const collabRosterSource = readFileSync(join(process.cwd(), 'packages/desktop/src/components/vault-collab/Roster.tsx'), 'utf8');
+  const collabWorkBoardSource = readFileSync(join(process.cwd(), 'packages/desktop/src/components/vault-collab/WorkBoard.tsx'), 'utf8');
   const collabViewModelSource = readFileSync(join(process.cwd(), 'packages/desktop/src/vault-collab-view-model.ts'), 'utf8');
+  const collabComponentSurface = [
+    collabSource,
+    collabConversationSource,
+    collabHandoffDetailSource,
+    collabNeedsYouSource,
+    collabRosterSource,
+    collabWorkBoardSource,
+  ].join('\n');
   const connectPanelSource = readFileSync(join(process.cwd(), 'packages/desktop/src/components/ConnectPanel.tsx'), 'utf8');
   const electronMainSource = readFileSync(join(process.cwd(), 'packages/desktop/electron/main.ts'), 'utf8');
   const electronPreloadSource = readFileSync(join(process.cwd(), 'packages/desktop/electron/preload.ts'), 'utf8');
@@ -131,7 +144,7 @@ describe('desktop shell navigation', () => {
     expect(settingsSource).toContain('vault-collab-install-plan');
   });
 
-  it('wires the read-only Vault Collab dashboard into a separate workspace tab', () => {
+  it('wires the Vault Collab cockpit into a separate workspace tab', () => {
     expect(electronMainSource).toContain("ipcMain.handle('vault:getVaultCollabDashboardSnapshot'");
     expect(electronPreloadSource).toContain('getVaultCollabDashboardSnapshot');
     expect(desktopTypesSource).toContain('VaultCollabDashboardSnapshot');
@@ -145,10 +158,13 @@ describe('desktop shell navigation', () => {
     expect(appSource).toContain("title: 'Vault Collab'");
     expect(appSource).toContain("activeTab === 'collab' ? <VaultCollabView />");
     expect(collabSource).toContain('window.vaultAPI.getVaultCollabDashboardSnapshot');
-    expect(collabSource).toContain('Agent roster');
-    expect(collabSource).toContain('Handoff queue');
-    expect(collabSource).toContain('Event timeline');
-    expect(collabSource).toContain('vault-collab-ops-grid');
+    expect(collabComponentSurface).toContain('Agents');
+    expect(collabComponentSurface).toContain('Work');
+    expect(collabComponentSurface).toContain('Conversation');
+    expect(collabWorkBoardSource).toContain('card.title');
+    expect(collabWorkBoardSource).toContain('card.promptPreview');
+    expect(collabWorkBoardSource).not.toContain('<strong>{card.prompt}</strong>');
+    expect(collabSource).toContain('vault-collab-ops-bar');
     expect(collabSource).not.toContain('Session mesh');
     expect(collabSource).not.toContain('vault-collab-live-map');
     expect(collabSource).not.toContain('vault-collab-hero');
@@ -157,8 +173,8 @@ describe('desktop shell navigation', () => {
     expect(agentSource).not.toContain('getVaultCollabDashboardSnapshot');
   });
 
-  it('renders Vault Collab v2 read-only agent, queue, dependency, and discussion fields', () => {
-    const collabModelSurface = `${collabSource}\n${collabViewModelSource}`;
+  it('renders Vault Collab v2 agent, queue, dependency, and discussion fields', () => {
+    const collabModelSurface = `${collabComponentSurface}\n${collabViewModelSource}`;
 
     expect(collabModelSurface).toContain('agentDisplayName');
     expect(collabModelSurface).toContain('agentName');
@@ -168,7 +184,7 @@ describe('desktop shell navigation', () => {
     expect(collabModelSurface).toContain('dependsOnHandoffUid');
     expect(collabModelSurface).toContain('labels');
     expect(collabModelSurface).toContain('discussionThreads');
-    expect(collabSource).toContain('Discussion threads');
+    expect(collabComponentSurface).toContain('Threads');
     expect(collabSource).toContain('buildVaultCollabDashboardViewModel');
     expect(collabSource).not.toContain('Manual orchestration only');
     expect(collabSource).not.toContain('sessionToken');
@@ -177,18 +193,17 @@ describe('desktop shell navigation', () => {
     expect(collabSource).not.toContain('releaseHandoff');
   });
 
-  it('renders Vault Collab launch requests as a read-only dashboard lane', () => {
+  it('renders Vault Collab launch requests in the Needs You cockpit lane', () => {
     const appCssSource = readFileSync(join(process.cwd(), 'packages/desktop/src/app.css'), 'utf8');
-    const collabModelSurface = `${collabSource}\n${collabViewModelSource}`;
+    const collabModelSurface = `${collabComponentSurface}\n${collabViewModelSource}`;
 
-    expect(collabSource).toContain('Launch requests');
+    expect(collabComponentSurface).toContain('launchRequests');
     expect(collabSource).toContain('model.launchRequestRows');
-    expect(collabSource).toContain('vault-collab-launch-section');
-    expect(collabSource).toContain('vault-collab-launch-card');
+    expect(collabNeedsYouSource).toContain('vault-collab-approved-command');
+    expect(collabNeedsYouSource).toContain('onLaunchAction');
     expect(collabModelSurface).toContain('launchRequests');
     expect(collabModelSurface).toContain('activeLaunchRequests');
     expect(collabViewModelSource).toContain('launch_request.');
-    expect(appCssSource).toContain('vault-collab-launch-section');
     expect(appCssSource).toContain('vault-collab-command-preview');
     expect(collabSource).not.toContain('approveLaunchRequest');
     expect(collabSource).not.toContain('rejectLaunchRequest');
@@ -196,33 +211,49 @@ describe('desktop shell navigation', () => {
     expect(collabSource).not.toContain('markLaunchRequestRunning');
   });
 
+  it('wires Vault Collab dashboard Request agent through preload, main, and cockpit UI', () => {
+    const requestAgentSurface = `${collabSource}\n${collabNeedsYouSource}`;
+
+    expect(electronMainSource).toContain("ipcMain.handle('vault:requestVaultCollabAgent'");
+    expect(electronPreloadSource).toContain('requestVaultCollabAgent');
+    expect(desktopTypesSource).toContain('VaultCollabAgentRequestInput');
+    expect(desktopTypesSource).toContain('requestVaultCollabAgent');
+    expect(requestAgentSurface).toContain('Request agent');
+    expect(requestAgentSurface).toContain("provider: 'codex'");
+    expect(requestAgentSurface).toContain("provider: 'claude-code'");
+    expect(requestAgentSurface).toContain('onRequestAgent');
+    expect(requestAgentSurface).toContain('agentInstructions');
+    expect(requestAgentSurface).toContain('requestFormOpen');
+    expect(requestAgentSurface).toContain('vault-collab-request-agent-form');
+    expect(requestAgentSurface).toContain('Cancel');
+  });
+
   it('renders Vault Collab permission-needed and attention indicators as read-only UI', () => {
     expect(collabViewModelSource).toContain('permissionNeeded');
     expect(collabViewModelSource).toContain('permissionRequestEvents');
     expect(collabViewModelSource).toContain('attentionPingEvents');
-    expect(collabSource).toContain('Permission needed');
+    expect(collabViewModelSource).toContain('need attention');
     expect(collabViewModelSource).toContain('session.permission_requested');
     expect(collabViewModelSource).toContain('handoff.permission_requested');
     expect(collabViewModelSource).toContain('session.pinged');
     expect(collabViewModelSource).toContain('permissionRequest');
-    expect(collabSource).toContain('vault-collab-attention-card');
-    expect(collabSource).toContain('vault-collab-attention-row');
-    expect(collabSource).toContain('vault-collab-permission-note');
+    expect(collabComponentSurface).toContain('Needs You');
+    expect(collabComponentSurface).toContain('vault-collab-permission-note');
     expect(collabSource).not.toContain('requestSessionPermission');
     expect(collabSource).not.toContain('requestHandoffPermission');
     expect(collabSource).not.toContain('pingSession');
   });
 
-  it('lets Vault Collab panels collapse for compact screens', () => {
+  it('lets Vault Collab cockpit content page-scroll outside the conversation feed', () => {
     const appCssSource = readFileSync(join(process.cwd(), 'packages/desktop/src/app.css'), 'utf8');
 
-    expect(collabSource).toContain('toggleCollapsedPanel');
-    expect(collabSource).toContain('vault-collab-panel-toggle');
-    expect(collabSource).toContain('aria-expanded');
-    expect(collabSource).toContain('vault-collab-panel-collapsed');
-    expect(appCssSource).toContain('vault-collab-panel-toggle');
-    expect(appCssSource).toContain('vault-collab-panel-collapsed');
-    expect(appCssSource).toContain('max-height: 0');
+    expect(collabSource).toContain('vault-collab-cockpit-grid');
+    expect(appCssSource).not.toContain('height: min(780px, calc(100vh - 238px))');
+    expect(appCssSource).toContain('align-items: start');
+    expect(appCssSource).toContain('max-height: min(760px, calc(100vh - 220px))');
+    expect(appCssSource).toContain('overflow: visible');
+    expect(appCssSource).toContain('overflow-y: auto');
+    expect(appCssSource).toContain('overflow-wrap: anywhere');
   });
 
   it('respects reduced motion for Vault Collab attention animation', () => {

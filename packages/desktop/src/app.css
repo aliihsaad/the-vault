@@ -1891,8 +1891,7 @@ select.text-input optgroup {
 .vault-collab-inspector-panel {
   display: flex;
   flex-direction: column;
-  max-height: calc(100vh - 214px);
-  overflow: hidden;
+  overflow: visible;
 }
 
 .vault-collab-unavailable {
@@ -1972,11 +1971,10 @@ select.text-input optgroup {
 
 .vault-collab-panel-body {
   display: flex;
-  min-height: 0;
   flex: 1 1 auto;
   flex-direction: column;
-  overflow: auto;
-  max-height: 1400px;
+  overflow: visible;
+  max-height: none;
   opacity: 1;
   transition: max-height 180ms ease, opacity 140ms ease;
 }
@@ -1996,7 +1994,7 @@ select.text-input optgroup {
   display: flex;
   min-width: 0;
   flex-direction: column;
-  overflow: auto;
+  overflow: visible;
 }
 
 .vault-collab-roster-groups,
@@ -2087,7 +2085,7 @@ select.text-input optgroup {
 }
 
 .vault-collab-command-preview {
-  display: inline-flex;
+  display: -webkit-box;
   width: fit-content;
   max-width: 100%;
   overflow: hidden;
@@ -2097,8 +2095,11 @@ select.text-input optgroup {
   background: rgba(92, 224, 230, 0.055);
   color: var(--accent-primary);
   font-size: 0.68rem;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
   text-overflow: ellipsis;
-  white-space: nowrap;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
 }
 
 .vault-collab-approved-command {
@@ -2584,7 +2585,6 @@ select.text-input optgroup {
 
   .vault-collab-inspector-panel {
     grid-column: 1 / -1;
-    max-height: min(620px, calc(100vh - 220px));
   }
 
   .vault-collab-queue-panel {
@@ -2600,7 +2600,7 @@ select.text-input optgroup {
     "agents work conversation"
     "detail work conversation";
   gap: 16px;
-  align-items: stretch;
+  align-items: start;
 }
 
 .vault-collab-zone,
@@ -2608,7 +2608,7 @@ select.text-input optgroup {
   display: flex;
   min-width: 0;
   flex-direction: column;
-  overflow: hidden;
+  overflow: visible;
   border: 1px solid rgba(141, 174, 214, 0.12);
   border-radius: 8px;
   background: rgba(255, 255, 255, 0.026);
@@ -2628,6 +2628,8 @@ select.text-input optgroup {
 
 .vault-collab-conversation-zone {
   grid-area: conversation;
+  min-height: 420px;
+  max-height: min(760px, calc(100vh - 220px));
 }
 
 .vault-collab-detail-zone {
@@ -2665,12 +2667,30 @@ select.text-input optgroup {
   font-size: 0.76rem;
 }
 
+.vault-collab-zone-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-muted);
+}
+
+.vault-collab-zone-actions .header-button {
+  min-height: 30px;
+  padding: 6px 9px;
+}
+
 .vault-collab-needs-list {
   display: grid;
   min-width: 0;
   grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
   gap: 10px;
   padding: 12px;
+}
+
+.vault-collab-needs-list .empty-state {
+  min-height: 46px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.018);
 }
 
 .vault-collab-need-row,
@@ -2689,6 +2709,10 @@ select.text-input optgroup {
   padding: 10px;
   border-color: rgba(245, 165, 36, 0.28);
   background: rgba(245, 165, 36, 0.06);
+}
+
+.vault-collab-request-agent-form {
+  grid-column: 1 / -1;
 }
 
 .vault-collab-need-icon {
@@ -2718,6 +2742,18 @@ select.text-input optgroup {
   overflow-wrap: anywhere;
 }
 
+.vault-collab-work-card-preview {
+  display: -webkit-box;
+  overflow: hidden;
+  color: var(--text-secondary);
+  font-size: 0.76rem;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+  text-overflow: ellipsis;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+}
+
 .vault-collab-agent-row {
   display: grid;
   grid-template-columns: 30px minmax(0, 1fr);
@@ -2728,11 +2764,10 @@ select.text-input optgroup {
 
 .vault-collab-work-columns {
   display: grid;
-  min-height: 0;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 12px;
   padding: 12px;
-  overflow: auto;
+  overflow: visible;
 }
 
 .vault-collab-work-column {
@@ -2782,12 +2817,25 @@ select.text-input optgroup {
 .vault-collab-conversation-zone .vault-collab-event-list,
 .vault-collab-detail-zone .vault-collab-inspector-stack,
 .vault-collab-roster-zone .vault-collab-roster-groups {
-  min-height: 0;
-  overflow: auto;
+  overflow: visible;
 }
 
 .vault-collab-conversation-zone .vault-collab-event-list {
+  flex: 1 1 auto;
+  min-height: 220px;
   padding: 12px;
+  overflow-x: hidden;
+  overflow-y: auto;
+}
+
+.vault-collab-event-row {
+  min-width: 0;
+}
+
+.vault-collab-event-row p,
+.vault-collab-event-row .text-mono {
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 @media (max-width: 1500px) {
@@ -2797,6 +2845,10 @@ select.text-input optgroup {
       "agents work"
       "detail work"
       "conversation conversation";
+  }
+
+  .vault-collab-conversation-zone {
+    max-height: none;
   }
 }
 
