@@ -203,6 +203,7 @@ function discussionThread(overrides: Partial<DiscussionThreadSnapshot> & { threa
     resolvedAt: null,
     messageCount: 2,
     lastMessageAt: '2026-05-30T00:12:00.000Z',
+    latestMessages: [],
     ...rest,
   };
 }
@@ -468,6 +469,7 @@ describe('Vault Collab dashboard view model', () => {
               resolvedAt: null,
               messageCount: 2,
               lastMessageAt: '2026-05-30T00:12:00.000Z',
+              latestMessages: [],
             },
           ],
         },
@@ -914,12 +916,51 @@ describe('Vault Collab dashboard view model', () => {
     ]);
   });
 
+  it('excludes dashboard-admin sessions from the cockpit roster', () => {
+    const model = buildVaultCollabDashboardViewModel(snapshot({
+      sessions: [
+        session({
+          sessionUid: 'vc_sess_worker_1234567890',
+          displayName: 'Implementation worker',
+          agentRole: 'implementer',
+          effectiveStatus: 'working',
+        }),
+        session({
+          sessionUid: 'vc_sess_admin_1234567890',
+          displayName: 'The Vault dashboard',
+          capabilities: { sessionAdmin: true },
+          agentRole: 'admin',
+        }),
+        session({
+          sessionUid: 'vc_sess_actions_1234567890',
+          displayName: 'Dashboard action broker',
+          capabilities: { dashboardActions: true },
+          agentRole: 'broker',
+        }),
+      ],
+    }), now);
+
+    expect(model.cockpit.roster).toEqual([
+      {
+        role: 'implementer',
+        agents: [
+          expect.objectContaining({
+            sessionUid: 'vc_sess_worker_1234567890',
+            displayName: 'Implementation worker',
+            status: 'working',
+          }),
+        ],
+      },
+    ]);
+  });
+
   it('groups handoffs into fixed work columns', () => {
+    const longPrompt = 'TEAM LEADER role: own the remaining Vault Collab polish fixes with enough detail to overflow a card if it is rendered in full.';
     const model = buildVaultCollabDashboardViewModel(snapshot({
       handoffs: [
         handoff({ handoffUid: 'vc_handoff_resolved_1234567890', status: 'resolved', shortPrompt: 'Resolved work.' }),
         handoff({ handoffUid: 'vc_handoff_claimed_1234567890', status: 'claimed', shortPrompt: 'Claimed work.' }),
-        handoff({ handoffUid: 'vc_handoff_available_1234567890', status: 'available', shortPrompt: 'Available work.' }),
+        handoff({ handoffUid: 'vc_handoff_available_1234567890', status: 'available', shortPrompt: longPrompt }),
         handoff({ handoffUid: 'vc_handoff_verification_1234567890', status: 'verification_needed', shortPrompt: 'Verify work.' }),
         handoff({ handoffUid: 'vc_handoff_blocked_1234567890', status: 'blocked', shortPrompt: 'Blocked work.' }),
         handoff({ handoffUid: 'vc_handoff_awaiting_1234567890', status: 'awaiting_user', shortPrompt: 'Awaiting work.' }),
@@ -934,6 +975,11 @@ describe('Vault Collab dashboard view model', () => {
       ['awaiting_user', 'Needs user', ['vc_handoff_awaiting_1234567890']],
       ['resolved', 'Resolved', ['vc_handoff_resolved_1234567890']],
     ]);
+    expect(model.cockpit.work[0].cards[0]).toEqual(expect.objectContaining({
+      title: 'TEAM LEADER role',
+      prompt: longPrompt,
+      promptPreview: longPrompt,
+    }));
   });
 
   it('merges discussion summaries and key events into a newest-first conversation stream', () => {
@@ -950,6 +996,17 @@ describe('Vault Collab dashboard view model', () => {
               title: 'Verification notes',
               messageCount: 3,
               lastMessageAt: '2026-05-30T00:16:00.000Z',
+              latestMessages: [
+                {
+                  messageUid: 'vc_msg_selected_1234567890',
+                  threadUid: 'vc_thread_selected_1234567890',
+                  sessionUid: 'vc_sess_worker_1234567890',
+                  agentUid: null,
+                  messageType: 'decision',
+                  body: 'Ready for manual verification.',
+                  createdAt: '2026-05-30T00:16:00.000Z',
+                },
+              ],
             }),
           ],
         }),
@@ -991,8 +1048,77 @@ describe('Vault Collab dashboard view model', () => {
 
     expect(model.cockpit.conversation.map((entry) => [entry.kind, entry.id, entry.body])).toEqual([
       ['event', 'event:12', 'summary: All gates passed.'],
-      ['message', 'thread:vc_thread_selected_1234567890', 'Verification notes / 3 messages / last message 4m ago'],
+      ['message', 'message:vc_msg_selected_1234567890', 'Verification notes (decision): Ready for manual verification.'],
       ['event', 'event:11', `handoffUid: ${selectedHandoffUid}`],
+    ]);
+  });
+
+  it('handles legacy discussion thread snapshots without latest messages', () => {
+    const selectedHandoffUid = 'vc_handoff_selected_1234567890';
+    const legacyThread = discussionThread({
+      threadUid: 'vc_thread_empty_1234567890',
+      handoffUid: selectedHandoffUid,
+      title: 'Empty review thread',
+      messageCount: 0,
+      lastMessageAt: null,
+    });
+    delete (legacyThread as { latestMessages?: unknown }).latestMessages;
+
+    const model = buildVaultCollabDashboardViewModel(snapshot({
+      handoffs: [
+        handoff({
+          handoffUid: selectedHandoffUid,
+          shortPrompt: 'Selected handoff.',
+          discussionThreads: [legacyThread],
+        }),
+      ],
+    }), now, selectedHandoffUid);
+
+    expect(model.selectedHandoff?.discussionThreads[0]).toEqual(expect.objectContaining({
+      uid: 'vc_thread_empty_1234567890',
+      summary: 'no messages yet / created by vc_sess_re... / 0 messages',
+    }));
+    expect(model.cockpit.conversation.map((entry) => [entry.kind, entry.id, entry.body])).toEqual([
+      ['message', 'thread:vc_thread_empty_1234567890', 'Empty review thread / 0 messages / no messages yet'],
+    ]);
+  });
+
+  it('handles discussion message previews without a body', () => {
+    const selectedHandoffUid = 'vc_handoff_selected_1234567890';
+    const messageWithoutBody = {
+      messageUid: 'vc_msg_without_body_1234567890',
+      threadUid: 'vc_thread_selected_1234567890',
+      sessionUid: 'vc_sess_worker_1234567890',
+      agentUid: null,
+      messageType: 'note',
+      body: undefined,
+      createdAt: '2026-05-30T00:16:00.000Z',
+    } as unknown as DiscussionThreadSnapshot['latestMessages'][number];
+
+    const model = buildVaultCollabDashboardViewModel(snapshot({
+      handoffs: [
+        handoff({
+          handoffUid: selectedHandoffUid,
+          shortPrompt: 'Selected handoff.',
+          discussionThreads: [
+            discussionThread({
+              threadUid: 'vc_thread_selected_1234567890',
+              handoffUid: selectedHandoffUid,
+              title: 'Bodyless thread',
+              messageCount: 1,
+              lastMessageAt: '2026-05-30T00:16:00.000Z',
+              latestMessages: [messageWithoutBody],
+            }),
+          ],
+        }),
+      ],
+    }), now, selectedHandoffUid);
+
+    expect(model.selectedHandoff?.discussionThreads[0].summary).toBe(
+      'last message 4m ago / latest:  / created by vc_sess_re... / 1 message',
+    );
+    expect(model.cockpit.conversation.map((entry) => [entry.kind, entry.id, entry.body])).toEqual([
+      ['message', 'message:vc_msg_without_body_1234567890', 'Bodyless thread: '],
     ]);
   });
 

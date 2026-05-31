@@ -4,6 +4,7 @@ import type { Dispatch, SetStateAction } from 'react';
 import type { VaultCollabSelectedHandoff } from '../../vault-collab-view-model.js';
 
 type VaultCollabDashboardActionInput = Parameters<typeof window.vaultAPI.performVaultCollabDashboardAction>[0];
+type VaultCollabAgentRequestInput = Parameters<typeof window.vaultAPI.requestVaultCollabAgent>[0];
 
 interface UseVaultCollabActionsOptions {
   discussionDraft: string;
@@ -46,10 +47,30 @@ export function useVaultCollabActions({
       }
 
       await loadDashboard(true);
-      return actionData;
+      return actionData ?? true;
     } catch (err) {
       setActionError(err instanceof Error ? err.message : 'Vault Collab action failed');
       return null;
+    } finally {
+      setActionBusy(null);
+    }
+  }
+
+  async function requestAgent(input: VaultCollabAgentRequestInput) {
+    setActionBusy('agent-request');
+    setActionError(null);
+    setActionNotice(null);
+
+    try {
+      const response = await window.vaultAPI.requestVaultCollabAgent(input);
+      if (!response.success || !response.data?.ok) {
+        throw new Error(response.error || response.data?.error || 'Vault Collab agent request failed');
+      }
+
+      setActionNotice('Agent request created. Approve or reject it in Needs You.');
+      await loadDashboard(true);
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : 'Vault Collab agent request failed');
     } finally {
       setActionBusy(null);
     }
@@ -180,13 +201,17 @@ export function useVaultCollabActions({
     const openThread = selectedHandoff.discussionThreads.find((thread) => thread.status === 'open')
       ?? selectedHandoff.discussionThreads[0];
     if (openThread) {
-      await performDashboardAction({
+      const addResult = await performDashboardAction({
         kind: 'discussion',
         action: 'add_message',
         threadUid: openThread.uid,
         messageType: 'note',
         body,
       }, `${selectedHandoff.uid}:discussion`);
+      if (!addResult) {
+        return;
+      }
+      setActionNotice('Discussion message sent.');
       setDiscussionDraft('');
       return;
     }
@@ -207,15 +232,19 @@ export function useVaultCollabActions({
       ? (createResult as { threadUid?: unknown }).threadUid
       : null;
     if (typeof threadUid === 'string') {
-      await performDashboardAction({
+      const addResult = await performDashboardAction({
         kind: 'discussion',
         action: 'add_message',
         threadUid,
         messageType: 'note',
         body,
       }, `${selectedHandoff.uid}:discussion-message`);
+      if (!addResult) {
+        return;
+      }
+      setActionNotice('Discussion thread created and message sent.');
+      setDiscussionDraft('');
     }
-    setDiscussionDraft('');
   }
 
   async function copyLaunchCommand(_launchRequestUid: string, command: string) {
@@ -233,6 +262,7 @@ export function useVaultCollabActions({
     actionError,
     actionNotice,
     copyLaunchCommand,
+    requestAgent,
     runDiscussionAction,
     runHandoffAction,
     runLaunchAction,

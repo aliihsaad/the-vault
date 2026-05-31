@@ -127,6 +127,60 @@ describe('Vault Collab dashboard action invocation', () => {
     expect(invocations[0]).not.toContain('launch-mark-launching');
   });
 
+  it('builds launch-create commands for dashboard agent requests', () => {
+    const invocation = buildVaultCollabActionInvocation(config, actor, {
+      kind: 'launch',
+      action: 'request',
+      provider: 'codex',
+      model: 'gpt-5-codex',
+      effortLevel: 'medium',
+      project: 'the-vault',
+      workspacePath: 'C:\\Users\\Mini\\Desktop\\Projects\\the-vault',
+      role: 'implementation-worker',
+      initialInstructions: 'Add focused dashboard polish.',
+      permissionMode: 'workspace-write',
+      requestedCapabilities: ['vault_collab', 'code_editing'],
+      approvalPolicyVersion: 'dashboard-request-agent-v1',
+      metadata: { source: 'dashboard' },
+    } as any);
+
+    expect(invocation.args).toEqual(expect.arrayContaining([
+      'launch-create',
+      '--db',
+      config.databasePath,
+      '--session-uid',
+      'vc_sess_dashboard',
+      '--session-token',
+      'dashboard-secret-token',
+      '--provider',
+      'codex',
+      '--model',
+      'gpt-5-codex',
+      '--effort-level',
+      'medium',
+      '--project',
+      'the-vault',
+      '--workspace-path',
+      'C:\\Users\\Mini\\Desktop\\Projects\\the-vault',
+      '--role',
+      'implementation-worker',
+      '--initial-instructions',
+      'Add focused dashboard polish.',
+      '--permission-mode',
+      'workspace-write',
+      '--requested-capability',
+      'vault_collab',
+      '--requested-capability',
+      'code_editing',
+      '--approval-policy-version',
+      'dashboard-request-agent-v1',
+      '--metadata',
+      'source=dashboard',
+    ]));
+
+    expect(JSON.stringify(redactVaultCollabActionInvocation(invocation))).not.toContain('dashboard-secret-token');
+  });
+
   it('builds token-owned handoff action commands without exposing the token in display output', () => {
     const invocation = buildVaultCollabActionInvocation(config, actor, {
       kind: 'handoff',
@@ -213,6 +267,8 @@ describe('Vault Collab dashboard action invocation', () => {
       'dashboardActions=true',
       '--capability',
       'launchApproval=true',
+      '--capability',
+      'launchRequests=true',
       '--capability',
       'launchBroker=true',
       '--capability',

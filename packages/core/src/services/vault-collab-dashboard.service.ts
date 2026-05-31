@@ -8,6 +8,8 @@ import type {
   VaultCollabDashboardSnapshot,
   VaultCollabDeliveryAttemptSnapshot,
   VaultCollabDeliveryAttemptStatus,
+  VaultCollabDiscussionMessagePreview,
+  VaultCollabDashboardDiscussionMessageType,
   VaultCollabDiscussionThreadStatus,
   VaultCollabDiscussionThreadSummary,
   VaultCollabEventSnapshot,
@@ -31,6 +33,7 @@ const DEFAULT_STALE_SESSION_AFTER_MS = 15 * 60 * 1000;
 const DEFAULT_STALE_SESSION_VISIBILITY_MS = 2 * 60 * 60 * 1000;
 const DEFAULT_CLOSED_SESSION_VISIBILITY_MS = 6 * 60 * 60 * 1000;
 const MAX_SESSION_SCAN_LIMIT = 200;
+const LATEST_DISCUSSION_MESSAGES_PER_THREAD = 3;
 const REQUIRED_TABLES = ['sessions', 'handoffs', 'events'];
 const CLOSED_HANDOFF_STATUSES: VaultCollabHandoffStatus[] = ['resolved', 'abandoned', 'stale'];
 const PERMISSION_REQUEST_EVENT_TYPES = new Set([
@@ -162,6 +165,16 @@ interface DiscussionThreadRow {
   resolved_at: string | null;
   message_count: number;
   last_message_at: string | null;
+}
+
+interface DiscussionMessageRow {
+  message_uid: string;
+  thread_uid: string;
+  session_uid: string | null;
+  agent_uid: string | null;
+  message_type: string;
+  body: string | null;
+  created_at: string;
 }
 
 export function getVaultCollabDashboardSnapshot(
@@ -629,12 +642,16 @@ function listDiscussionThreadSummaries(
     ORDER BY discussion_threads.created_at ASC, discussion_threads.thread_uid ASC
   `).all(...uniqueHandoffUids) as DiscussionThreadRow[];
 
+  const latestMessagesByThread = hasMessages
+    ? listLatestDiscussionMessages(db, rows.map((row) => row.thread_uid))
+    : new Map<string, VaultCollabDiscussionMessagePreview[]>();
+
   for (const row of rows) {
     if (!row.handoff_uid) {
       continue;
     }
 
-    const thread = mapDiscussionThreadRow(row);
+    const thread = mapDiscussionThreadRow(row, latestMessagesByThread.get(row.thread_uid) ?? []);
     const threads = threadsByHandoff.get(row.handoff_uid) ?? [];
     threads.push(thread);
     threadsByHandoff.set(row.handoff_uid, threads);
@@ -643,7 +660,52 @@ function listDiscussionThreadSummaries(
   return threadsByHandoff;
 }
 
-function mapDiscussionThreadRow(row: DiscussionThreadRow): VaultCollabDiscussionThreadSummary {
+function listLatestDiscussionMessages(
+  db: Database.Database,
+  threadUids: string[],
+): Map<string, VaultCollabDiscussionMessagePreview[]> {
+  const messagesByThread = new Map<string, VaultCollabDiscussionMessagePreview[]>();
+  const uniqueThreadUids = Array.from(new Set(threadUids)).filter((threadUid) => threadUid.length > 0);
+  if (uniqueThreadUids.length === 0 || !hasDiscussionMessagePreviewColumns(db)) {
+    return messagesByThread;
+  }
+
+  const placeholders = uniqueThreadUids.map(() => '?').join(', ');
+  const rows = db.prepare(`
+    SELECT
+      message_uid,
+      thread_uid,
+      session_uid,
+      agent_uid,
+      message_type,
+      body,
+      created_at
+    FROM discussion_messages
+    WHERE thread_uid IN (${placeholders})
+    ORDER BY thread_uid ASC, created_at DESC, message_uid DESC
+  `).all(...uniqueThreadUids) as DiscussionMessageRow[];
+
+  for (const row of rows) {
+    const messages = messagesByThread.get(row.thread_uid) ?? [];
+    if (messages.length >= LATEST_DISCUSSION_MESSAGES_PER_THREAD) {
+      continue;
+    }
+
+    messages.push(mapDiscussionMessageRow(row));
+    messagesByThread.set(row.thread_uid, messages);
+  }
+
+  for (const messages of messagesByThread.values()) {
+    messages.reverse();
+  }
+
+  return messagesByThread;
+}
+
+function mapDiscussionThreadRow(
+  row: DiscussionThreadRow,
+  latestMessages: VaultCollabDiscussionMessagePreview[],
+): VaultCollabDiscussionThreadSummary {
   return {
     threadUid: row.thread_uid,
     handoffUid: row.handoff_uid,
@@ -656,6 +718,19 @@ function mapDiscussionThreadRow(row: DiscussionThreadRow): VaultCollabDiscussion
     resolvedAt: row.resolved_at,
     messageCount: Number(row.message_count) || 0,
     lastMessageAt: row.last_message_at,
+    latestMessages,
+  };
+}
+
+function mapDiscussionMessageRow(row: DiscussionMessageRow): VaultCollabDiscussionMessagePreview {
+  return {
+    messageUid: row.message_uid,
+    threadUid: row.thread_uid,
+    sessionUid: row.session_uid,
+    agentUid: row.agent_uid,
+    messageType: parseDiscussionMessageType(row.message_type),
+    body: row.body ?? '',
+    createdAt: row.created_at,
   };
 }
 
@@ -986,6 +1061,12 @@ function parseDiscussionThreadStatus(value: string): VaultCollabDiscussionThread
     : 'open';
 }
 
+function parseDiscussionMessageType(value: string): VaultCollabDashboardDiscussionMessageType {
+  return isAllowed(value, ['note', 'question', 'proposal', 'concern', 'decision'])
+    ? value
+    : 'note';
+}
+
 function parseLaunchRequestStatus(value: string): VaultCollabLaunchRequestStatus {
   return isAllowed(value, ['requested', 'approved', 'rejected', 'cancelled', 'launching', 'running', 'stopped', 'failed'])
     ? value
@@ -1011,6 +1092,18 @@ function columnExists(db: Database.Database, table: string, column: string): boo
   return (db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>).some(
     (row) => row.name === column,
   );
+}
+
+function hasDiscussionMessagePreviewColumns(db: Database.Database): boolean {
+  return [
+    'message_uid',
+    'thread_uid',
+    'session_uid',
+    'agent_uid',
+    'message_type',
+    'body',
+    'created_at',
+  ].every((column) => columnExists(db, 'discussion_messages', column));
 }
 
 function clampLimit(value: number | undefined, fallback: number): number {

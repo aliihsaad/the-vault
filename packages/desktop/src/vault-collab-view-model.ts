@@ -51,7 +51,9 @@ export interface VaultCollabSessionGroup {
 export interface VaultCollabHandoffRow {
   uid: string;
   shortUid: string;
+  title: string;
   prompt: string;
+  promptPreview: string;
   statusLabel: string;
   badgeClass: string;
   railClass: string;
@@ -408,7 +410,7 @@ function buildRoleGroups(sessions: VaultCollabSessionSnapshot[]): VaultCollabRol
   const seenSessionUids = new Set<string>();
 
   for (const session of sessions) {
-    if (!isLiveRosterSession(session) || seenSessionUids.has(session.sessionUid)) {
+    if (!isRosterVisibleSession(session) || seenSessionUids.has(session.sessionUid)) {
       continue;
     }
 
@@ -472,6 +474,21 @@ function buildConversationEntries(
     }
 
     for (const thread of handoff.discussionThreads) {
+      const latestMessages = thread.latestMessages ?? [];
+      if (latestMessages.length > 0) {
+        for (const message of latestMessages) {
+          entries.push({
+            id: `message:${message.messageUid}`,
+            at: message.createdAt,
+            kind: 'message',
+            author: message.sessionUid ?? message.agentUid ?? undefined,
+            body: formatConversationMessageBody(thread, message),
+            handoffUid: handoff.handoffUid,
+          });
+        }
+        continue;
+      }
+
       const at = thread.lastMessageAt ?? thread.updatedAt;
       entries.push({
         id: `thread:${thread.threadUid}`,
@@ -532,6 +549,16 @@ function isLiveRosterSession(session: VaultCollabSessionSnapshot): boolean {
   return session.connectionState === 'fresh' && session.effectiveStatus !== 'disconnected';
 }
 
+function isRosterVisibleSession(session: VaultCollabSessionSnapshot): boolean {
+  return isLiveRosterSession(session)
+    && !hasEnabledCapability(session.capabilities.sessionAdmin)
+    && !hasEnabledCapability(session.capabilities.dashboardActions);
+}
+
+function hasEnabledCapability(value: unknown): boolean {
+  return Boolean(value) && value !== 'false';
+}
+
 function getSessionRole(session: VaultCollabSessionSnapshot): string {
   if (session.agentRole?.trim()) {
     return session.agentRole.trim();
@@ -557,6 +584,14 @@ function formatConversationThreadBody(
     : 'no messages yet';
 
   return `${thread.title} / ${messageLabel} / ${lastMessageLabel}`;
+}
+
+function formatConversationMessageBody(
+  thread: VaultCollabHandoffSnapshot['discussionThreads'][number],
+  message: VaultCollabHandoffSnapshot['discussionThreads'][number]['latestMessages'][number],
+): string {
+  const typeLabel = message.messageType === 'note' ? '' : ` (${formatLooseLabel(message.messageType)})`;
+  return `${thread.title}${typeLabel}: ${formatPreviewText(message.body, 500)}`;
 }
 
 function buildLaunchRequestRow(
@@ -805,7 +840,9 @@ function buildHandoffRow(handoff: VaultCollabHandoffSnapshot, now: Date): VaultC
   return {
     uid: handoff.handoffUid,
     shortUid: formatVaultCollabShortUid(handoff.handoffUid),
+    title: formatHandoffCardTitle(handoff.shortPrompt, handoff.handoffUid),
     prompt: handoff.shortPrompt,
+    promptPreview: formatPreviewText(handoff.shortPrompt, 260),
     statusLabel: formatStatusLabel(handoff.status),
     badgeClass: getHandoffBadgeClass(handoff.status),
     railClass: getHandoffRailClass(handoff.status),
@@ -829,6 +866,20 @@ function buildHandoffRow(handoff: VaultCollabHandoffSnapshot, now: Date): VaultC
     attention,
     urgent: handoff.urgent,
   };
+}
+
+function formatHandoffCardTitle(prompt: string, handoffUid: string): string {
+  const normalized = prompt.trim().replace(/\s+/g, ' ');
+  if (!normalized) {
+    return formatVaultCollabShortUid(handoffUid);
+  }
+
+  const colonIndex = normalized.indexOf(':');
+  if (colonIndex >= 8 && colonIndex <= 72) {
+    return normalized.slice(0, colonIndex).trim();
+  }
+
+  return formatPreviewText(normalized, 72) || formatVaultCollabShortUid(handoffUid);
 }
 
 function buildSelectedHandoff(
@@ -1062,9 +1113,15 @@ function formatDiscussionThreadSummary(
   thread: VaultCollabHandoffSnapshot['discussionThreads'][number],
   now: Date,
 ): string {
+  const latestMessages = thread.latestMessages ?? [];
+  const latestMessage = latestMessages[latestMessages.length - 1];
   const parts = [
     thread.lastMessageAt ? `last message ${formatRelativeAge(new Date(thread.lastMessageAt), now)}` : 'no messages yet',
   ];
+
+  if (latestMessage) {
+    parts.push(`latest: ${formatPreviewText(latestMessage.body, 120)}`);
+  }
 
   if (thread.createdBySessionUid) {
     parts.push(`created by ${formatVaultCollabShortUid(thread.createdBySessionUid)}`);
@@ -1077,6 +1134,11 @@ function formatDiscussionThreadSummary(
   parts.push(`${thread.messageCount} message${thread.messageCount === 1 ? '' : 's'}`);
 
   return parts.join(' / ');
+}
+
+function formatPreviewText(value: unknown, maxLength: number): string {
+  const text = typeof value === 'string' ? value : '';
+  return text.length > maxLength + 3 ? `${text.slice(0, maxLength)}...` : text;
 }
 
 function isConversationEvent(event: VaultCollabEventSnapshot): boolean {

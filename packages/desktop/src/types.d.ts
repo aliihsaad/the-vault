@@ -15,6 +15,7 @@ import type {
   SaveGraphifyRuntimeConfigInput,
   SaveVaultCollabRuntimeConfigInput,
   VaultCollabActionResult,
+  VaultCollabAgentRequestInput,
   VaultCollabDashboardActionInput,
   VaultCollabDashboardOptions,
   VaultCollabDashboardSnapshot,
@@ -731,6 +732,7 @@ declare global {
     getVaultCollabDashboardSnapshot: (options?: VaultCollabDashboardOptions) => Promise<VaultResponse<VaultCollabDashboardSnapshot>>;
     getVaultCollabHandoffActions: (handoffUid: string) => Promise<VaultResponse<VaultCollabHandoffActionSet | null>>;
     performVaultCollabDashboardAction: (input: VaultCollabDashboardActionInput) => Promise<VaultResponse<VaultCollabActionResult>>;
+    requestVaultCollabAgent: (input: VaultCollabAgentRequestInput) => Promise<VaultResponse<VaultCollabActionResult>>;
     approveVaultCollabLaunchRequest: (launchRequestUid: string) => Promise<VaultResponse<VaultCollabLaunchApprovalResult>>;
     startVaultCollabLaunchRequest: (launchRequestUid: string) => Promise<VaultResponse<{
       launchRequestUid: string;

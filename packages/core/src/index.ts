@@ -175,6 +175,8 @@ export type {
 
 export type {
   SaveVaultCollabRuntimeConfigInput,
+  VaultCollabAgentRequestInput,
+  VaultCollabAgentRequestProvider,
   VaultCollabClientType,
   VaultCollabDashboardCounts,
   VaultCollabDashboardOptions,

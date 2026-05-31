@@ -149,6 +149,8 @@ export function buildVaultCollabDashboardSessionInvocation(
       '--capability',
       'launchApproval=true',
       '--capability',
+      'launchRequests=true',
+      '--capability',
       'launchBroker=true',
       '--capability',
       'sessionAdmin=true',
@@ -608,6 +610,36 @@ function buildLaunchActionArgs(
   actor: VaultCollabDashboardActor,
   input: Extract<VaultCollabDashboardActionInput, { kind: 'launch' }>,
 ): string[] {
+  if (input.action === 'request') {
+    return [
+      'launch-create',
+      '--db',
+      databasePath,
+      '--session-uid',
+      actor.sessionUid,
+      TOKEN_OPTION,
+      actor.sessionToken,
+      '--provider',
+      requiredValue(input.provider, 'Launch request provider'),
+      '--model',
+      requiredValue(input.model, 'Launch request model'),
+      ...optionalArg('--effort-level', input.effortLevel ?? undefined),
+      '--project',
+      requiredValue(input.project, 'Launch request project'),
+      '--workspace-path',
+      requiredValue(input.workspacePath, 'Launch request workspace path'),
+      ...optionalArg('--role', input.role ?? undefined),
+      '--initial-instructions',
+      requiredValue(input.initialInstructions, 'Launch request instructions'),
+      '--permission-mode',
+      requiredValue(input.permissionMode, 'Launch request permission mode'),
+      ...optionalArg('--command-preview', input.commandPreview ?? undefined),
+      ...buildRepeatedArgs('--requested-capability', input.requestedCapabilities ?? []),
+      ...optionalArg('--approval-policy-version', input.approvalPolicyVersion ?? undefined),
+      ...buildMetadataArgs(input.metadata ?? {}),
+    ];
+  }
+
   const ownerArgs = [
     '--launch-request-uid',
     input.launchRequestUid,
@@ -691,4 +723,27 @@ function requiredValue(value: string | undefined, label: string): string {
   }
 
   return value;
+}
+
+function optionalArg(option: string, value: string | null | undefined): string[] {
+  return value?.trim() ? [option, value.trim()] : [];
+}
+
+function buildRepeatedArgs(option: string, values: string[]): string[] {
+  return values
+    .map((value) => value.trim())
+    .filter((value) => value.length > 0)
+    .flatMap((value) => [option, value]);
+}
+
+function buildMetadataArgs(metadata: Record<string, unknown>): string[] {
+  return Object.entries(metadata)
+    .filter(([key, value]) => key.trim().length > 0 && isMetadataValue(value))
+    .flatMap(([key, value]) => ['--metadata', `${key.trim()}=${String(value)}`]);
+}
+
+function isMetadataValue(value: unknown): value is string | number | boolean {
+  return typeof value === 'string'
+    || typeof value === 'number'
+    || typeof value === 'boolean';
 }
