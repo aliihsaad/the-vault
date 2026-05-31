@@ -6,6 +6,8 @@ import type {
   VaultCollabDashboardCounts,
   VaultCollabDashboardOptions,
   VaultCollabDashboardSnapshot,
+  VaultCollabDeliveryAttemptSnapshot,
+  VaultCollabDeliveryAttemptStatus,
   VaultCollabDiscussionThreadStatus,
   VaultCollabDiscussionThreadSummary,
   VaultCollabEventSnapshot,
@@ -37,7 +39,6 @@ const PERMISSION_REQUEST_EVENT_TYPES = new Set([
 ]);
 const ATTENTION_PING_EVENT_TYPE = 'session.pinged';
 const ACTIVE_LAUNCH_REQUEST_STATUSES: VaultCollabLaunchRequestStatus[] = [
-  'requested',
   'approved',
   'launching',
   'running',
@@ -57,6 +58,10 @@ interface SessionRow {
   agent_display_name: string | null;
   agent_role: string | null;
   current_handoff_uid: string | null;
+  delivery_mode: string;
+  delivery_wakeable: 0 | 1;
+  delivery_last_ack_event_id: number | null;
+  delivery_last_ack_at: string | null;
   last_heartbeat_at: string;
   created_at: string;
   updated_at: string;
@@ -131,6 +136,20 @@ interface LaunchRequestRow {
   completed_at: string | null;
 }
 
+interface DeliveryAttemptRow {
+  attempt_uid: string;
+  session_uid: string;
+  from_event_id: number;
+  to_event_id: number;
+  delivery_mode: string;
+  adapter: string;
+  status: string;
+  message: string | null;
+  created_at: string;
+  delivered_at: string | null;
+  failed_at: string | null;
+}
+
 interface DiscussionThreadRow {
   thread_uid: string;
   handoff_uid: string | null;
@@ -184,6 +203,7 @@ export function getVaultCollabDashboardSnapshot(
     );
     const handoffs = listOpenHandoffs(db, clampLimit(options.handoffLimit, DEFAULT_HANDOFF_LIMIT));
     const launchRequests = listLaunchRequests(db, clampLimit(options.launchRequestLimit, DEFAULT_LAUNCH_REQUEST_LIMIT));
+    const deliveryAttempts = listRecentDeliveryAttempts(db, clampLimit(options.eventLimit, DEFAULT_EVENT_LIMIT));
     const events = listRecentEvents(db, clampLimit(options.eventLimit, DEFAULT_EVENT_LIMIT));
 
     return {
@@ -192,6 +212,7 @@ export function getVaultCollabDashboardSnapshot(
       sessions,
       handoffs,
       launchRequests,
+      deliveryAttempts,
       events,
       counts: buildDashboardCounts(sessions, handoffs, launchRequests, events),
     };
@@ -232,6 +253,10 @@ function listSessions(
   const hasAgentStableName = hasAgentProfiles && columnExists(db, 'agent_profiles', 'stable_name');
   const hasAgentDisplayName = hasAgentProfiles && columnExists(db, 'agent_profiles', 'display_name');
   const hasAgentRole = hasAgentProfiles && columnExists(db, 'agent_profiles', 'role');
+  const deliveryModeSelect = columnExists(db, 'sessions', 'delivery_mode') ? 'sessions.delivery_mode' : "'manual_poll'";
+  const deliveryWakeableSelect = columnExists(db, 'sessions', 'delivery_wakeable') ? 'sessions.delivery_wakeable' : '0';
+  const deliveryLastAckEventIdSelect = columnExists(db, 'sessions', 'delivery_last_ack_event_id') ? 'sessions.delivery_last_ack_event_id' : 'NULL';
+  const deliveryLastAckAtSelect = columnExists(db, 'sessions', 'delivery_last_ack_at') ? 'sessions.delivery_last_ack_at' : 'NULL';
   const agentJoin = hasAgentProfiles
     ? 'LEFT JOIN agent_profiles ON agent_profiles.agent_uid = sessions.agent_uid'
     : '';
@@ -255,6 +280,10 @@ function listSessions(
       ${agentDisplayNameSelect} AS agent_display_name,
       ${agentRoleSelect} AS agent_role,
       sessions.current_handoff_uid,
+      ${deliveryModeSelect} AS delivery_mode,
+      ${deliveryWakeableSelect} AS delivery_wakeable,
+      ${deliveryLastAckEventIdSelect} AS delivery_last_ack_event_id,
+      ${deliveryLastAckAtSelect} AS delivery_last_ack_at,
       sessions.last_heartbeat_at,
       sessions.created_at,
       sessions.updated_at,
@@ -346,6 +375,32 @@ function listRecentEvents(db: Database.Database, limit: number): VaultCollabEven
   }));
 }
 
+function listRecentDeliveryAttempts(db: Database.Database, limit: number): VaultCollabDeliveryAttemptSnapshot[] {
+  if (!tableExists(db, 'attention_delivery_attempts')) {
+    return [];
+  }
+
+  const rows = db.prepare(`
+    SELECT
+      attempt_uid,
+      session_uid,
+      from_event_id,
+      to_event_id,
+      delivery_mode,
+      adapter,
+      status,
+      message,
+      created_at,
+      delivered_at,
+      failed_at
+    FROM attention_delivery_attempts
+    ORDER BY created_at DESC, attempt_uid DESC
+    LIMIT ?
+  `).all(limit) as DeliveryAttemptRow[];
+
+  return rows.map(mapDeliveryAttemptRow);
+}
+
 function listLaunchRequests(db: Database.Database, limit: number): VaultCollabLaunchRequestSnapshot[] {
   if (!tableExists(db, 'launch_requests')) {
     return [];
@@ -406,10 +461,11 @@ function listLaunchRequests(db: Database.Database, limit: number): VaultCollabLa
         WHEN 'approved' THEN 1
         WHEN 'launching' THEN 2
         WHEN 'running' THEN 3
-        WHEN 'failed' THEN 4
-        WHEN 'rejected' THEN 5
-        WHEN 'cancelled' THEN 6
-        ELSE 7
+        WHEN 'stopped' THEN 4
+        WHEN 'failed' THEN 5
+        WHEN 'rejected' THEN 6
+        WHEN 'cancelled' THEN 7
+        ELSE 8
       END ASC,
       updated_at DESC,
       created_at DESC,
@@ -442,6 +498,12 @@ function mapSessionRow(row: SessionRow, now: Date, staleSessionAfterMs: number):
     agentDisplayName: row.agent_display_name,
     agentRole: row.agent_role,
     currentHandoffUid: row.current_handoff_uid,
+    delivery: {
+      mode: parseSessionDeliveryMode(row.delivery_mode),
+      wakeable: row.delivery_wakeable === 1,
+      lastAckEventId: row.delivery_last_ack_event_id,
+      lastAckAt: row.delivery_last_ack_at,
+    },
     lastHeartbeatAt: row.last_heartbeat_at,
     heartbeatAgeMs,
     createdAt: row.created_at,
@@ -511,6 +573,22 @@ function mapLaunchRequestRow(row: LaunchRequestRow): VaultCollabLaunchRequestSna
     rejectedAt: row.rejected_at,
     startedAt: row.started_at,
     completedAt: row.completed_at,
+  };
+}
+
+function mapDeliveryAttemptRow(row: DeliveryAttemptRow): VaultCollabDeliveryAttemptSnapshot {
+  return {
+    attemptUid: row.attempt_uid,
+    sessionUid: row.session_uid,
+    fromEventId: row.from_event_id,
+    toEventId: row.to_event_id,
+    deliveryMode: parseSessionDeliveryMode(row.delivery_mode),
+    adapter: row.adapter,
+    status: parseDeliveryAttemptStatus(row.status),
+    message: row.message,
+    createdAt: row.created_at,
+    deliveredAt: row.delivered_at,
+    failedAt: row.failed_at,
   };
 }
 
@@ -626,6 +704,7 @@ function buildDashboardCounts(
     approvedLaunchRequests: launchRequestsByStatus.approved,
     launchingLaunchRequests: launchRequestsByStatus.launching,
     runningLaunchRequests: launchRequestsByStatus.running,
+    stoppedLaunchRequests: launchRequestsByStatus.stopped,
     failedLaunchRequests: launchRequestsByStatus.failed,
     events: events.length,
     sessionsByStatus,
@@ -650,6 +729,7 @@ function createEmptySnapshot(
     sessions: [],
     handoffs: [],
     launchRequests: [],
+    deliveryAttempts: [],
     events: [],
     counts: {
       sessions: 0,
@@ -671,6 +751,7 @@ function createEmptySnapshot(
       approvedLaunchRequests: 0,
       launchingLaunchRequests: 0,
       runningLaunchRequests: 0,
+      stoppedLaunchRequests: 0,
       failedLaunchRequests: 0,
       events: 0,
       sessionsByStatus: emptySessionStatusCounts(),
@@ -678,6 +759,10 @@ function createEmptySnapshot(
       launchRequestsByStatus: emptyLaunchRequestStatusCounts(),
     },
   };
+}
+
+function parseDeliveryAttemptStatus(value: string): VaultCollabDeliveryAttemptStatus {
+  return value === 'delivered' ? 'delivered' : 'failed';
 }
 
 function emptySessionStatusCounts(): Record<VaultCollabSessionStatus, number> {
@@ -714,6 +799,7 @@ function emptyLaunchRequestStatusCounts(): Record<VaultCollabLaunchRequestStatus
     cancelled: 0,
     launching: 0,
     running: 0,
+    stopped: 0,
     failed: 0,
   };
 }
@@ -864,6 +950,12 @@ function parseStringArray(value: string): string[] {
   }
 }
 
+function parseSessionDeliveryMode(value: string): VaultCollabSessionSnapshot['delivery']['mode'] {
+  return isAllowed(value, ['manual_poll', 'local_watch', 'mcp_notification', 'managed_process'])
+    ? value
+    : 'manual_poll';
+}
+
 function parseClientType(value: string): VaultCollabClientType {
   return isAllowed(value, ['codex', 'claude-code', 'claude-desktop', 'octogent', 'gemini', 'opencode', 'other'])
     ? value
@@ -895,7 +987,7 @@ function parseDiscussionThreadStatus(value: string): VaultCollabDiscussionThread
 }
 
 function parseLaunchRequestStatus(value: string): VaultCollabLaunchRequestStatus {
-  return isAllowed(value, ['requested', 'approved', 'rejected', 'cancelled', 'launching', 'running', 'failed'])
+  return isAllowed(value, ['requested', 'approved', 'rejected', 'cancelled', 'launching', 'running', 'stopped', 'failed'])
     ? value
     : 'failed';
 }

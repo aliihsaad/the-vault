@@ -35,8 +35,10 @@ import {
   extractResultCount,
   extractTotalCandidates,
   formatCompactNumber,
+  getRecallAnalyticsDateFrom,
   getRecallPackingSettings,
   isSameLocalDay,
+  RECALL_ANALYTICS_LOG_LIMIT,
   type ProjectCockpitRow,
 } from '../cockpit-metrics.js';
 import { buildPendingDeleteReviewQuery } from '../agent-review-query.js';
@@ -102,7 +104,7 @@ export function OverviewCockpitView({
       ] = await Promise.all([
         window.vaultAPI.getLatest(undefined, 80),
         window.vaultAPI.getRecentLogs(320),
-        window.vaultAPI.getRecentLogs(420, { actionType: 'recall' }),
+        window.vaultAPI.getRecentLogs(RECALL_ANALYTICS_LOG_LIMIT, { actionType: 'recall', dateFrom: getRecallAnalyticsDateFrom() }),
         window.vaultAPI.getAllSettings(),
         window.vaultAPI.listProjectProposals({ status: 'pending' }),
         window.vaultAPI.findMemory(buildPendingDeleteReviewQuery()),

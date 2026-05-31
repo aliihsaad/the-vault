@@ -1,12 +1,22 @@
 // electron/main.ts
 import { app, BrowserWindow, dialog, ipcMain, net, protocol, safeStorage, shell } from 'electron';
-import { spawn } from 'node:child_process';
+import { spawn as spawnProcess } from 'node:child_process';
 import { createCipheriv, createDecipheriv, createHash, randomBytes, scryptSync } from 'node:crypto';
 import { existsSync, readFileSync, watch as fsWatch, type FSWatcher } from 'node:fs';
 import { access, copyFile, mkdir, readFile, readdir, stat, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { basename, dirname, extname, isAbsolute, join, relative, resolve } from 'node:path';
+import { createRequire } from 'node:module';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import type { IPty } from 'node-pty';
+
+// node-pty is a native CJS addon. In the packaged ESM main process, a static
+// `import ... from 'node-pty'` gets caught by Rollup's commonjs plugin, which
+// rewrites node-pty's internal dynamic require of conpty.node into a throwing
+// stub. Loading it via createRequire at runtime keeps it a real CommonJS
+// require so node-pty resolves its prebuilt native module from node_modules.
+const requireFromMain = createRequire(import.meta.url);
+const { spawn: spawnPty } = requireFromMain('node-pty') as typeof import('node-pty');
 import {
   detectDuplicates,
   GraphifyBuildQueue,
@@ -16,7 +26,9 @@ import {
   executeVaultCollabHandoffActions,
   portableDecrypt,
   portableEncrypt,
+  getVaultCollabExtensionPaths,
   resolveGraphifyCommandForRuntimeConfig,
+  resolveVaultCollabCliPath,
   resolveVaultCollabMcpServerPath,
   Vault,
 } from '@the-vault/core';
@@ -46,6 +58,7 @@ import type {
   VaultCollabDashboardActor,
   VaultCollabHandoffActionSet,
   VaultCollabDashboardOptions,
+  VaultCollabLaunchRequestSnapshot,
   VaultCollabRuntimeConfig,
   SaveVaultCollabRuntimeConfigInput,
 } from '@the-vault/core';
@@ -119,6 +132,27 @@ interface VaultCollabSourcePathDetection {
 }
 
 let vaultCollabDashboardActor: VaultCollabDashboardActor | null = null;
+
+interface ManagedVaultCollabTerminal {
+  launchRequestUid: string;
+  sessionUid: string;
+  sessionToken: string;
+  workspacePath: string;
+  pty: IPty;
+  startedAt: string;
+  lastOutputAt: number;
+  lastAttentionEventId: number;
+  pollTimer: ReturnType<typeof setInterval> | null;
+  polling: boolean;
+  paused: boolean;
+  // Set when the worker is being stopped intentionally (Stop button / broker
+  // cleanup) so onExit can record a clean `stop` instead of a `fail`.
+  stopping: boolean;
+}
+
+const managedVaultCollabTerminals = new Map<string, ManagedVaultCollabTerminal>();
+const MANAGED_TERMINAL_ATTENTION_POLL_MS = 3000;
+const MANAGED_TERMINAL_IDLE_WRITE_MS = 2500;
 
 protocol.registerSchemesAsPrivileged([
   {
@@ -294,6 +328,461 @@ function getVaultCollabDashboardActionRuntimeConfig(): VaultCollabRuntimeConfig 
   };
 }
 
+function buildVaultCollabCliCommand(config: VaultCollabRuntimeConfig): { command: string; args: string[] } {
+  if (config.runtimeMode === 'managed') {
+    return {
+      command: 'npm',
+      args: ['exec', '--yes', '--package', 'https://github.com/aliihsaad/vault-collab', '--', 'vault-collab'],
+    };
+  }
+
+  const cliPath = resolveVaultCollabCliPath(config);
+  if (!cliPath) {
+    throw new Error('Vault Collab CLI path is not configured.');
+  }
+
+  return {
+    command: 'node',
+    args: [cliPath],
+  };
+}
+
+function runProcessCapture(
+  command: string,
+  args: string[],
+  options: {
+    cwd?: string;
+    timeoutMs?: number;
+  } = {},
+): Promise<{ exitCode: number; stdout: string; stderr: string }> {
+  return new Promise((resolveResult) => {
+    const child = spawnProcess(command, args, {
+      cwd: options.cwd,
+      windowsHide: true,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    const chunks: Buffer[] = [];
+    const errorChunks: Buffer[] = [];
+    let settled = false;
+    const timeout = options.timeoutMs
+      ? setTimeout(() => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        child.kill();
+        resolveResult({
+          exitCode: 124,
+          stdout: Buffer.concat(chunks).toString('utf8'),
+          stderr: `Process timed out after ${options.timeoutMs}ms.`,
+        });
+      }, options.timeoutMs)
+      : null;
+
+    child.stdout?.on('data', (chunk: Buffer) => chunks.push(chunk));
+    child.stderr?.on('data', (chunk: Buffer) => errorChunks.push(chunk));
+    child.on('error', (error) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      if (timeout) {
+        clearTimeout(timeout);
+      }
+      resolveResult({
+        exitCode: 1,
+        stdout: Buffer.concat(chunks).toString('utf8'),
+        stderr: error.message,
+      });
+    });
+    child.on('close', (code) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      if (timeout) {
+        clearTimeout(timeout);
+      }
+      resolveResult({
+        exitCode: code ?? 0,
+        stdout: Buffer.concat(chunks).toString('utf8'),
+        stderr: Buffer.concat(errorChunks).toString('utf8'),
+      });
+    });
+  });
+}
+
+function parseJsonOutput<T>(stdout: string, label: string): T {
+  const trimmed = stdout.trim();
+  if (!trimmed) {
+    throw new Error(`${label} returned no JSON output.`);
+  }
+
+  return JSON.parse(trimmed) as T;
+}
+
+function formatCodexLaunchPrompt(launchRequest: VaultCollabLaunchRequestSnapshot, sessionUid: string, sessionToken: string): string {
+  return [
+    'You are a The Vault-launched Codex worker.',
+    '',
+    'Use Vault Collab for this session. The Vault already registered your managed worker session:',
+    `sessionUid: ${sessionUid}`,
+    `sessionToken: ${sessionToken}`,
+    `launchRequestUid: ${launchRequest.launchRequestUid}`,
+    '',
+    'Immediately inspect Vault Collab attention and the launch request context. Update progress through Vault Collab while working.',
+    'Do not push unless the user explicitly approves.',
+    '',
+    'Launch request instructions:',
+    launchRequest.initialInstructions,
+  ].join('\n');
+}
+
+async function registerVaultCollabManagedCodexSession(
+  config: VaultCollabRuntimeConfig,
+  launchRequest: VaultCollabLaunchRequestSnapshot,
+): Promise<{ sessionUid: string; sessionToken: string }> {
+  const base = buildVaultCollabCliCommand(config);
+  const result = await runProcessCapture(base.command, [
+    ...base.args,
+    'register',
+    '--db',
+    config.databasePath,
+    '--display-name',
+    `The Vault launched Codex - ${launchRequest.model}`,
+    '--client-type',
+    'codex',
+    '--project',
+    launchRequest.project,
+    '--workspace-path',
+    launchRequest.workspacePath,
+    '--delivery-mode',
+    'managed_process',
+    '--wakeable',
+    '--capability',
+    `launchedBy=${launchRequest.launchRequestUid}`,
+    '--capability',
+    'managedBy=the-vault',
+    '--capability',
+    'codexExec=true',
+  ], { timeoutMs: 30_000 });
+
+  if (result.exitCode !== 0) {
+    throw new Error(result.stderr.trim() || `Vault Collab managed session registration failed with exit code ${result.exitCode}.`);
+  }
+
+  const parsed = parseJsonOutput<{ sessionUid?: unknown; sessionToken?: unknown }>(result.stdout, 'Vault Collab register');
+  if (typeof parsed.sessionUid !== 'string' || typeof parsed.sessionToken !== 'string') {
+    throw new Error('Vault Collab register did not return a managed session owner token.');
+  }
+
+  return {
+    sessionUid: parsed.sessionUid,
+    sessionToken: parsed.sessionToken,
+  };
+}
+
+function startManagedVaultCollabTerminal(
+  config: VaultCollabRuntimeConfig,
+  actor: VaultCollabDashboardActor,
+  launchRequest: VaultCollabLaunchRequestSnapshot,
+  managedSession: { sessionUid: string; sessionToken: string },
+): ManagedVaultCollabTerminal {
+  if (managedVaultCollabTerminals.has(managedSession.sessionUid)) {
+    throw new Error(`Managed terminal already exists for session ${managedSession.sessionUid}.`);
+  }
+
+  const prompt = formatCodexLaunchPrompt(launchRequest, managedSession.sessionUid, managedSession.sessionToken);
+  // On Windows the codex CLI is installed as an npm .cmd/.ps1 shim, not a .exe.
+  // node-pty spawns via CreateProcessW, which only auto-appends .exe and cannot
+  // run a .cmd shim, so a bare 'codex' fails with ERROR_FILE_NOT_FOUND (code 2).
+  // Route through cmd.exe on Windows so PATHEXT resolves the shim.
+  const codexArgs = ['--no-alt-screen', '-C', launchRequest.workspacePath];
+  const isWindows = process.platform === 'win32';
+  const ptyFile = isWindows ? process.env.COMSPEC ?? 'cmd.exe' : 'codex';
+  const ptyArgs = isWindows ? ['/c', 'codex', ...codexArgs] : codexArgs;
+  const ptyProcess = spawnPty(ptyFile, ptyArgs, {
+    name: 'xterm-256color',
+    cols: 120,
+    rows: 40,
+    cwd: launchRequest.workspacePath,
+    env: {
+      ...process.env,
+      VAULT_COLLAB_MANAGED_SESSION_UID: managedSession.sessionUid,
+      VAULT_COLLAB_LAUNCH_REQUEST_UID: launchRequest.launchRequestUid,
+    },
+  });
+
+  const terminal: ManagedVaultCollabTerminal = {
+    launchRequestUid: launchRequest.launchRequestUid,
+    sessionUid: managedSession.sessionUid,
+    sessionToken: managedSession.sessionToken,
+    workspacePath: launchRequest.workspacePath,
+    pty: ptyProcess,
+    startedAt: new Date().toISOString(),
+    lastOutputAt: Date.now(),
+    lastAttentionEventId: 0,
+    pollTimer: null,
+    polling: false,
+    paused: false,
+    stopping: false,
+  };
+
+  managedVaultCollabTerminals.set(managedSession.sessionUid, terminal);
+
+  ptyProcess.onData((data) => {
+    terminal.lastOutputAt = Date.now();
+    win?.webContents.send('vault:taskEvent', {
+      type: 'vault-collab-terminal-output',
+      taskUid: managedSession.sessionUid,
+      task: null,
+      timestamp: new Date().toISOString(),
+      message: data.slice(-2000),
+      metadata: {
+        launchRequestUid: launchRequest.launchRequestUid,
+        sessionUid: managedSession.sessionUid,
+      },
+    });
+  });
+
+  ptyProcess.onExit(({ exitCode }) => {
+    const intentional = terminal.stopping;
+    stopManagedVaultCollabTerminal(managedSession.sessionUid);
+    void executeVaultCollabAction(config, actor, {
+      kind: 'session',
+      action: 'close',
+      targetSessionUid: managedSession.sessionUid,
+      reason: `Managed Codex terminal exited with code ${exitCode}.`,
+    });
+    // Close out the launch request so it does not linger as `running`.
+    // A user/broker stop or a clean exit is a `stop`; an unexpected non-zero
+    // exit is a `fail`. (`stop` requires the launch-stop transition shipped in
+    // the vault-collab extension; until then a clean stop simply stays running.)
+    const cleanEnd = intentional || exitCode === 0;
+    void executeVaultCollabAction(
+      config,
+      actor,
+      cleanEnd
+        ? {
+            kind: 'launch',
+            action: 'stop',
+            launchRequestUid: launchRequest.launchRequestUid,
+            detail: intentional
+              ? 'Managed Codex worker stopped from The Vault.'
+              : `Managed Codex worker exited cleanly (code ${exitCode}).`,
+            exitCode,
+          }
+        : {
+            kind: 'launch',
+            action: 'fail',
+            launchRequestUid: launchRequest.launchRequestUid,
+            reason: `Managed Codex worker exited with code ${exitCode}.`,
+          },
+    );
+  });
+
+  setTimeout(() => {
+    if (managedVaultCollabTerminals.has(managedSession.sessionUid)) {
+      ptyProcess.write(`${prompt}\r`);
+    }
+  }, 1500);
+
+  resumeManagedVaultCollabTerminalPolling(config, terminal);
+
+  return terminal;
+}
+
+function stopManagedVaultCollabTerminal(sessionUid: string): void {
+  const terminal = managedVaultCollabTerminals.get(sessionUid);
+  if (!terminal) {
+    return;
+  }
+
+  if (terminal.pollTimer) {
+    clearInterval(terminal.pollTimer);
+  }
+  managedVaultCollabTerminals.delete(sessionUid);
+}
+
+function pauseManagedVaultCollabTerminal(sessionUid: string): ManagedVaultCollabTerminal {
+  const terminal = requireManagedVaultCollabTerminal(sessionUid);
+  if (terminal.pollTimer) {
+    clearInterval(terminal.pollTimer);
+    terminal.pollTimer = null;
+  }
+  terminal.paused = true;
+  return terminal;
+}
+
+function resumeManagedVaultCollabTerminalPolling(
+  config: VaultCollabRuntimeConfig,
+  terminal: ManagedVaultCollabTerminal,
+): ManagedVaultCollabTerminal {
+  if (terminal.pollTimer) {
+    clearInterval(terminal.pollTimer);
+  }
+  terminal.paused = false;
+  terminal.pollTimer = setInterval(() => {
+    void deliverManagedVaultCollabAttention(config, terminal);
+  }, MANAGED_TERMINAL_ATTENTION_POLL_MS);
+  return terminal;
+}
+
+function requireManagedVaultCollabTerminal(sessionUid: string): ManagedVaultCollabTerminal {
+  const terminal = managedVaultCollabTerminals.get(sessionUid);
+  if (!terminal) {
+    throw new Error(`Managed terminal is not running for session ${sessionUid}.`);
+  }
+
+  return terminal;
+}
+
+function mapManagedVaultCollabTerminal(terminal: ManagedVaultCollabTerminal): {
+  sessionUid: string;
+  launchRequestUid: string;
+  workspacePath: string;
+  startedAt: string;
+  paused: boolean;
+  lastOutputAt: string;
+  lastAttentionEventId: number;
+} {
+  return {
+    sessionUid: terminal.sessionUid,
+    launchRequestUid: terminal.launchRequestUid,
+    workspacePath: terminal.workspacePath,
+    startedAt: terminal.startedAt,
+    paused: terminal.paused,
+    lastOutputAt: new Date(terminal.lastOutputAt).toISOString(),
+    lastAttentionEventId: terminal.lastAttentionEventId,
+  };
+}
+
+function killManagedVaultCollabTerminal(sessionUid: string): void {
+  const terminal = managedVaultCollabTerminals.get(sessionUid);
+  if (!terminal) {
+    return;
+  }
+
+  // Mark before kill so the pty's onExit records a clean stop, not a failure.
+  terminal.stopping = true;
+  stopManagedVaultCollabTerminal(sessionUid);
+  try {
+    terminal.pty.kill();
+  } catch {
+    // The process may already have exited.
+  }
+}
+
+async function deliverManagedVaultCollabAttention(
+  config: VaultCollabRuntimeConfig,
+  terminal: ManagedVaultCollabTerminal,
+): Promise<void> {
+  if (terminal.polling || !managedVaultCollabTerminals.has(terminal.sessionUid)) {
+    return;
+  }
+
+  if (Date.now() - terminal.lastOutputAt < MANAGED_TERMINAL_IDLE_WRITE_MS) {
+    return;
+  }
+
+  terminal.polling = true;
+  try {
+    const base = buildVaultCollabCliCommand(config);
+    const attention = await runProcessCapture(base.command, [
+      ...base.args,
+      'attention',
+      '--db',
+      config.databasePath,
+      '--session-uid',
+      terminal.sessionUid,
+      '--since-event-id',
+      String(terminal.lastAttentionEventId),
+    ], { timeoutMs: 30_000 });
+
+    if (attention.exitCode !== 0) {
+      return;
+    }
+
+    const feed = parseJsonOutput<{
+      latestEventId?: unknown;
+      items?: Array<{
+        kind?: unknown;
+        event?: { eventId?: unknown; payload?: Record<string, unknown> };
+        handoff?: { handoffUid?: unknown; shortPrompt?: unknown };
+        launchRequest?: { launchRequestUid?: unknown; model?: unknown };
+      }>;
+    }>(attention.stdout, 'Vault Collab attention');
+    const latestEventId = typeof feed.latestEventId === 'number' ? feed.latestEventId : terminal.lastAttentionEventId;
+    const items = Array.isArray(feed.items) ? feed.items : [];
+    if (items.length === 0 || latestEventId <= terminal.lastAttentionEventId) {
+      terminal.lastAttentionEventId = Math.max(terminal.lastAttentionEventId, latestEventId);
+      return;
+    }
+
+    terminal.pty.write(`\r${composeManagedAttentionPrompt(items)}\r`);
+
+    const ack = await runProcessCapture(base.command, [
+      ...base.args,
+      'attention-ack',
+      '--db',
+      config.databasePath,
+      '--session-uid',
+      terminal.sessionUid,
+      '--session-token',
+      terminal.sessionToken,
+      '--latest-event-id',
+      String(latestEventId),
+    ], { timeoutMs: 30_000 });
+
+    if (ack.exitCode === 0) {
+      terminal.lastAttentionEventId = latestEventId;
+    }
+  } catch (error) {
+    win?.webContents.send('vault:taskEvent', {
+      type: 'vault-collab-terminal-attention-error',
+      taskUid: terminal.sessionUid,
+      task: null,
+      timestamp: new Date().toISOString(),
+      message: error instanceof Error ? error.message : String(error),
+      metadata: {
+        launchRequestUid: terminal.launchRequestUid,
+        sessionUid: terminal.sessionUid,
+      },
+    });
+  } finally {
+    terminal.polling = false;
+  }
+}
+
+function composeManagedAttentionPrompt(items: Array<{
+  kind?: unknown;
+  event?: { eventId?: unknown; payload?: Record<string, unknown> };
+  handoff?: { handoffUid?: unknown; shortPrompt?: unknown };
+  launchRequest?: { launchRequestUid?: unknown; model?: unknown };
+}>): string {
+  const lines = [
+    '',
+    'Vault Collab attention received. Inspect this before continuing:',
+  ];
+
+  for (const item of items) {
+    const kind = typeof item.kind === 'string' ? item.kind : 'attention';
+    const fragments = [kind];
+    const payloadMessage = item.event?.payload?.message;
+    if (typeof payloadMessage === 'string') {
+      fragments.push(payloadMessage);
+    } else if (item.handoff) {
+      fragments.push(`${String(item.handoff.handoffUid ?? '')}: ${String(item.handoff.shortPrompt ?? '')}`.trim());
+    } else if (item.launchRequest) {
+      fragments.push(`${String(item.launchRequest.launchRequestUid ?? '')}: ${String(item.launchRequest.model ?? '')}`.trim());
+    }
+    lines.push(`- ${fragments.filter(Boolean).join(' - ')}`);
+  }
+
+  lines.push('Use Vault Collab tools to inspect details, update progress, and only claim/act when appropriate.');
+  return lines.join('\n');
+}
+
 function registerGraphifyArtifactProtocol(): void {
   protocol.handle('vault-graphify', async (request) => {
     try {
@@ -379,7 +868,7 @@ function runProcess(
     let stdout = '';
     let stderr = '';
     let settled = false;
-    const child = spawn(command, args, {
+  const child = spawnProcess(command, args, {
       cwd: options.cwd,
       shell: false,
       windowsHide: true,
@@ -2006,6 +2495,135 @@ app.whenReady().then(() => {
     }
   });
 
+  ipcMain.handle('vault:startVaultCollabLaunchRequest', async (_, launchRequestUid) => {
+    try {
+      if (typeof launchRequestUid !== 'string' || !launchRequestUid.trim()) {
+        throw new Error('Launch request UID is required.');
+      }
+
+      const config = getVaultCollabDashboardActionRuntimeConfig();
+      const actor = await ensureVaultCollabDashboardActor();
+      const snapshot = vault.getVaultCollabDashboardSnapshot({
+        launchRequestLimit: 100,
+        sessionLimit: 5,
+        handoffLimit: 5,
+        eventLimit: 5,
+      });
+      const launchRequest = snapshot.launchRequests.find((request) => request.launchRequestUid === launchRequestUid);
+      if (!launchRequest) {
+        throw new Error(`Launch request not found: ${launchRequestUid}`);
+      }
+      if (launchRequest.status !== 'approved') {
+        throw new Error(`Launch request must be approved before The Vault can start it. Current status: ${launchRequest.status}`);
+      }
+      if (launchRequest.provider !== 'codex') {
+        throw new Error(`The Vault launch broker currently supports Codex requests only. Provider was ${launchRequest.provider}.`);
+      }
+      if (!existsSync(launchRequest.workspacePath)) {
+        throw new Error(`Launch workspace does not exist: ${launchRequest.workspacePath}`);
+      }
+
+      const launching = await executeVaultCollabAction(config, actor, {
+        kind: 'launch',
+        action: 'mark_launching',
+        launchRequestUid,
+        detail: 'The Vault broker accepted the approved launch request.',
+      });
+      if (!launching.ok) {
+        throw new Error(launching.error || 'Could not mark launch request launching.');
+      }
+
+      let managedSession: { sessionUid: string; sessionToken: string } | null = null;
+      try {
+        managedSession = await registerVaultCollabManagedCodexSession(config, launchRequest);
+        startManagedVaultCollabTerminal(config, actor, launchRequest, managedSession);
+        const running = await executeVaultCollabAction(config, actor, {
+          kind: 'launch',
+          action: 'mark_running',
+          launchRequestUid,
+          launchedSessionUid: managedSession.sessionUid,
+          detail: 'The Vault started a managed Codex PTY and attached the wakeable session.',
+        });
+        if (!running.ok) {
+          throw new Error(running.error || 'Could not mark launch request running.');
+        }
+
+        return {
+          success: true,
+          data: {
+            launchRequestUid,
+            launchedSessionUid: managedSession.sessionUid,
+            command: 'codex',
+            args: ['--no-alt-screen', '-C', launchRequest.workspacePath, '[prompt delivered over PTY]'],
+          },
+        };
+      } catch (error) {
+        if (managedSession) {
+          killManagedVaultCollabTerminal(managedSession.sessionUid);
+        }
+        await executeVaultCollabAction(config, actor, {
+          kind: 'launch',
+          action: 'fail',
+          launchRequestUid,
+          reason: error instanceof Error ? error.message : String(error),
+        });
+        throw error;
+      }
+    } catch (e: any) {
+      return { success: false, error: e.message };
+    }
+  });
+
+  ipcMain.handle('vault:getVaultCollabManagedTerminals', () => {
+    try {
+      return {
+        success: true,
+        data: Array.from(managedVaultCollabTerminals.values()).map(mapManagedVaultCollabTerminal),
+      };
+    } catch (e: any) {
+      return { success: false, error: e.message };
+    }
+  });
+
+  ipcMain.handle('vault:controlVaultCollabManagedTerminal', async (_, input) => {
+    try {
+      const raw = input && typeof input === 'object' ? input as Record<string, unknown> : {};
+      const sessionUid = typeof raw.sessionUid === 'string' ? raw.sessionUid.trim() : '';
+      const action = raw.action;
+      if (!sessionUid) {
+        throw new Error('Managed session UID is required.');
+      }
+
+      if (action === 'pause') {
+        return { success: true, data: mapManagedVaultCollabTerminal(pauseManagedVaultCollabTerminal(sessionUid)) };
+      }
+
+      if (action === 'resume') {
+        const terminal = requireManagedVaultCollabTerminal(sessionUid);
+        return {
+          success: true,
+          data: mapManagedVaultCollabTerminal(resumeManagedVaultCollabTerminalPolling(getVaultCollabDashboardActionRuntimeConfig(), terminal)),
+        };
+      }
+
+      if (action === 'stop') {
+        const actor = await ensureVaultCollabDashboardActor();
+        killManagedVaultCollabTerminal(sessionUid);
+        await executeVaultCollabAction(getVaultCollabDashboardActionRuntimeConfig(), actor, {
+          kind: 'session',
+          action: 'close',
+          targetSessionUid: sessionUid,
+          reason: 'Stopped from The Vault dashboard.',
+        });
+        return { success: true, data: null };
+      }
+
+      throw new Error(`Unsupported managed terminal action: ${String(action)}`);
+    } catch (e: any) {
+      return { success: false, error: e.message };
+    }
+  });
+
   ipcMain.handle('vault:detectVaultCollabSourcePath', () => {
     try {
       return { success: true, data: detectVaultCollabSourcePath() };
@@ -2024,7 +2642,7 @@ app.whenReady().then(() => {
       const data = vault.saveVaultCollabRuntimeConfig({
         runtimeMode: 'localSource',
         localSourceCheckoutPath: detected.path,
-        databasePath: join(detected.path, 'vault-collab.db'),
+        databasePath: getVaultCollabExtensionPaths(vault.getVaultRoot()).database,
       });
       return { success: true, data };
     } catch (e: any) {
@@ -2046,7 +2664,7 @@ app.whenReady().then(() => {
       const data = vault.saveVaultCollabRuntimeConfig({
         runtimeMode: 'localSource',
         localSourceCheckoutPath: sourceRoot,
-        databasePath: join(sourceRoot, 'vault-collab.db'),
+        databasePath: getVaultCollabExtensionPaths(vault.getVaultRoot()).database,
       });
       return { success: true, data };
     } catch (e: any) {
@@ -2149,7 +2767,7 @@ app.whenReady().then(() => {
   async function readJsonFile(filePath: string): Promise<{ exists: boolean; data: Record<string, any> | null; error?: string }> {
     try {
       const content = await readFile(filePath, 'utf8');
-      return { exists: true, data: JSON.parse(content) };
+      return { exists: true, data: JSON.parse(stripUtf8Bom(content)) };
     } catch (err: any) {
       if (err.code === 'ENOENT') {
         return { exists: false, data: null };
@@ -2159,6 +2777,10 @@ app.whenReady().then(() => {
       }
       throw err;
     }
+  }
+
+  function stripUtf8Bom(content: string): string {
+    return content.charCodeAt(0) === 0xfeff ? content.slice(1) : content;
   }
 
   async function readTextFileIfExists(filePath: string): Promise<string | null> {

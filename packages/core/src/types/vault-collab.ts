@@ -36,6 +36,19 @@ export type VaultCollabSessionStatus =
 
 export type VaultCollabSessionConnectionState = 'fresh' | 'stale' | 'disconnected';
 
+export type VaultCollabSessionDeliveryMode =
+  | 'manual_poll'
+  | 'local_watch'
+  | 'mcp_notification'
+  | 'managed_process';
+
+export interface VaultCollabSessionDeliveryState {
+  mode: VaultCollabSessionDeliveryMode;
+  wakeable: boolean;
+  lastAckEventId: number | null;
+  lastAckAt: string | null;
+}
+
 export type VaultCollabHandoffStatus =
   | 'available'
   | 'claimed'
@@ -60,6 +73,7 @@ export type VaultCollabLaunchRequestStatus =
   | 'cancelled'
   | 'launching'
   | 'running'
+  | 'stopped'
   | 'failed';
 
 export interface VaultCollabDiscussionThreadSummary {
@@ -92,6 +106,7 @@ export interface VaultCollabSessionSnapshot {
   agentDisplayName: string | null;
   agentRole: string | null;
   currentHandoffUid: string | null;
+  delivery: VaultCollabSessionDeliveryState;
   lastHeartbeatAt: string;
   heartbeatAgeMs: number | null;
   createdAt: string;
@@ -136,6 +151,22 @@ export interface VaultCollabEventSnapshot {
   eventType: string;
   payload: VaultCollabJsonRecord;
   createdAt: string;
+}
+
+export type VaultCollabDeliveryAttemptStatus = 'delivered' | 'failed';
+
+export interface VaultCollabDeliveryAttemptSnapshot {
+  attemptUid: string;
+  sessionUid: string;
+  fromEventId: number;
+  toEventId: number;
+  deliveryMode: VaultCollabSessionDeliveryMode;
+  adapter: string;
+  status: VaultCollabDeliveryAttemptStatus;
+  message: string | null;
+  createdAt: string;
+  deliveredAt: string | null;
+  failedAt: string | null;
 }
 
 export interface VaultCollabLaunchRequestSnapshot {
@@ -188,6 +219,7 @@ export interface VaultCollabDashboardCounts {
   approvedLaunchRequests: number;
   launchingLaunchRequests: number;
   runningLaunchRequests: number;
+  stoppedLaunchRequests: number;
   failedLaunchRequests: number;
   events: number;
   sessionsByStatus: Record<VaultCollabSessionStatus, number>;
@@ -216,6 +248,7 @@ export interface VaultCollabDashboardSnapshot {
   sessions: VaultCollabSessionSnapshot[];
   handoffs: VaultCollabHandoffSnapshot[];
   launchRequests: VaultCollabLaunchRequestSnapshot[];
+  deliveryAttempts: VaultCollabDeliveryAttemptSnapshot[];
   events: VaultCollabEventSnapshot[];
   counts: VaultCollabDashboardCounts;
 }
@@ -229,10 +262,22 @@ export type VaultCollabDashboardHandoffAction =
   | 'claim'
   | 'release'
   | 'update'
+  | 'request_user_confirmation'
+  | 'request_handoff_permission'
   | 'resolve'
+  | 'recover'
   | 'reopen';
 
-export type VaultCollabDashboardLaunchAction = 'approve' | 'reject' | 'cancel';
+export type VaultCollabDashboardLaunchAction =
+  | 'approve'
+  | 'reject'
+  | 'cancel'
+  | 'mark_launching'
+  | 'mark_running'
+  | 'stop'
+  | 'fail';
+
+export type VaultCollabDashboardSessionAction = 'rename' | 'close' | 'ping';
 
 export type VaultCollabDashboardDiscussionMessageType =
   | 'note'
@@ -248,8 +293,10 @@ export type VaultCollabDashboardActionInput =
       handoffUid: string;
       status?: Extract<VaultCollabHandoffStatus, 'in_progress' | 'blocked' | 'awaiting_user' | 'verification_needed'>;
       progressNote?: string;
+      question?: string;
       summary?: string;
       reason?: string;
+      evidenceVaultMemoryUid?: string;
     }
   | {
       kind: 'discussion';
@@ -266,10 +313,30 @@ export type VaultCollabDashboardActionInput =
       title: string;
     }
   | {
+      kind: 'session';
+      action: 'rename';
+      sessionUid: string;
+      displayName: string;
+    }
+  | {
+      kind: 'session';
+      action: 'close';
+      targetSessionUid: string;
+      reason?: string;
+    }
+  | {
+      kind: 'session';
+      action: 'ping';
+      targetSessionUid: string;
+      message?: string;
+    }
+  | {
       kind: 'launch';
       action: VaultCollabDashboardLaunchAction;
       launchRequestUid: string;
+      launchedSessionUid?: string;
       detail?: string;
+      exitCode?: number;
       reason?: string;
     };
 

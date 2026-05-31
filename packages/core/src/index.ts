@@ -181,6 +181,8 @@ export type {
   VaultCollabDashboardSnapshot,
   VaultCollabDashboardActionInput,
   VaultCollabDashboardActor,
+  VaultCollabDeliveryAttemptSnapshot,
+  VaultCollabDeliveryAttemptStatus,
   VaultCollabEventSnapshot,
   VaultCollabHandoffPriority,
   VaultCollabHandoffActionAffordance,

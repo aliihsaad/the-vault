@@ -13,6 +13,11 @@ export const DEFAULT_RECALL_PACKING = {
   detailExpansionLimit: 2,
 };
 
+export const RECALL_ANALYTICS_DAYS = 14;
+export const RECALL_ANALYTICS_LOG_LIMIT = 5000;
+export const OPERATIONAL_ANALYTICS_DAYS = 14;
+export const OPERATIONAL_ANALYTICS_LOG_LIMIT = RECALL_ANALYTICS_LOG_LIMIT;
+
 const ESTIMATED_FULL_CANDIDATE_TOKENS = 120;
 const ESTIMATED_COMPACT_MATCH_TOKENS = 28;
 const ESTIMATED_DETAIL_EXPANSION_TOKENS = 90;
@@ -180,6 +185,23 @@ export function getRecallPackingSettings(settings: VaultSettings | null): Recall
       4,
     ),
   };
+}
+
+export function getRecallAnalyticsDateFrom(
+  referenceDate: Date = new Date(),
+  days: number = RECALL_ANALYTICS_DAYS,
+): string {
+  const start = new Date(referenceDate);
+  start.setHours(0, 0, 0, 0);
+  start.setDate(start.getDate() - Math.max(days - 1, 0));
+  return start.toISOString();
+}
+
+export function getOperationalAnalyticsDateFrom(
+  referenceDate: Date = new Date(),
+  days: number = OPERATIONAL_ANALYTICS_DAYS,
+): string {
+  return getRecallAnalyticsDateFrom(referenceDate, days);
 }
 
 export function buildRecallTrend(

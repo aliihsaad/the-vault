@@ -326,6 +326,22 @@ describe('Vault Collab extension runtime config', () => {
       null,
     );
 
+    db.exec(`
+      ALTER TABLE sessions ADD COLUMN delivery_mode TEXT NOT NULL DEFAULT 'manual_poll';
+      ALTER TABLE sessions ADD COLUMN delivery_wakeable INTEGER NOT NULL DEFAULT 0;
+      ALTER TABLE sessions ADD COLUMN delivery_last_ack_event_id INTEGER;
+      ALTER TABLE sessions ADD COLUMN delivery_last_ack_at TEXT;
+    `);
+
+    db.prepare(`
+      UPDATE sessions
+      SET delivery_mode = ?,
+          delivery_wakeable = ?,
+          delivery_last_ack_event_id = ?,
+          delivery_last_ack_at = ?
+      WHERE session_uid = ?
+    `).run('managed_process', 1, 42, '2026-05-28T11:58:00.000Z', 'vc_sess_codex');
+
     db.prepare(`
       INSERT INTO handoffs (
         handoff_uid,
@@ -523,12 +539,24 @@ describe('Vault Collab extension runtime config', () => {
       effectiveStatus: 'working',
       heartbeatAgeMs: 60_000,
       capabilities: { tools: ['mcp', 'shell'] },
+      delivery: {
+        mode: 'managed_process',
+        wakeable: true,
+        lastAckEventId: 42,
+        lastAckAt: '2026-05-28T11:58:00.000Z',
+      },
     }));
     expect(snapshot.sessions.find((session) => session.sessionUid === 'vc_sess_claude')).toEqual(expect.objectContaining({
       displayName: 'Claude Code',
       status: 'idle',
       effectiveStatus: 'idle',
       connectionState: 'stale',
+      delivery: {
+        mode: 'manual_poll',
+        wakeable: false,
+        lastAckEventId: null,
+        lastAckAt: null,
+      },
     }));
     expect(snapshot.sessions.find((session) => session.sessionUid === 'vc_sess_closed_recent')).toEqual(expect.objectContaining({
       displayName: 'Claude Desktop',
@@ -1092,7 +1120,7 @@ describe('Vault Collab extension runtime config', () => {
     }));
     expect(snapshot.counts).toEqual(expect.objectContaining({
       launchRequests: 3,
-      activeLaunchRequests: 2,
+      activeLaunchRequests: 1,
       requestedLaunchRequests: 1,
       runningLaunchRequests: 1,
       failedLaunchRequests: 1,

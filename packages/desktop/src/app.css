@@ -2212,6 +2212,17 @@ select.text-input optgroup {
   align-items: center;
 }
 
+.vault-collab-delivery-detail {
+  color: var(--text-muted);
+  font-size: 0.74rem;
+  line-height: 1.4;
+}
+
+.vault-collab-session-actions {
+  gap: 6px;
+  padding-top: 2px;
+}
+
 .vault-collab-session-note {
   padding-top: 8px;
   border-top: 1px solid rgba(141, 174, 214, 0.1);

@@ -11,6 +11,7 @@ import type {
 } from '../types/vault-collab.js';
 
 const TOKEN_OPTION = '--session-token';
+const ACTOR_TOKEN_OPTION = '--actor-session-token';
 const execFileAsync = promisify(execFile);
 
 export interface VaultCollabActionRunnerResult {
@@ -59,7 +60,9 @@ export function redactVaultCollabActionInvocation(
   invocation: VaultCollabActionInvocation,
 ): VaultCollabActionInvocation {
   const args = invocation.args.map((arg, index) => (
-    index > 0 && invocation.args[index - 1] === TOKEN_OPTION ? '[redacted]' : arg
+    index > 0 && (invocation.args[index - 1] === TOKEN_OPTION || invocation.args[index - 1] === ACTOR_TOKEN_OPTION)
+      ? '[redacted]'
+      : arg
   ));
 
   return {
@@ -92,6 +95,10 @@ export function buildVaultCollabDashboardSessionInvocation(
       'dashboardActions=true',
       '--capability',
       'launchApproval=true',
+      '--capability',
+      'launchBroker=true',
+      '--capability',
+      'sessionAdmin=true',
     ],
   };
 }
@@ -334,7 +341,56 @@ function buildActionArgs(
     ];
   }
 
+  if (input.kind === 'session') {
+    return buildSessionActionArgs(databasePath, actor, input);
+  }
+
   return buildLaunchActionArgs(databasePath, actor, input);
+}
+
+function buildSessionActionArgs(
+  databasePath: string,
+  actor: VaultCollabDashboardActor,
+  input: Extract<VaultCollabDashboardActionInput, { kind: 'session' }>,
+): string[] {
+  switch (input.action) {
+    case 'rename':
+      return [
+        'session-rename',
+        '--db',
+        databasePath,
+        '--session-uid',
+        input.sessionUid,
+        TOKEN_OPTION,
+        actor.sessionToken,
+        '--display-name',
+        requiredValue(input.displayName, 'Session display name'),
+      ];
+    case 'close':
+      return [
+        'session-close',
+        '--db',
+        databasePath,
+        '--target-session-uid',
+        input.targetSessionUid,
+        '--actor-session-uid',
+        actor.sessionUid,
+        ACTOR_TOKEN_OPTION,
+        actor.sessionToken,
+        ...(input.reason ? ['--reason', input.reason] : []),
+      ];
+    case 'ping':
+      return [
+        'ping-session',
+        '--db',
+        databasePath,
+        '--target-session-uid',
+        input.targetSessionUid,
+        '--actor-session-uid',
+        actor.sessionUid,
+        ...(input.message ? ['--message', input.message] : []),
+      ];
+  }
 }
 
 function buildHandoffActionArgs(
@@ -367,6 +423,24 @@ function buildHandoffActionArgs(
         '--progress-note',
         requiredValue(input.progressNote, 'Handoff progress note'),
       ];
+    case 'request_user_confirmation':
+      return [
+        'user-confirmation-request',
+        '--db',
+        databasePath,
+        ...ownerArgs,
+        '--question',
+        requiredValue(input.question, 'User confirmation question'),
+      ];
+    case 'request_handoff_permission':
+      return [
+        'handoff-permission-request',
+        '--db',
+        databasePath,
+        ...ownerArgs,
+        '--question',
+        requiredValue(input.question, 'Handoff permission question'),
+      ];
     case 'resolve':
       return [
         'resolve',
@@ -375,6 +449,24 @@ function buildHandoffActionArgs(
         ...ownerArgs,
         '--summary',
         requiredValue(input.summary, 'Handoff resolution summary'),
+      ];
+    case 'recover':
+      return [
+        'recover',
+        '--db',
+        databasePath,
+        '--handoff-uid',
+        input.handoffUid,
+        '--actor-session-uid',
+        actor.sessionUid,
+        ACTOR_TOKEN_OPTION,
+        actor.sessionToken,
+        '--reason',
+        requiredValue(input.reason, 'Handoff recovery reason'),
+        '--summary',
+        requiredValue(input.summary, 'Handoff recovery summary'),
+        '--evidence-vault-memory-uid',
+        requiredValue(input.evidenceVaultMemoryUid, 'Recovery evidence Vault memory UID'),
       ];
     case 'reopen':
       return [
@@ -429,6 +521,44 @@ function buildLaunchActionArgs(
         ...ownerArgs,
         '--reason',
         requiredValue(input.reason, 'Launch cancellation reason'),
+      ];
+    case 'mark_launching':
+      return [
+        'launch-mark-launching',
+        '--db',
+        databasePath,
+        ...ownerArgs,
+        ...(input.detail ? ['--detail', input.detail] : []),
+      ];
+    case 'mark_running':
+      return [
+        'launch-mark-running',
+        '--db',
+        databasePath,
+        ...ownerArgs,
+        '--launched-session-uid',
+        requiredValue(input.launchedSessionUid, 'Launched session UID'),
+        ...(input.detail ? ['--detail', input.detail] : []),
+      ];
+    case 'stop':
+      // Clean terminal transition for a managed worker that ended without error.
+      // Distinct from `fail` (which is for spawn errors / non-zero exits).
+      return [
+        'launch-stop',
+        '--db',
+        databasePath,
+        ...ownerArgs,
+        ...(input.detail ? ['--detail', input.detail] : []),
+        ...(typeof input.exitCode === 'number' && Number.isFinite(input.exitCode) ? ['--exit-code', String(input.exitCode)] : []),
+      ];
+    case 'fail':
+      return [
+        'launch-fail',
+        '--db',
+        databasePath,
+        ...ownerArgs,
+        '--reason',
+        requiredValue(input.reason, 'Launch failure reason'),
       ];
   }
 }

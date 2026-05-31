@@ -3,7 +3,7 @@
 // Find, filter, recall, and get memory items.
 // ============================================================================
 
-import { eq, and, like, desc, gte, lte, sql } from 'drizzle-orm';
+import { eq, and, like, desc, gte, lte, sql, or, inArray } from 'drizzle-orm';
 import { existsSync, unlinkSync } from 'node:fs';
 import { memoryItems } from '../database/schema.js';
 import { FindMemoryQuerySchema, RecallQuerySchema, ResolveLoopInputSchema } from '../rules/validation.js';
@@ -21,6 +21,7 @@ import { logActivity } from './log.service.js';
 import { isEnrichmentAvailable, reRankWithLLM, generateContextSummary } from './enrichment.service.js';
 import { expandRecallWithRelated, surfaceProactiveContext } from './agent-duties.service.js';
 import { now } from '../utils/datetime.js';
+import { extractMemoryUidTokens } from '../utils/memory-uid.js';
 import type {
   MemoryItem,
   MemoryItemDetail,
@@ -70,6 +71,7 @@ function toRecallReasons(signals: Record<string, number>): string[] {
     ['recency7d', 'recent within 7 days'],
     ['recency30d', 'recent within 30 days'],
     ['highAccess', 'frequently accessed'],
+    ['memoryUidExact', 'exact memory UID match'],
     ['relatedToTopMatch', 'related to top match'],
     ['proactiveContext', 'proactive context'],
     ['queryTextTitle', 'query matched title'],
@@ -217,17 +219,26 @@ export async function recallContext(
 ): Promise<MemoryPack> {
   const startTime = Date.now();
   const validated = RecallQuerySchema.parse(query);
+  const requestedItemUids = extractMemoryUidTokens(
+    validated.queryText,
+    validated.subject,
+    validated.keywords,
+    validated.tags,
+  );
 
   // Step 1: Get broad candidate set
   const conditions = [];
   if (validated.project) {
-    conditions.push(eq(memoryItems.project, validated.project));
+    conditions.push(requestedItemUids.length > 0
+      ? or(eq(memoryItems.project, validated.project), inArray(memoryItems.itemUid, requestedItemUids))
+      : eq(memoryItems.project, validated.project));
   }
   // Exclude terminal lifecycle states by default. Stale items still surface
   // (they're a soft warning, not removal); promoted items always surface.
-  conditions.push(
-    sql`${memoryItems.status} NOT IN ('archived', 'pending_delete') OR ${memoryItems.promoted} = 1`,
-  );
+  const recallableState = sql`${memoryItems.status} NOT IN ('archived', 'pending_delete') OR ${memoryItems.promoted} = 1`;
+  conditions.push(requestedItemUids.length > 0
+    ? or(recallableState, inArray(memoryItems.itemUid, requestedItemUids))
+    : recallableState);
 
   const candidates =
     conditions.length > 0

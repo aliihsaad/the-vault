@@ -10,6 +10,9 @@ import {
   estimateTokensSaved,
   extractResultCount,
   extractTotalCandidates,
+  getOperationalAnalyticsDateFrom,
+  OPERATIONAL_ANALYTICS_DAYS,
+  OPERATIONAL_ANALYTICS_LOG_LIMIT,
 } from './cockpit-metrics.js';
 
 function log(overrides: Partial<VaultLogEntry>): VaultLogEntry {
@@ -164,6 +167,18 @@ describe('cockpit metrics', () => {
     expect(saturdayRows).toHaveLength(2);
     expect(new Set(saturdayRows.map((row) => row.key)).size).toBe(2);
     expect(saturdayRows.map((row) => row.total)).toEqual([1, 1]);
+  });
+
+  it('uses an explicit full fourteen-day window for operational analytics logs', () => {
+    const start = new Date(getOperationalAnalyticsDateFrom(new Date(2026, 4, 28, 15, 30)));
+
+    expect(OPERATIONAL_ANALYTICS_DAYS).toBe(14);
+    expect(OPERATIONAL_ANALYTICS_LOG_LIMIT).toBeGreaterThan(500);
+    expect(start.getFullYear()).toBe(2026);
+    expect(start.getMonth()).toBe(4);
+    expect(start.getDate()).toBe(15);
+    expect(start.getHours()).toBe(0);
+    expect(start.getMinutes()).toBe(0);
   });
 
   it('derives project cockpit rows from real project, workspace, log, memory, and loop inputs', () => {

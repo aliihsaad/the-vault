@@ -7,6 +7,12 @@ import {
 import type { VaultCollabDashboardSnapshot } from '@the-vault/core';
 
 const now = new Date('2026-05-30T00:20:00.000Z');
+const defaultDelivery = {
+  mode: 'manual_poll' as const,
+  wakeable: false,
+  lastAckEventId: null,
+  lastAckAt: null,
+};
 
 function snapshot(overrides: Partial<VaultCollabDashboardSnapshot> = {}): VaultCollabDashboardSnapshot {
   return {
@@ -19,6 +25,7 @@ function snapshot(overrides: Partial<VaultCollabDashboardSnapshot> = {}): VaultC
     sessions: [],
     handoffs: [],
     launchRequests: [],
+    deliveryAttempts: [],
     events: [],
     counts: {
       sessions: 0,
@@ -40,6 +47,7 @@ function snapshot(overrides: Partial<VaultCollabDashboardSnapshot> = {}): VaultC
       approvedLaunchRequests: 0,
       launchingLaunchRequests: 0,
       runningLaunchRequests: 0,
+      stoppedLaunchRequests: 0,
       failedLaunchRequests: 0,
       events: 0,
       sessionsByStatus: {
@@ -69,6 +77,7 @@ function snapshot(overrides: Partial<VaultCollabDashboardSnapshot> = {}): VaultC
         cancelled: 0,
         launching: 0,
         running: 0,
+        stopped: 0,
         failed: 0,
       },
     },
@@ -121,6 +130,7 @@ describe('Vault Collab dashboard view model', () => {
           agentDisplayName: null,
           agentRole: null,
           currentHandoffUid: null,
+          delivery: defaultDelivery,
           lastHeartbeatAt: now.toISOString(),
           heartbeatAgeMs: 30000,
           createdAt: now.toISOString(),
@@ -143,6 +153,7 @@ describe('Vault Collab dashboard view model', () => {
           agentDisplayName: 'Review Agent',
           agentRole: 'code_review',
           currentHandoffUid: 'vc_handoff_attention',
+          delivery: defaultDelivery,
           lastHeartbeatAt: now.toISOString(),
           heartbeatAgeMs: 90000,
           createdAt: now.toISOString(),
@@ -160,6 +171,123 @@ describe('Vault Collab dashboard view model', () => {
       connectionLabel: 'fresh',
       secondary: 'Claude Code / Vault Collab / Claude reviewer / agent-abcd...',
     });
+  });
+
+  it('describes session delivery state and exposes roster actions conservatively', () => {
+    const model = buildVaultCollabDashboardViewModel(snapshot({
+      sessions: [
+        {
+          sessionUid: 'vc_sess_dashboard',
+          displayName: 'The Vault dashboard',
+          clientType: 'other',
+          project: 'the-vault',
+          workspacePath: 'C:/workspace/the-vault',
+          status: 'idle',
+          effectiveStatus: 'idle',
+          connectionState: 'fresh',
+          statusDetail: null,
+          capabilities: { sessionAdmin: true },
+          agentUid: null,
+          agentName: null,
+          agentDisplayName: null,
+          agentRole: null,
+          currentHandoffUid: null,
+          delivery: {
+            mode: 'manual_poll',
+            wakeable: false,
+            lastAckEventId: null,
+            lastAckAt: null,
+          },
+          lastHeartbeatAt: now.toISOString(),
+          heartbeatAgeMs: 20000,
+          createdAt: now.toISOString(),
+          updatedAt: now.toISOString(),
+          disconnectedAt: null,
+        },
+        {
+          sessionUid: 'vc_sess_stale_1234567890',
+          displayName: 'Old Codex dashboard',
+          clientType: 'codex',
+          project: 'the-vault',
+          workspacePath: 'C:/workspace/the-vault',
+          status: 'idle',
+          effectiveStatus: 'idle',
+          connectionState: 'stale',
+          statusDetail: 'Waiting for attention.',
+          capabilities: {},
+          agentUid: null,
+          agentName: null,
+          agentDisplayName: null,
+          agentRole: null,
+          currentHandoffUid: null,
+          delivery: {
+            mode: 'manual_poll',
+            wakeable: false,
+            lastAckEventId: null,
+            lastAckAt: null,
+          },
+          lastHeartbeatAt: new Date(now.getTime() - 20 * 60_000).toISOString(),
+          heartbeatAgeMs: 20 * 60_000,
+          createdAt: now.toISOString(),
+          updatedAt: now.toISOString(),
+          disconnectedAt: null,
+        },
+        {
+          sessionUid: 'vc_sess_managed_1234567890',
+          displayName: 'Managed receiver',
+          clientType: 'codex',
+          project: 'Vault Collab',
+          workspacePath: 'C:/workspace/vault-collab',
+          status: 'working',
+          effectiveStatus: 'working',
+          connectionState: 'fresh',
+          statusDetail: null,
+          capabilities: {},
+          agentUid: null,
+          agentName: null,
+          agentDisplayName: null,
+          agentRole: null,
+          currentHandoffUid: null,
+          delivery: {
+            mode: 'managed_process',
+            wakeable: true,
+            lastAckEventId: 12,
+            lastAckAt: '2026-05-30T00:18:00.000Z',
+          },
+          lastHeartbeatAt: now.toISOString(),
+          heartbeatAgeMs: 20000,
+          createdAt: now.toISOString(),
+          updatedAt: now.toISOString(),
+          disconnectedAt: null,
+        },
+      ],
+    }), now, null, { dashboardSessionUid: 'vc_sess_dashboard' });
+
+    const ownRow = model.sessionGroups.flatMap((group) => group.sessions).find((session) => session.uid === 'vc_sess_dashboard');
+    const staleRow = model.sessionGroups.flatMap((group) => group.sessions).find((session) => session.uid === 'vc_sess_stale_1234567890');
+    const managedRow = model.sessionGroups.flatMap((group) => group.sessions).find((session) => session.uid === 'vc_sess_managed_1234567890');
+
+    expect(ownRow).toEqual(expect.objectContaining({
+      deliveryLabel: 'Manual attention',
+      deliveryDetail: 'Stores pings only; target must poll or run a watcher.',
+      lastAckLabel: 'no ack yet',
+      canRename: true,
+      canClose: false,
+      canPing: false,
+    }));
+    expect(staleRow).toEqual(expect.objectContaining({
+      deliveryLabel: 'Manual attention',
+      canRename: false,
+      canClose: true,
+      canPing: true,
+    }));
+    expect(managedRow).toEqual(expect.objectContaining({
+      deliveryLabel: 'Wakeable managed',
+      deliveryDetail: 'Ping can be picked up by the managed receiver; wait for ack.',
+      lastAckLabel: 'ack 2m ago',
+      canClose: false,
+      canPing: true,
+    }));
   });
 
   it('builds queue rows, selected detail, and owned handoff actions without exposing full raw ids by default', () => {
@@ -322,6 +450,93 @@ describe('Vault Collab dashboard view model', () => {
           completedAt: null,
         },
         {
+          launchRequestUid: 'vc_launch_approved_1234567890',
+          provider: 'codex',
+          model: 'gpt-5-codex',
+          effortLevel: 'medium',
+          project: 'the-vault',
+          workspacePath: 'C:/workspace/the-vault',
+          role: 'brokered worker',
+          initialInstructions: 'Launch after approval.',
+          permissionMode: 'workspace-write',
+          commandPreview: 'codex -C C:/workspace/the-vault',
+          requestedCapabilities: [],
+          approvalPolicyVersion: null,
+          approvalSnapshot: null,
+          status: 'approved',
+          statusDetail: 'Approved for broker pickup.',
+          requestedBySessionUid: 'vc_sess_requester_1234567890',
+          approvedBySessionUid: 'vc_sess_approver_1234567890',
+          rejectedBySessionUid: null,
+          brokerSessionUid: null,
+          launchedSessionUid: null,
+          metadata: {},
+          createdAt: '2026-05-30T00:07:00.000Z',
+          updatedAt: '2026-05-30T00:17:00.000Z',
+          approvedAt: '2026-05-30T00:17:00.000Z',
+          rejectedAt: null,
+          startedAt: null,
+          completedAt: null,
+        },
+        {
+          launchRequestUid: 'vc_launch_launching_1234567890',
+          provider: 'codex',
+          model: 'gpt-5-codex',
+          effortLevel: null,
+          project: 'the-vault',
+          workspacePath: 'C:/workspace/the-vault',
+          role: 'brokered worker',
+          initialInstructions: 'Attach registered session.',
+          permissionMode: 'workspace-write',
+          commandPreview: null,
+          requestedCapabilities: [],
+          approvalPolicyVersion: null,
+          approvalSnapshot: null,
+          status: 'launching',
+          statusDetail: 'Broker accepted request.',
+          requestedBySessionUid: 'vc_sess_requester_1234567890',
+          approvedBySessionUid: 'vc_sess_approver_1234567890',
+          rejectedBySessionUid: null,
+          brokerSessionUid: 'vc_sess_broker_1234567890',
+          launchedSessionUid: null,
+          metadata: {},
+          createdAt: '2026-05-30T00:08:00.000Z',
+          updatedAt: '2026-05-30T00:16:00.000Z',
+          approvedAt: '2026-05-30T00:12:00.000Z',
+          rejectedAt: null,
+          startedAt: '2026-05-30T00:16:00.000Z',
+          completedAt: null,
+        },
+        {
+          launchRequestUid: 'vc_launch_stopped_1234567890',
+          provider: 'codex',
+          model: 'gpt-5-codex',
+          effortLevel: null,
+          project: 'the-vault',
+          workspacePath: 'C:/workspace/the-vault',
+          role: 'smoke worker',
+          initialInstructions: 'Smoke test stop behavior.',
+          permissionMode: 'workspace-write',
+          commandPreview: null,
+          requestedCapabilities: [],
+          approvalPolicyVersion: null,
+          approvalSnapshot: null,
+          status: 'stopped',
+          statusDetail: 'Managed Codex worker stopped from The Vault.',
+          requestedBySessionUid: 'vc_sess_requester_1234567890',
+          approvedBySessionUid: 'vc_sess_approver_1234567890',
+          rejectedBySessionUid: null,
+          brokerSessionUid: 'vc_sess_broker_1234567890',
+          launchedSessionUid: 'vc_sess_worker_1234567890',
+          metadata: {},
+          createdAt: '2026-05-30T00:04:00.000Z',
+          updatedAt: '2026-05-30T00:13:00.000Z',
+          approvedAt: '2026-05-30T00:05:00.000Z',
+          rejectedAt: null,
+          startedAt: '2026-05-30T00:06:00.000Z',
+          completedAt: '2026-05-30T00:13:00.000Z',
+        },
+        {
           launchRequestUid: 'vc_launch_failed_1234567890',
           provider: 'claude-code',
           model: 'claude-opus',
@@ -353,20 +568,26 @@ describe('Vault Collab dashboard view model', () => {
       ],
       counts: {
         ...snapshot().counts,
-        launchRequests: 2,
-        activeLaunchRequests: 1,
+        launchRequests: 5,
+        activeLaunchRequests: 2,
         requestedLaunchRequests: 1,
+        approvedLaunchRequests: 1,
+        launchingLaunchRequests: 1,
+        stoppedLaunchRequests: 1,
         failedLaunchRequests: 1,
         launchRequestsByStatus: {
           ...snapshot().counts.launchRequestsByStatus,
           requested: 1,
+          approved: 1,
+          launching: 1,
+          stopped: 1,
           failed: 1,
         },
       },
     }), now);
 
-    expect(model.statusItems).toContain('1 active launches');
-    expect(model.launchRequestRows).toHaveLength(2);
+    expect(model.statusItems).toContain('2 active launches');
+    expect(model.launchRequestRows).toHaveLength(5);
     expect(model.handoffRows).toHaveLength(0);
     expect(model.launchRequestRows[0]).toMatchObject({
       uid: 'vc_launch_0772c645-c3ef-4d4a-bf0c-7c0fa035cfe8',
@@ -380,14 +601,30 @@ describe('Vault Collab dashboard view model', () => {
       actorLabel: 'by vc_sess_...',
       commandPreview: 'codex --project the-vault',
       capabilityLabel: '2 caps',
-      attention: true,
+      attention: false,
     });
     expect(model.launchRequestRows[0].actions.map((action) => action.action)).toEqual([
       'approve',
       'reject',
       'cancel',
     ]);
-    expect(model.launchRequestRows[1]).toMatchObject({
+    expect(model.launchRequestRows[1].actions.map((action) => action.action)).toEqual([
+      'mark_launching',
+      'cancel',
+      'fail',
+    ]);
+    expect(model.launchRequestRows[2].actions.map((action) => action.action)).toEqual([
+      'mark_running',
+      'fail',
+    ]);
+    expect(model.launchRequestRows[3]).toMatchObject({
+      statusLabel: 'stopped',
+      badgeClass: 'badge-task-complete',
+      railClass: 'queue-status-rail-completed',
+      attention: false,
+      detail: 'Managed Codex worker stopped from The Vault.',
+    });
+    expect(model.launchRequestRows[4]).toMatchObject({
       statusLabel: 'failed',
       badgeClass: 'badge-task-fail',
       railClass: 'queue-status-rail-failed',

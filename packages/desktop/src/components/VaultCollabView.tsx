@@ -8,9 +8,15 @@ import {
   Inbox,
   Link2,
   MessageSquareText,
+  Pencil,
+  Pause,
+  Play,
   RefreshCw,
   Rocket,
+  Send,
+  Square,
   Tag,
+  UserX,
   Users,
 } from 'lucide-react';
 
@@ -30,9 +36,11 @@ export function VaultCollabView() {
   const [error, setError] = useState<string | null>(null);
   const [actionBusy, setActionBusy] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
+  const [actionNotice, setActionNotice] = useState<string | null>(null);
   const [dashboardSessionUid, setDashboardSessionUid] = useState<string | null>(null);
   const [discussionDraft, setDiscussionDraft] = useState('');
   const [handoffActionSet, setHandoffActionSet] = useState<VaultCollabHandoffActionSet | null>(null);
+  const [managedTerminals, setManagedTerminals] = useState<VaultCollabManagedTerminalStatus[]>([]);
 
   useEffect(() => {
     void loadDashboard();
@@ -90,6 +98,7 @@ export function VaultCollabView() {
       }
 
       setSnapshot(response.data);
+      void loadManagedTerminals();
       setLastLoadedAt(new Date());
       setSelectedHandoffUid((current) => {
         if (response.data!.handoffs.length === 0) {
@@ -108,6 +117,13 @@ export function VaultCollabView() {
       if (!silent) {
         setLoading(false);
       }
+    }
+  }
+
+  async function loadManagedTerminals() {
+    const response = await window.vaultAPI.getVaultCollabManagedTerminals();
+    if (response.success && response.data) {
+      setManagedTerminals(response.data);
     }
   }
 
@@ -137,6 +153,7 @@ export function VaultCollabView() {
   async function performDashboardAction(input: VaultCollabDashboardActionInput, busyKey: string): Promise<unknown | null> {
     setActionBusy(busyKey);
     setActionError(null);
+    setActionNotice(null);
 
     try {
       const response = await window.vaultAPI.performVaultCollabDashboardAction(input);
@@ -206,8 +223,55 @@ export function VaultCollabView() {
       return;
     }
 
-    if (action === 'request_user_confirmation' || action === 'request_handoff_permission' || action === 'recover') {
-      setActionError(`${action.replace(/_/g, ' ')} is not wired in this dashboard build yet.`);
+    if (action === 'request_user_confirmation') {
+      const question = window.prompt('Question for the user');
+      if (!question?.trim()) {
+        return;
+      }
+      await performDashboardAction({
+        kind: 'handoff',
+        action: 'request_user_confirmation',
+        handoffUid,
+        question: question.trim(),
+      }, `${handoffUid}:request_user_confirmation`);
+      return;
+    }
+
+    if (action === 'request_handoff_permission') {
+      const question = window.prompt('Permission request');
+      if (!question?.trim()) {
+        return;
+      }
+      await performDashboardAction({
+        kind: 'handoff',
+        action: 'request_handoff_permission',
+        handoffUid,
+        question: question.trim(),
+      }, `${handoffUid}:request_handoff_permission`);
+      return;
+    }
+
+    if (action === 'recover') {
+      const reason = window.prompt('Recovery reason');
+      if (!reason?.trim()) {
+        return;
+      }
+      const summary = window.prompt('Recovery summary');
+      if (!summary?.trim()) {
+        return;
+      }
+      const evidenceVaultMemoryUid = window.prompt('Evidence Vault memory UID');
+      if (!evidenceVaultMemoryUid?.trim()) {
+        return;
+      }
+      await performDashboardAction({
+        kind: 'handoff',
+        action: 'recover',
+        handoffUid,
+        reason: reason.trim(),
+        summary: summary.trim(),
+        evidenceVaultMemoryUid: evidenceVaultMemoryUid.trim(),
+      }, `${handoffUid}:recover`);
       return;
     }
 
@@ -326,6 +390,120 @@ export function VaultCollabView() {
         return;
       }
       await performDashboardAction({ kind: 'launch', action: 'cancel', launchRequestUid, reason }, `${launchRequestUid}:cancel`);
+      return;
+    }
+
+    if (action === 'mark_launching') {
+      setActionBusy(`${launchRequestUid}:mark_launching`);
+      setActionError(null);
+      setActionNotice(null);
+      try {
+        const response = await window.vaultAPI.startVaultCollabLaunchRequest(launchRequestUid);
+        if (!response.success || !response.data) {
+          throw new Error(response.error || 'The Vault launch broker failed.');
+        }
+        setActionNotice(`Started Codex worker ${formatSessionShortUid(response.data.launchedSessionUid)}.`);
+        await loadDashboard(true);
+      } catch (err) {
+        setActionError(err instanceof Error ? err.message : 'The Vault launch broker failed.');
+      } finally {
+        setActionBusy(null);
+      }
+      return;
+    }
+
+    if (action === 'mark_running') {
+      const launchedSessionUid = window.prompt('Launched session UID');
+      if (!launchedSessionUid?.trim()) {
+        return;
+      }
+      await performDashboardAction({
+        kind: 'launch',
+        action: 'mark_running',
+        launchRequestUid,
+        launchedSessionUid: launchedSessionUid.trim(),
+        detail: 'Launched session registered from The Vault dashboard.',
+      }, `${launchRequestUid}:mark_running`);
+      return;
+    }
+
+    if (action === 'fail') {
+      const reason = window.prompt('Launch failure reason');
+      if (!reason?.trim()) {
+        return;
+      }
+      await performDashboardAction({ kind: 'launch', action: 'fail', launchRequestUid, reason: reason.trim() }, `${launchRequestUid}:fail`);
+    }
+  }
+
+  async function runSessionAction(action: string, sessionUid: string, displayName: string) {
+    if (action === 'rename') {
+      const nextName = window.prompt('Session display name', displayName);
+      if (!nextName?.trim()) {
+        return;
+      }
+      await performDashboardAction({
+        kind: 'session',
+        action: 'rename',
+        sessionUid,
+        displayName: nextName.trim(),
+      }, `${sessionUid}:rename`);
+      return;
+    }
+
+    if (action === 'close') {
+      const reason = window.prompt('Close reason', 'Marked disconnected from The Vault dashboard.');
+      if (!reason?.trim()) {
+        return;
+      }
+      await performDashboardAction({
+        kind: 'session',
+        action: 'close',
+        targetSessionUid: sessionUid,
+        reason: reason.trim(),
+      }, `${sessionUid}:close`);
+      return;
+    }
+
+    if (action === 'ping') {
+      const message = window.prompt('Ping message', 'Please check Vault Collab attention.');
+      if (!message?.trim()) {
+        return;
+      }
+      const result = await performDashboardAction({
+        kind: 'session',
+        action: 'ping',
+        targetSessionUid: sessionUid,
+        message: message.trim(),
+      }, `${sessionUid}:ping`);
+      const delivery = result && typeof result === 'object'
+        ? (result as { delivery?: { mode?: unknown; wakeable?: unknown; nextStep?: unknown } }).delivery
+        : null;
+      if (delivery) {
+        const mode = typeof delivery.mode === 'string' ? delivery.mode.replace(/_/g, ' ') : 'unknown delivery';
+        const nextStep = typeof delivery.nextStep === 'string' ? delivery.nextStep : 'Check the target attention feed.';
+        const wakeable = delivery.wakeable === true ? 'wakeable' : 'manual';
+        setActionNotice(`Ping stored for ${formatSessionShortUid(sessionUid)} (${mode}, ${wakeable}). ${nextStep}`);
+      }
+    }
+  }
+
+  async function runManagedTerminalAction(action: 'pause' | 'resume' | 'stop', sessionUid: string) {
+    setActionBusy(`${sessionUid}:${action}`);
+    setActionError(null);
+    setActionNotice(null);
+    try {
+      const response = await window.vaultAPI.controlVaultCollabManagedTerminal({ sessionUid, action });
+      if (!response.success) {
+        throw new Error(response.error || `Managed terminal ${action} failed.`);
+      }
+      setActionNotice(`Managed worker ${formatSessionShortUid(sessionUid)} ${formatManagedTerminalActionPast(action)}.`);
+      await loadManagedTerminals();
+      await loadDashboard(true);
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : `Managed terminal ${action} failed.`);
+    } finally {
+      setActionBusy(null);
     }
   }
 
@@ -364,6 +542,7 @@ export function VaultCollabView() {
 
       {error ? <span className="error-text">{error}</span> : null}
       {actionError ? <span className="error-text">{actionError}</span> : null}
+      {actionNotice ? <span className="success-text">{actionNotice}</span> : null}
 
       {loading && !model ? (
         <div className="empty-state">Loading Vault Collab dashboard...</div>
@@ -412,11 +591,13 @@ export function VaultCollabView() {
                           <span>{group.sessions.length}</span>
                         </div>
 
-                        {group.sessions.map((session) => (
-                          <div
-                            key={session.uid}
-                            className={`vault-collab-roster-row ${session.attention ? 'vault-collab-attention-card' : ''}`}
-                          >
+                        {group.sessions.map((session) => {
+                          const managedTerminal = managedTerminals.find((terminal) => terminal.sessionUid === session.uid);
+                          return (
+                            <div
+                              key={session.uid}
+                              className={`vault-collab-roster-row ${session.attention ? 'vault-collab-attention-card' : ''}`}
+                            >
                             <span className="vault-collab-client-dot">{session.clientInitial}</span>
                             <div className="vault-collab-roster-main">
                               <div className="vault-collab-row-title">
@@ -430,7 +611,67 @@ export function VaultCollabView() {
                                   {session.connectionLabel}
                                 </span>
                                 <span>{session.heartbeatLabel}</span>
+                                <span>{session.deliveryLabel}</span>
+                                <span>{session.lastAckLabel}</span>
+                                {session.lastDeliveryLabel ? (
+                                  <span className={session.lastDeliveryFailed ? 'error-text' : undefined}>{session.lastDeliveryLabel}</span>
+                                ) : null}
                                 <span className="text-mono">{session.shortUid}</span>
+                              </div>
+                              <span className="vault-collab-delivery-detail">{session.deliveryDetail}</span>
+                              {session.lastDeliveryDetail ? (
+                                <span className="vault-collab-delivery-detail">{session.lastDeliveryDetail}</span>
+                              ) : null}
+                              <div className="inline-actions vault-collab-action-row vault-collab-session-actions">
+                                <button
+                                  type="button"
+                                  className="header-button icon-only-button"
+                                  disabled={!session.canPing || actionBusy === `${session.uid}:ping`}
+                                  title={session.canPing ? 'Ping session attention' : 'Cannot ping this session'}
+                                  onClick={() => void runSessionAction('ping', session.uid, session.displayName)}
+                                >
+                                  <Send size={14} />
+                                </button>
+                                <button
+                                  type="button"
+                                  className="header-button icon-only-button"
+                                  disabled={!session.canRename || actionBusy === `${session.uid}:rename`}
+                                  title={session.canRename ? 'Rename this dashboard session' : 'Only the current dashboard session can be renamed here'}
+                                  onClick={() => void runSessionAction('rename', session.uid, session.displayName)}
+                                >
+                                  <Pencil size={14} />
+                                </button>
+                                <button
+                                  type="button"
+                                  className="danger-button icon-only-button"
+                                  disabled={!session.canClose || actionBusy === `${session.uid}:close`}
+                                  title={session.canClose ? 'Mark stale session disconnected' : 'Only stale or idle sessions can be marked disconnected'}
+                                  onClick={() => void runSessionAction('close', session.uid, session.displayName)}
+                                >
+                                  <UserX size={14} />
+                                </button>
+                                {managedTerminal ? (
+                                  <>
+                                    <button
+                                      type="button"
+                                      className="header-button icon-only-button"
+                                      disabled={actionBusy === `${session.uid}:${managedTerminal.paused ? 'resume' : 'pause'}`}
+                                      title={managedTerminal.paused ? 'Resume attention delivery' : 'Pause attention delivery'}
+                                      onClick={() => void runManagedTerminalAction(managedTerminal.paused ? 'resume' : 'pause', session.uid)}
+                                    >
+                                      {managedTerminal.paused ? <Play size={14} /> : <Pause size={14} />}
+                                    </button>
+                                    <button
+                                      type="button"
+                                      className="danger-button icon-only-button"
+                                      disabled={actionBusy === `${session.uid}:stop`}
+                                      title="Stop managed worker"
+                                      onClick={() => void runManagedTerminalAction('stop', session.uid)}
+                                    >
+                                      <Square size={14} />
+                                    </button>
+                                  </>
+                                ) : null}
                               </div>
                               {session.detail ? (
                                 <div className={`vault-collab-session-note ${session.attention ? 'vault-collab-permission-note' : ''}`}>
@@ -444,8 +685,9 @@ export function VaultCollabView() {
                                 </div>
                               ) : null}
                             </div>
-                          </div>
-                        ))}
+                            </div>
+                          );
+                        })}
                       </div>
                     ))}
                   </div>
@@ -772,6 +1014,21 @@ export function VaultCollabView() {
       )}
     </div>
   );
+}
+
+function formatSessionShortUid(value: string): string {
+  return value.length > 10 ? `${value.slice(0, 10)}...` : value;
+}
+
+function formatManagedTerminalActionPast(action: 'pause' | 'resume' | 'stop'): string {
+  switch (action) {
+    case 'pause':
+      return 'paused';
+    case 'resume':
+      return 'resumed';
+    case 'stop':
+      return 'stopped';
+  }
 }
 
 function formatHandoffActionLabel(action: string): string {

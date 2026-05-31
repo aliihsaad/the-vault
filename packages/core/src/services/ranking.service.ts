@@ -11,11 +11,13 @@ import {
   type PriorityValue,
 } from '../rules/controlled-values.js';
 import { isWithinDays } from '../utils/datetime.js';
+import { extractMemoryUidTokens } from '../utils/memory-uid.js';
 
 // ---------------------------------------------------------------------------
 // Scoring weights
 // ---------------------------------------------------------------------------
 const WEIGHTS = {
+  MEMORY_UID_EXACT: 120,
   PROJECT_EXACT: 50,
   TITLE_EXACT: 32,
   TITLE_PARTIAL: 18,
@@ -62,6 +64,14 @@ export function rankCandidates(
 function scoreCandidate(item: MemoryItem, query: RecallQuery): RankedCandidate {
   const signals: Record<string, number> = {};
   let score = 0;
+  const requestedMemoryUids = extractMemoryUidTokens(query.queryText, query.subject, query.keywords, query.tags)
+    .map((uid) => uid.toLowerCase());
+  const itemUid = item.itemUid.toLowerCase();
+
+  if (requestedMemoryUids.includes(itemUid)) {
+    signals.memoryUidExact = WEIGHTS.MEMORY_UID_EXACT;
+    score += WEIGHTS.MEMORY_UID_EXACT;
+  }
 
   // 1. Project exact match
   if (query.project && item.project.toLowerCase() === query.project.toLowerCase()) {

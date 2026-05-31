@@ -521,6 +521,16 @@ declare global {
     reason: string;
   }
 
+  interface VaultCollabManagedTerminalStatus {
+    sessionUid: string;
+    launchRequestUid: string;
+    workspacePath: string;
+    startedAt: string;
+    paused: boolean;
+    lastOutputAt: string;
+    lastAttentionEventId: number;
+  }
+
   type ConnectStepStatus = 'pending' | 'running' | 'success' | 'fail' | 'skipped';
 
   interface ConnectStep {
@@ -719,6 +729,17 @@ declare global {
     getVaultCollabDashboardSnapshot: (options?: VaultCollabDashboardOptions) => Promise<VaultResponse<VaultCollabDashboardSnapshot>>;
     getVaultCollabHandoffActions: (handoffUid: string) => Promise<VaultResponse<VaultCollabHandoffActionSet | null>>;
     performVaultCollabDashboardAction: (input: VaultCollabDashboardActionInput) => Promise<VaultResponse<VaultCollabActionResult>>;
+    startVaultCollabLaunchRequest: (launchRequestUid: string) => Promise<VaultResponse<{
+      launchRequestUid: string;
+      launchedSessionUid: string;
+      command: string;
+      args: string[];
+    }>>;
+    getVaultCollabManagedTerminals: () => Promise<VaultResponse<VaultCollabManagedTerminalStatus[]>>;
+    controlVaultCollabManagedTerminal: (input: {
+      sessionUid: string;
+      action: 'pause' | 'resume' | 'stop';
+    }) => Promise<VaultResponse<VaultCollabManagedTerminalStatus | null>>;
     detectVaultCollabSourcePath: () => Promise<VaultResponse<VaultCollabSourcePathDetection>>;
     useDetectedVaultCollabSourcePath: () => Promise<VaultResponse<VaultCollabRuntimeConfig>>;
     chooseVaultCollabSourcePath: () => Promise<VaultResponse<VaultCollabRuntimeConfig | null>>;

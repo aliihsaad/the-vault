@@ -1,5 +1,6 @@
 import type {
   VaultCollabDashboardSnapshot,
+  VaultCollabDeliveryAttemptSnapshot,
   VaultCollabEventSnapshot,
   VaultCollabHandoffSnapshot,
   VaultCollabLaunchRequestSnapshot,
@@ -28,6 +29,15 @@ export interface VaultCollabSessionRow {
   heartbeatLabel: string;
   roleLabel: string | null;
   detail: string | null;
+  deliveryLabel: string;
+  deliveryDetail: string;
+  lastAckLabel: string;
+  lastDeliveryLabel: string | null;
+  lastDeliveryDetail: string | null;
+  lastDeliveryFailed: boolean;
+  canRename: boolean;
+  canClose: boolean;
+  canPing: boolean;
   clientInitial: string;
   attention: boolean;
 }
@@ -112,7 +122,13 @@ export interface VaultCollabActionDescriptor {
     | 'reply'
     | 'approve'
     | 'reject'
-    | 'cancel';
+    | 'cancel'
+    | 'mark_launching'
+    | 'mark_running'
+    | 'fail'
+    | 'rename_session'
+    | 'close_session'
+    | 'ping_session';
   label: string;
   disabled: boolean;
   reason: string | null;
@@ -191,6 +207,14 @@ export function buildVaultCollabDashboardViewModel(
   ];
   const selectedHandoff = getSelectedHandoff(snapshot.handoffs, selectedHandoffUid);
   const latestPermissionEventBySessionUid = getLatestEventBySessionUid(snapshot.events, SESSION_PERMISSION_REQUESTED_EVENT);
+  const latestDeliveryAttemptBySessionUid = getLatestDeliveryAttemptBySessionUid(snapshot.deliveryAttempts ?? []);
+  const failedDeliveryAttempts = (snapshot.deliveryAttempts ?? []).filter((attempt) => attempt.status === 'failed').length;
+  if (snapshot.deliveryAttempts?.length) {
+    statusItemModels.splice(statusItemModels.length - 1, 0, {
+      label: `${failedDeliveryAttempts}/${snapshot.deliveryAttempts.length} delivery failed`,
+      tone: failedDeliveryAttempts > 0 ? 'attention' : 'muted',
+    });
+  }
   const selectedPermissionEvent = selectedHandoff
     ? snapshot.events.find((event) => (
       event.handoffUid === selectedHandoff.handoffUid
@@ -209,7 +233,13 @@ export function buildVaultCollabDashboardViewModel(
     attentionActive,
     statusItems: statusItemModels.map((item) => item.label),
     statusItemModels,
-    sessionGroups: buildSessionGroups(snapshot.sessions, latestPermissionEventBySessionUid),
+    sessionGroups: buildSessionGroups(
+      snapshot.sessions,
+      latestPermissionEventBySessionUid,
+      latestDeliveryAttemptBySessionUid,
+      now,
+      options.dashboardSessionUid ?? null,
+    ),
     launchRequestRows: snapshot.launchRequests.map((launchRequest) => buildLaunchRequestRow(launchRequest, now)),
     handoffRows: snapshot.handoffs.map((handoff) => buildHandoffRow(handoff, now)),
     selectedHandoff: selectedHandoff
@@ -271,7 +301,16 @@ function buildLaunchRequestActions(
 
   if (launchRequest.status === 'approved') {
     return [
+      { action: 'mark_launching', label: 'Launch', disabled: false, reason: null, tone: 'primary' },
       { action: 'cancel', label: 'Cancel', disabled: false, reason: null, tone: 'warning' },
+      { action: 'fail', label: 'Fail', disabled: false, reason: null, tone: 'danger' },
+    ];
+  }
+
+  if (launchRequest.status === 'launching') {
+    return [
+      { action: 'mark_running', label: 'Mark running', disabled: false, reason: null, tone: 'primary' },
+      { action: 'fail', label: 'Fail', disabled: false, reason: null, tone: 'danger' },
     ];
   }
 
@@ -293,6 +332,9 @@ function getDashboardStatusLabel(snapshot: VaultCollabDashboardSnapshot): string
 function buildSessionGroups(
   sessions: VaultCollabSessionSnapshot[],
   permissionEventsBySessionUid: Map<string, VaultCollabEventSnapshot>,
+  deliveryAttemptsBySessionUid: Map<string, VaultCollabDeliveryAttemptSnapshot>,
+  now: Date,
+  dashboardSessionUid: string | null,
 ): VaultCollabSessionGroup[] {
   const groups: VaultCollabSessionGroup[] = [
     { key: 'attention', label: 'Needs attention', sessions: [] },
@@ -302,7 +344,13 @@ function buildSessionGroups(
   ];
 
   for (const session of sessions) {
-    const row = buildSessionRow(session, permissionEventsBySessionUid.get(session.sessionUid));
+    const row = buildSessionRow(
+      session,
+      permissionEventsBySessionUid.get(session.sessionUid),
+      deliveryAttemptsBySessionUid.get(session.sessionUid),
+      now,
+      dashboardSessionUid,
+    );
     const group = row.attention
       ? groups[0]
       : session.connectionState !== 'fresh' || session.effectiveStatus === 'disconnected'
@@ -320,10 +368,15 @@ function buildSessionGroups(
 function buildSessionRow(
   session: VaultCollabSessionSnapshot,
   permissionEvent: VaultCollabEventSnapshot | undefined,
+  deliveryAttempt: VaultCollabDeliveryAttemptSnapshot | undefined,
+  now: Date,
+  dashboardSessionUid: string | null,
 ): VaultCollabSessionRow {
   const displayName = session.agentDisplayName || session.agentName || session.displayName;
   const secondaryParts = [`${getClientLabel(session.clientType)} / ${session.project}`];
   const attention = session.effectiveStatus === 'awaiting_user';
+  const ownSession = Boolean(dashboardSessionUid && session.sessionUid === dashboardSessionUid);
+  const delivery = getSessionDelivery(session);
 
   if (session.displayName && session.displayName !== displayName) {
     secondaryParts.push(session.displayName);
@@ -347,9 +400,88 @@ function buildSessionRow(
     detail: attention
       ? getSessionPermissionQuestion(session, permissionEvent)
       : session.statusDetail,
+    deliveryLabel: getDeliveryLabel(session),
+    deliveryDetail: getDeliveryDetail(session),
+    lastAckLabel: formatLastAck(delivery.lastAckAt, now),
+    lastDeliveryLabel: deliveryAttempt ? formatDeliveryAttemptLabel(deliveryAttempt, now) : null,
+    lastDeliveryDetail: deliveryAttempt?.message ?? null,
+    lastDeliveryFailed: deliveryAttempt?.status === 'failed',
+    canRename: ownSession,
+    canClose: !ownSession && canCloseSession(session),
+    canPing: !ownSession && session.connectionState !== 'disconnected',
     clientInitial: getClientInitial(session.clientType),
     attention,
   };
+}
+
+function getLatestDeliveryAttemptBySessionUid(
+  attempts: VaultCollabDeliveryAttemptSnapshot[],
+): Map<string, VaultCollabDeliveryAttemptSnapshot> {
+  const latest = new Map<string, VaultCollabDeliveryAttemptSnapshot>();
+  for (const attempt of attempts) {
+    const current = latest.get(attempt.sessionUid);
+    if (!current || new Date(attempt.createdAt).getTime() > new Date(current.createdAt).getTime()) {
+      latest.set(attempt.sessionUid, attempt);
+    }
+  }
+
+  return latest;
+}
+
+function formatDeliveryAttemptLabel(attempt: VaultCollabDeliveryAttemptSnapshot, now: Date): string {
+  const age = formatRelativeAge(new Date(attempt.createdAt), now);
+  return `${attempt.status === 'delivered' ? 'delivered' : 'failed'} ${age}`;
+}
+
+function canCloseSession(session: VaultCollabSessionSnapshot): boolean {
+  if (session.connectionState === 'disconnected') {
+    return false;
+  }
+
+  return session.connectionState === 'stale' || session.effectiveStatus === 'idle' || session.effectiveStatus === 'complete';
+}
+
+function getDeliveryLabel(session: VaultCollabSessionSnapshot): string {
+  const delivery = getSessionDelivery(session);
+  if (delivery.mode === 'manual_poll') {
+    return 'Manual attention';
+  }
+
+  if (delivery.mode === 'managed_process') {
+    return delivery.wakeable ? 'Wakeable managed' : 'Managed manual';
+  }
+
+  if (delivery.mode === 'local_watch') {
+    return delivery.wakeable ? 'Wakeable watcher' : 'Local watcher';
+  }
+
+  return delivery.wakeable ? 'Wakeable MCP' : 'MCP notification';
+}
+
+function getDeliveryDetail(session: VaultCollabSessionSnapshot): string {
+  const delivery = getSessionDelivery(session);
+  if (delivery.mode === 'manual_poll') {
+    return 'Stores pings only; target must poll or run a watcher.';
+  }
+
+  if (delivery.wakeable) {
+    return 'Ping can be picked up by the managed receiver; wait for ack.';
+  }
+
+  return 'Receiver is not verified; target must poll or enable a wakeable receiver.';
+}
+
+function getSessionDelivery(session: VaultCollabSessionSnapshot): VaultCollabSessionSnapshot['delivery'] {
+  return session.delivery ?? {
+    mode: 'manual_poll',
+    wakeable: false,
+    lastAckEventId: null,
+    lastAckAt: null,
+  };
+}
+
+function formatLastAck(value: string | null, now: Date): string {
+  return value ? `ack ${formatRelativeAge(new Date(value), now)}` : 'no ack yet';
 }
 
 function buildHandoffRow(handoff: VaultCollabHandoffSnapshot, now: Date): VaultCollabHandoffRow {
@@ -822,6 +954,7 @@ function getLaunchRequestBadgeClass(status: VaultCollabLaunchRequestSnapshot['st
       return 'badge-task-fail';
     case 'rejected':
     case 'cancelled':
+    case 'stopped':
       return 'badge-task-complete';
     case 'approved':
       return 'badge-plan';
@@ -840,6 +973,7 @@ function getLaunchRequestRailClass(status: VaultCollabLaunchRequestSnapshot['sta
       return 'queue-status-rail-failed';
     case 'rejected':
     case 'cancelled':
+    case 'stopped':
       return 'queue-status-rail-completed';
     case 'approved':
       return 'queue-status-rail-attention';
@@ -850,8 +984,7 @@ function getLaunchRequestRailClass(status: VaultCollabLaunchRequestSnapshot['sta
 }
 
 function isActiveLaunchRequestStatus(status: VaultCollabLaunchRequestSnapshot['status']): boolean {
-  return status === 'requested'
-    || status === 'approved'
+  return status === 'approved'
     || status === 'launching'
     || status === 'running';
 }
