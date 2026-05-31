@@ -327,7 +327,7 @@ export function OverviewCockpitView({
             onAction={() => onNavigate?.('recall')}
           />
           <div className="cockpit-chart cockpit-chart-short">
-            <ResponsiveContainer width="100%" height="100%" minWidth={1} minHeight={1}>
+            <ResponsiveContainer width="100%" height="100%" minWidth={1} minHeight={1} initialDimension={{ width: 1, height: 1 }}>
               <AreaChart data={recallTrend} margin={{ top: 12, right: 16, bottom: 4, left: -18 }}>
                 <defs>
                   <linearGradient id="recallFill" x1="0" y1="0" x2="0" y2="1">
@@ -354,7 +354,7 @@ export function OverviewCockpitView({
             onAction={() => onNavigate?.('analytics')}
           />
           <div className="cockpit-chart cockpit-chart-short">
-            <ResponsiveContainer width="100%" height="100%" minWidth={1} minHeight={1}>
+            <ResponsiveContainer width="100%" height="100%" minWidth={1} minHeight={1} initialDimension={{ width: 1, height: 1 }}>
               <BarChart data={activitySeries} margin={{ top: 12, right: 16, bottom: 4, left: -18 }}>
                 <CartesianGrid stroke="rgba(148, 166, 198, 0.12)" vertical={false} />
                 <XAxis dataKey="key" stroke="#708097" tickLine={false} axisLine={false} tickFormatter={formatDateTick} />

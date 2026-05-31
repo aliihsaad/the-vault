@@ -144,7 +144,7 @@ export function ProjectsOperationsView({
         <div className="panel ops-project-chart">
           <PanelHeader icon={<BarChart3 size={18} />} title="Momentum map" subtitle="Last seven days by project." />
           <div className="ops-chart-tall">
-            <ResponsiveContainer width="100%" height="100%" minWidth={1} minHeight={1}>
+            <ResponsiveContainer width="100%" height="100%" minWidth={1} minHeight={1} initialDimension={{ width: 1, height: 1 }}>
               <BarChart data={rows.slice(0, 12)} layout="vertical" margin={{ top: 8, right: 24, bottom: 8, left: 24 }}>
                 <CartesianGrid stroke="rgba(148, 166, 198, 0.12)" horizontal={false} />
                 <XAxis type="number" stroke="#708097" tickLine={false} axisLine={false} allowDecimals={false} />
@@ -1180,7 +1180,7 @@ export function RecallOperationsView() {
             <span><strong>{packedLimitLabel}</strong> current packing</span>
           </div>
           <div className="ops-chart-tall">
-            <ResponsiveContainer width="100%" height="100%" minWidth={1} minHeight={1}>
+            <ResponsiveContainer width="100%" height="100%" minWidth={1} minHeight={1} initialDimension={{ width: 1, height: 1 }}>
               <AreaChart data={trend} margin={{ top: 12, right: 20, bottom: 6, left: -12 }}>
                 <defs>
                   <linearGradient id="opsRecallFill" x1="0" y1="0" x2="0" y2="1">
@@ -1271,7 +1271,7 @@ export function AnalyticsOperationsView() {
         <div className="panel">
           <PanelHeader icon={<BarChart3 size={18} />} title="Activity rate" subtitle="Fourteen-day action mix." />
           <div className="ops-chart-tall">
-            <ResponsiveContainer width="100%" height="100%" minWidth={1} minHeight={1}>
+            <ResponsiveContainer width="100%" height="100%" minWidth={1} minHeight={1} initialDimension={{ width: 1, height: 1 }}>
               <BarChart data={activitySeries} margin={{ top: 12, right: 18, bottom: 6, left: -12 }}>
                 <CartesianGrid stroke="rgba(148, 166, 198, 0.12)" vertical={false} />
                 <XAxis dataKey="key" stroke="#708097" tickLine={false} axisLine={false} tickFormatter={formatDateTick} />
@@ -1520,7 +1520,7 @@ function Donut({ data }: { data: Array<{ name: string; value: number }> }) {
 
   return (
     <div className="ops-donut">
-      <ResponsiveContainer width="100%" height="100%" minWidth={1} minHeight={1}>
+      <ResponsiveContainer width="100%" height="100%" minWidth={1} minHeight={1} initialDimension={{ width: 1, height: 1 }}>
         <PieChart>
           <Pie data={data} dataKey="value" nameKey="name" innerRadius="58%" outerRadius="82%" paddingAngle={3}>
             {data.map((entry, index) => <Cell key={entry.name} fill={CHART_COLORS[index % CHART_COLORS.length]} />)}

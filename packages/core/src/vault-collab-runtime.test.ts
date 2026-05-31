@@ -822,6 +822,26 @@ describe('Vault Collab extension runtime config', () => {
         createdBySessionUid: 'vc_sess_claude_reviewer',
         messageCount: 2,
         lastMessageAt: '2026-05-28T11:55:00.000Z',
+        latestMessages: [
+          {
+            messageUid: 'vc_msg_1',
+            threadUid: 'vc_thread_dashboard',
+            sessionUid: 'vc_sess_claude_reviewer',
+            agentUid: 'vc_agent_reviewer',
+            messageType: 'question',
+            body: 'Should the UI expose lifecycle actions?',
+            createdAt: '2026-05-28T11:50:00.000Z',
+          },
+          {
+            messageUid: 'vc_msg_2',
+            threadUid: 'vc_thread_dashboard',
+            sessionUid: 'vc_sess_claude_reviewer',
+            agentUid: 'vc_agent_reviewer',
+            messageType: 'decision',
+            body: 'Keep lifecycle mutations in MCP only.',
+            createdAt: '2026-05-28T11:55:00.000Z',
+          },
+        ],
       }),
     ]);
     expect(snapshot.handoffs[1]).toEqual(expect.objectContaining({

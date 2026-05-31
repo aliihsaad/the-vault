@@ -88,6 +88,17 @@ export interface VaultCollabDiscussionThreadSummary {
   resolvedAt: string | null;
   messageCount: number;
   lastMessageAt: string | null;
+  latestMessages: VaultCollabDiscussionMessagePreview[];
+}
+
+export interface VaultCollabDiscussionMessagePreview {
+  messageUid: string;
+  threadUid: string;
+  sessionUid: string | null;
+  agentUid: string | null;
+  messageType: VaultCollabDashboardDiscussionMessageType;
+  body: string;
+  createdAt: string;
 }
 
 export interface VaultCollabSessionSnapshot {
@@ -279,6 +290,7 @@ export type VaultCollabDashboardHandoffAction =
   | 'reopen';
 
 export type VaultCollabDashboardLaunchAction =
+  | 'request'
   | 'approve'
   | 'reject'
   | 'cancel'
@@ -295,6 +307,14 @@ export type VaultCollabDashboardDiscussionMessageType =
   | 'proposal'
   | 'concern'
   | 'decision';
+
+export type VaultCollabAgentRequestProvider = Extract<VaultCollabClientType, 'codex' | 'claude-code'>;
+
+export interface VaultCollabAgentRequestInput {
+  role: string;
+  provider: VaultCollabAgentRequestProvider;
+  instructions: string;
+}
 
 export type VaultCollabDashboardActionInput =
   | {
@@ -342,7 +362,23 @@ export type VaultCollabDashboardActionInput =
     }
   | {
       kind: 'launch';
-      action: VaultCollabDashboardLaunchAction;
+      action: 'request';
+      provider: VaultCollabAgentRequestProvider;
+      model: string;
+      effortLevel?: string | null;
+      project: string;
+      workspacePath: string;
+      role?: string | null;
+      initialInstructions: string;
+      permissionMode: string;
+      commandPreview?: string | null;
+      requestedCapabilities?: string[];
+      approvalPolicyVersion?: string | null;
+      metadata?: VaultCollabJsonRecord;
+    }
+  | {
+      kind: 'launch';
+      action: Exclude<VaultCollabDashboardLaunchAction, 'request'>;
       launchRequestUid: string;
       launchedSessionUid?: string;
       detail?: string;

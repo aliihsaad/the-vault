@@ -57,6 +57,7 @@ import type {
   GraphifyCommandResult,
   GraphifyHtmlArtifactResult,
   VaultCollabActionResult,
+  VaultCollabAgentRequestInput,
   VaultCollabDashboardActionInput,
   VaultCollabDashboardActor,
   VaultCollabHandoffActionSet,
@@ -2482,6 +2483,40 @@ app.whenReady().then(() => {
     return registration.actor;
   }
 
+  function parseVaultCollabAgentRequestInput(input: unknown): VaultCollabAgentRequestInput {
+    const raw = input && typeof input === 'object' ? input as Record<string, unknown> : {};
+    const role = typeof raw.role === 'string' ? raw.role.trim() : '';
+    const instructions = typeof raw.instructions === 'string' ? raw.instructions.trim() : '';
+    const provider = raw.provider === 'codex' || raw.provider === 'claude-code'
+      ? raw.provider
+      : null;
+
+    if (!role) {
+      throw new Error('Agent role is required.');
+    }
+    if (!provider) {
+      throw new Error('Provider must be codex or claude-code.');
+    }
+    if (!instructions) {
+      throw new Error('Agent instructions are required.');
+    }
+
+    return { role, provider, instructions };
+  }
+
+  function getVaultCollabAgentRequestModel(provider: VaultCollabAgentRequestInput['provider']): string {
+    return provider === 'codex' ? 'gpt-5-codex' : 'claude-code';
+  }
+
+  function getVaultCollabAgentRequestCommandPreview(
+    provider: VaultCollabAgentRequestInput['provider'],
+    workspacePath: string,
+  ): string {
+    return provider === 'codex'
+      ? `codex --no-alt-screen -C "${workspacePath}"`
+      : `claude --add-dir "${workspacePath}"`;
+  }
+
   ipcMain.handle('vault:performVaultCollabDashboardAction', async (_, input) => {
     try {
       const actor = await ensureVaultCollabDashboardActor();
@@ -2489,6 +2524,38 @@ app.whenReady().then(() => {
         getVaultCollabDashboardActionRuntimeConfig(),
         actor,
         (input || {}) as VaultCollabDashboardActionInput,
+      ) as VaultCollabActionResult;
+      return { success: data.ok, data, error: data.error || undefined };
+    } catch (e: any) {
+      return { success: false, error: e.message };
+    }
+  });
+
+  ipcMain.handle('vault:requestVaultCollabAgent', async (_, input) => {
+    try {
+      const request = parseVaultCollabAgentRequestInput(input);
+      const config = getVaultCollabDashboardActionRuntimeConfig();
+      const actor = await ensureVaultCollabDashboardActor();
+      const workspacePath = resolve(__dirname, '../../..');
+      const data = await executeVaultCollabAction(
+        config,
+        actor,
+        {
+          kind: 'launch',
+          action: 'request',
+          provider: request.provider,
+          model: getVaultCollabAgentRequestModel(request.provider),
+          effortLevel: request.provider === 'codex' ? 'medium' : null,
+          project: 'the-vault',
+          workspacePath,
+          role: request.role,
+          initialInstructions: request.instructions,
+          permissionMode: 'workspace-write',
+          commandPreview: getVaultCollabAgentRequestCommandPreview(request.provider, workspacePath),
+          requestedCapabilities: ['vault_collab', 'code_editing'],
+          approvalPolicyVersion: 'dashboard-request-agent-v1',
+          metadata: { source: 'dashboard' },
+        },
       ) as VaultCollabActionResult;
       return { success: data.ok, data, error: data.error || undefined };
     } catch (e: any) {
