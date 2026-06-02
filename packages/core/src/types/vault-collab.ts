@@ -101,12 +101,36 @@ export interface VaultCollabDiscussionMessagePreview {
   createdAt: string;
 }
 
+export interface VaultCollabRoleProfileSkillsSnapshot {
+  primary: string[];
+  secondary: string[];
+}
+
+export interface VaultCollabRoleProfileSnapshot {
+  roleProfileId: string;
+  displayName: string;
+  purpose: string;
+  lifecycleStage: string;
+  defaultMutation: string;
+  capabilitySet: string[];
+  triggerLabels: string[];
+  suggestedNextRoleProfileIds: string[];
+  skills: VaultCollabRoleProfileSkillsSnapshot;
+}
+
+export interface VaultCollabRoleProfileAliasSnapshot {
+  alias: string;
+  roleProfileId: string;
+}
+
 export interface VaultCollabSessionSnapshot {
   sessionUid: string;
   displayName: string;
   clientType: VaultCollabClientType;
   project: string;
   workspacePath: string;
+  role?: string | null;
+  roleProfileId?: string | null;
   status: VaultCollabSessionStatus;
   effectiveStatus: VaultCollabSessionStatus;
   connectionState: VaultCollabSessionConnectionState;
@@ -136,6 +160,7 @@ export interface VaultCollabHandoffSnapshot {
   sourceSessionUid: string | null;
   suggestedSessionUid: string | null;
   suggestedClientType: VaultCollabClientType | null;
+  suggestedRoleProfileId?: string | null;
   queueKey: string;
   labels: string[];
   queuePosition: number | null;
@@ -188,6 +213,7 @@ export interface VaultCollabLaunchRequestSnapshot {
   project: string;
   workspacePath: string;
   role: string | null;
+  roleProfileId?: string | null;
   initialInstructions: string;
   permissionMode: string;
   commandPreview: string | null;
@@ -268,6 +294,8 @@ export interface VaultCollabDashboardSnapshot {
   errorMessage: string | null;
   sessions: VaultCollabSessionSnapshot[];
   handoffs: VaultCollabHandoffSnapshot[];
+  roleProfiles?: VaultCollabRoleProfileSnapshot[];
+  roleProfileAliases?: VaultCollabRoleProfileAliasSnapshot[];
   launchRequests: VaultCollabLaunchRequestSnapshot[];
   deliveryAttempts: VaultCollabDeliveryAttemptSnapshot[];
   events: VaultCollabEventSnapshot[];

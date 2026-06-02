@@ -46,6 +46,7 @@ export function WorkBoard({ columns, selectedHandoffUid, onSelectHandoff }: Work
                   <span className="vault-collab-work-card-preview">{card.promptPreview}</span>
                   <span className="vault-collab-row-meta">
                     <span className="text-mono">{card.queueLabel}</span>
+                    {card.routeHintLabel ? <span>{card.routeHintLabel}</span> : null}
                     <span>{card.priorityLabel}</span>
                     {card.threadLabel ? <span>{card.threadLabel}</span> : null}
                   </span>

@@ -4,6 +4,7 @@ import type {
   VaultCollabEventSnapshot,
   VaultCollabHandoffSnapshot,
   VaultCollabLaunchRequestSnapshot,
+  VaultCollabRoleProfileSnapshot,
   VaultCollabSessionSnapshot,
 } from '@the-vault/core';
 
@@ -59,6 +60,8 @@ export interface VaultCollabHandoffRow {
   railClass: string;
   priorityLabel: string;
   routeLabel: string;
+  routeHintLabel: string | null;
+  suggestedRoleProfileId: string | null;
   queueLabel: string;
   ownerLabel: string;
   dependencyLabel: string | null;
@@ -166,15 +169,43 @@ export interface VaultCollabNeedsYouItem {
 export interface VaultCollabRosterAgent {
   sessionUid: string;
   displayName: string;
-  role: string;
+  rawRole: string;
+  roleProfileId: string | null;
+  roleDisplayName: string;
+  roleLabel: string;
   status: string;
   currentHandoffUid: string | null;
   freshness: 'fresh' | 'stale';
 }
 
 export interface VaultCollabRoleGroup {
+  key: string;
   role: string;
+  roleProfileId: string | null;
+  roleDisplayName: string;
+  purpose: string | null;
+  mutationLabel: string | null;
+  triggerLabels: string[];
+  primarySkillNames: string[];
+  secondarySkillNames: string[];
+  capabilities: string[];
+  suggestedNextRoleLabels: string[];
+  handoffs: VaultCollabHandoffRow[];
+  isWatchdog: boolean;
   agents: VaultCollabRosterAgent[];
+}
+
+export interface VaultCollabSelectedRoleProfile {
+  roleProfileId: string;
+  displayName: string;
+  purpose: string;
+  mutationLabel: string;
+  capabilities: string[];
+  triggerLabels: string[];
+  suggestedNextRoleLabels: string[];
+  primarySkillNames: string[];
+  secondarySkillNames: string[];
+  isWatchdog: boolean;
 }
 
 export type VaultCollabWorkColumnState =
@@ -207,6 +238,7 @@ export interface VaultCollabConversationEntry {
 export interface VaultCollabCockpitViewModel {
   needsYou: VaultCollabNeedsYouItem[];
   roster: VaultCollabRoleGroup[];
+  selectedRoleProfile: VaultCollabSelectedRoleProfile | null;
   work: VaultCollabWorkColumn[];
   conversation: VaultCollabConversationEntry[];
   selectedHandoff: VaultCollabSelectedHandoff | null;
@@ -215,6 +247,7 @@ export interface VaultCollabCockpitViewModel {
 export interface VaultCollabDashboardViewModelOptions {
   dashboardSessionUid?: string | null;
   approvedLaunchCommands?: Record<string, string>;
+  selectedRoleProfileId?: string | null;
 }
 
 export interface VaultCollabDashboardViewModel {
@@ -253,6 +286,7 @@ export function buildVaultCollabDashboardViewModel(
   const attentionActive = snapshot.counts.permissionNeeded > 0
     || snapshot.counts.permissionRequestEvents > 0
     || snapshot.counts.attentionPingEvents > 0;
+  const roleLookup = buildRoleProfileLookup(snapshot);
   const statusItemModels: VaultCollabStatusItem[] = [
     { label: statusLabel, tone: snapshot.dataReady ? 'good' : snapshot.ready ? 'attention' : 'muted' },
     { label: `Last refreshed ${formatRelativeAge(now, now)}`, tone: 'muted' },
@@ -281,9 +315,9 @@ export function buildVaultCollabDashboardViewModel(
     now,
     options.approvedLaunchCommands ?? {},
   ));
-  const handoffRows = snapshot.handoffs.map((handoff) => buildHandoffRow(handoff, now));
+  const handoffRows = snapshot.handoffs.map((handoff) => buildHandoffRow(handoff, now, roleLookup));
   const selectedHandoffModel = selectedHandoff
-    ? buildSelectedHandoff(selectedHandoff, selectedPermissionEvent, now, options.dashboardSessionUid ?? null)
+    ? buildSelectedHandoff(selectedHandoff, selectedPermissionEvent, now, options.dashboardSessionUid ?? null, roleLookup)
     : null;
   const eventRows = buildEventRows(snapshot.events, selectedHandoff?.handoffUid ?? null, now);
 
@@ -317,6 +351,8 @@ export function buildVaultCollabDashboardViewModel(
       selectedHandoff?.handoffUid ?? null,
       now,
       options.dashboardSessionUid ?? null,
+      roleLookup,
+      options.selectedRoleProfileId ?? null,
     ),
   };
 }
@@ -338,10 +374,22 @@ function buildCockpitViewModel(
   selectedHandoffUid: string | null,
   now: Date,
   dashboardSessionUid: string | null,
+  roleLookup: RoleProfileLookup,
+  selectedRoleProfileId: string | null,
 ): VaultCollabCockpitViewModel {
+  const roster = buildRoleGroups(snapshot.sessions, snapshot.handoffs, handoffRows, roleLookup);
+  const selectedHandoffRoleProfileId = selectedHandoffUid
+    ? handoffRows.find((row) => row.uid === selectedHandoffUid)?.suggestedRoleProfileId ?? null
+    : null;
   return {
     needsYou: buildNeedsYouItems(snapshot, launchRequestRows, handoffRows, dashboardSessionUid),
-    roster: buildRoleGroups(snapshot.sessions),
+    roster,
+    selectedRoleProfile: buildSelectedRoleProfile(
+      roleLookup,
+      selectedRoleProfileId
+        ?? selectedHandoffRoleProfileId
+        ?? firstOccupiedRoleProfileId(roster),
+    ),
     work: buildWorkColumns(snapshot.handoffs, handoffRows),
     conversation: buildConversationEntries(snapshot.handoffs, snapshot.events, selectedHandoffUid, now),
     selectedHandoff,
@@ -405,9 +453,55 @@ function buildNeedsYouItems(
   return items;
 }
 
-function buildRoleGroups(sessions: VaultCollabSessionSnapshot[]): VaultCollabRoleGroup[] {
-  const byRole = new Map<string, VaultCollabRosterAgent[]>();
+interface RoleProfileLookup {
+  profiles: VaultCollabRoleProfileSnapshot[];
+  byId: Map<string, VaultCollabRoleProfileSnapshot>;
+  aliasToProfileId: Map<string, string>;
+}
+
+const LEGACY_ROLE_ALIASES: Array<[string, string]> = [
+  ['coordinator', 'coordinator'],
+  ['implementer', 'implementer'],
+  ['reviewer', 'reviewer'],
+  ['sweeper', 'runtime-loop-operator'],
+  ['observer', 'reviewer'],
+];
+
+function buildRoleProfileLookup(snapshot: VaultCollabDashboardSnapshot): RoleProfileLookup {
+  const profiles = snapshot.roleProfiles ?? [];
+  const byId = new Map(profiles.map((profile) => [normalizeRoleKey(profile.roleProfileId), profile]));
+  const aliasToProfileId = new Map<string, string>();
+
+  for (const profile of profiles) {
+    aliasToProfileId.set(normalizeRoleKey(profile.roleProfileId), profile.roleProfileId);
+  }
+
+  for (const alias of snapshot.roleProfileAliases ?? []) {
+    aliasToProfileId.set(normalizeRoleKey(alias.alias), alias.roleProfileId);
+  }
+
+  for (const [alias, roleProfileId] of LEGACY_ROLE_ALIASES) {
+    if (byId.has(normalizeRoleKey(roleProfileId)) && !aliasToProfileId.has(alias)) {
+      aliasToProfileId.set(alias, roleProfileId);
+    }
+  }
+
+  return { profiles, byId, aliasToProfileId };
+}
+
+function buildRoleGroups(
+  sessions: VaultCollabSessionSnapshot[],
+  handoffs: VaultCollabHandoffSnapshot[],
+  handoffRows: VaultCollabHandoffRow[],
+  roleLookup: RoleProfileLookup,
+): VaultCollabRoleGroup[] {
+  const groups = new Map<string, VaultCollabRoleGroup>();
   const seenSessionUids = new Set<string>();
+  const handoffRowsByUid = new Map(handoffRows.map((row) => [row.uid, row]));
+
+  for (const profile of roleLookup.profiles) {
+    groups.set(profile.roleProfileId, buildEmptyRoleGroup(profile, roleLookup));
+  }
 
   for (const session of sessions) {
     if (!isRosterVisibleSession(session) || seenSessionUids.has(session.sessionUid)) {
@@ -415,20 +509,214 @@ function buildRoleGroups(sessions: VaultCollabSessionSnapshot[]): VaultCollabRol
     }
 
     seenSessionUids.add(session.sessionUid);
-    const role = getSessionRole(session);
-    const agents = byRole.get(role) ?? [];
-    agents.push({
+    const rawRole = getSessionRawRole(session);
+    const roleProfileId = resolveRoleProfileId(session.roleProfileId ?? null, rawRole, roleLookup);
+    const groupKey = roleProfileId ?? rawRole;
+    const roleProfile = roleProfileId ? roleLookup.byId.get(normalizeRoleKey(roleProfileId)) ?? null : null;
+    const group = groups.get(groupKey) ?? buildLegacyRoleGroup(rawRole, roleProfileId, roleProfile, roleLookup);
+    group.agents.push({
       sessionUid: session.sessionUid,
       displayName: getSessionDisplayName(session),
-      role,
+      rawRole,
+      roleProfileId,
+      roleDisplayName: getRoleDisplayName(roleProfileId, rawRole, roleLookup),
+      roleLabel: formatSessionRoleLabel(rawRole, roleProfileId, roleLookup),
       status: session.effectiveStatus,
       currentHandoffUid: session.currentHandoffUid,
       freshness: session.connectionState === 'fresh' ? 'fresh' : 'stale',
     });
-    byRole.set(role, agents);
+    groups.set(groupKey, group);
   }
 
-  return Array.from(byRole.entries()).map(([role, agents]) => ({ role, agents }));
+  for (const handoff of handoffs) {
+    const row = handoffRowsByUid.get(handoff.handoffUid);
+    if (!row) {
+      continue;
+    }
+
+    const roleProfileId = getHandoffRoleProfileId(handoff, roleLookup);
+    if (!roleProfileId) {
+      continue;
+    }
+
+    const group = groups.get(roleProfileId);
+    if (group) {
+      group.handoffs.push(row);
+    }
+  }
+
+  return Array.from(groups.values());
+}
+
+function buildEmptyRoleGroup(
+  profile: VaultCollabRoleProfileSnapshot,
+  roleLookup: RoleProfileLookup,
+): VaultCollabRoleGroup {
+  return {
+    key: profile.roleProfileId,
+    role: profile.roleProfileId,
+    roleProfileId: profile.roleProfileId,
+    roleDisplayName: profile.displayName,
+    purpose: profile.purpose,
+    mutationLabel: formatStatusLabel(profile.defaultMutation),
+    triggerLabels: [...profile.triggerLabels],
+    primarySkillNames: [...profile.skills.primary],
+    secondarySkillNames: [...profile.skills.secondary],
+    capabilities: profile.capabilitySet.map(formatStatusLabel),
+    suggestedNextRoleLabels: profile.suggestedNextRoleProfileIds.map((roleProfileId) => (
+      getRoleDisplayName(roleProfileId, roleProfileId, roleLookup)
+    )),
+    handoffs: [],
+    isWatchdog: profile.roleProfileId === 'loop-resolver',
+    agents: [],
+  };
+}
+
+function buildLegacyRoleGroup(
+  rawRole: string,
+  roleProfileId: string | null,
+  roleProfile: VaultCollabRoleProfileSnapshot | null,
+  roleLookup: RoleProfileLookup,
+): VaultCollabRoleGroup {
+  if (roleProfile) {
+    return buildEmptyRoleGroup(roleProfile, roleLookup);
+  }
+
+  const roleDisplayName = getRoleDisplayName(roleProfileId, rawRole, roleLookup);
+  return {
+    key: roleProfileId ?? rawRole,
+    role: roleProfileId ?? rawRole,
+    roleProfileId,
+    roleDisplayName,
+    purpose: null,
+    mutationLabel: null,
+    triggerLabels: [],
+    primarySkillNames: [],
+    secondarySkillNames: [],
+    capabilities: [],
+    suggestedNextRoleLabels: [],
+    handoffs: [],
+    isWatchdog: roleProfileId === 'loop-resolver',
+    agents: [],
+  };
+}
+
+function buildSelectedRoleProfile(
+  roleLookup: RoleProfileLookup,
+  requestedRoleProfileId: string | null,
+): VaultCollabSelectedRoleProfile | null {
+  const requestedProfile = requestedRoleProfileId
+    ? roleLookup.byId.get(normalizeRoleKey(requestedRoleProfileId))
+    : null;
+  const profile = requestedProfile ?? roleLookup.profiles[0] ?? null;
+
+  if (!profile) {
+    return null;
+  }
+
+  return {
+    roleProfileId: profile.roleProfileId,
+    displayName: profile.displayName,
+    purpose: profile.purpose,
+    mutationLabel: formatStatusLabel(profile.defaultMutation),
+    capabilities: profile.capabilitySet.map(formatStatusLabel),
+    triggerLabels: [...profile.triggerLabels],
+    suggestedNextRoleLabels: profile.suggestedNextRoleProfileIds.map((roleProfileId) => (
+      getRoleDisplayName(roleProfileId, roleProfileId, roleLookup)
+    )),
+    primarySkillNames: [...profile.skills.primary],
+    secondarySkillNames: [...profile.skills.secondary],
+    isWatchdog: profile.roleProfileId === 'loop-resolver',
+  };
+}
+
+function firstOccupiedRoleProfileId(groups: VaultCollabRoleGroup[]): string | null {
+  return groups.find((group) => (
+    group.roleProfileId && (group.agents.length > 0 || group.handoffs.length > 0)
+  ))?.roleProfileId ?? groups.find((group) => group.roleProfileId)?.roleProfileId ?? null;
+}
+
+function getHandoffRoleProfileId(
+  handoff: VaultCollabHandoffSnapshot,
+  roleLookup: RoleProfileLookup,
+): string | null {
+  const explicit = resolveRoleProfileId(handoff.suggestedRoleProfileId ?? null, null, roleLookup);
+  if (explicit) {
+    return explicit;
+  }
+
+  const queueRole = resolveRoleProfileId(null, handoff.queueKey, roleLookup);
+  if (queueRole) {
+    return queueRole;
+  }
+
+  for (const label of handoff.labels) {
+    const labelRole = resolveRoleProfileId(null, label, roleLookup) ?? resolveRoleProfileIdFromTriggers(label, roleLookup);
+    if (labelRole) {
+      return labelRole;
+    }
+  }
+
+  return resolveRoleProfileIdFromTriggers(handoff.queueKey, roleLookup);
+}
+
+function resolveRoleProfileId(
+  explicitRoleProfileId: string | null,
+  rawRole: string | null,
+  roleLookup: RoleProfileLookup,
+): string | null {
+  const explicit = explicitRoleProfileId?.trim();
+  if (explicit) {
+    const normalized = normalizeRoleKey(explicit);
+    return roleLookup.byId.get(normalized)?.roleProfileId ?? explicit;
+  }
+
+  const normalizedRole = normalizeRoleKey(rawRole ?? '');
+  if (!normalizedRole) {
+    return null;
+  }
+
+  return roleLookup.aliasToProfileId.get(normalizedRole)
+    ?? roleLookup.byId.get(normalizedRole)?.roleProfileId
+    ?? null;
+}
+
+function resolveRoleProfileIdFromTriggers(value: string, roleLookup: RoleProfileLookup): string | null {
+  const normalized = normalizeRoleKey(value);
+  if (!normalized) {
+    return null;
+  }
+
+  return roleLookup.profiles.find((profile) => (
+    profile.triggerLabels.some((label) => normalizeRoleKey(label) === normalized)
+  ))?.roleProfileId ?? null;
+}
+
+function getRoleDisplayName(
+  roleProfileId: string | null,
+  fallbackRole: string,
+  roleLookup: RoleProfileLookup,
+): string {
+  if (roleProfileId) {
+    return roleLookup.byId.get(normalizeRoleKey(roleProfileId))?.displayName ?? formatTitleLabel(roleProfileId);
+  }
+
+  return formatTitleLabel(fallbackRole);
+}
+
+function formatSessionRoleLabel(
+  rawRole: string,
+  roleProfileId: string | null,
+  roleLookup: RoleProfileLookup,
+): string {
+  const displayName = getRoleDisplayName(roleProfileId, rawRole, roleLookup);
+  return normalizeRoleKey(displayName) === normalizeRoleKey(rawRole)
+    ? displayName
+    : `${displayName} / ${rawRole}`;
+}
+
+function normalizeRoleKey(value: string): string {
+  return value.trim().toLowerCase();
 }
 
 function buildWorkColumns(
@@ -560,6 +848,14 @@ function hasEnabledCapability(value: unknown): boolean {
 }
 
 function getSessionRole(session: VaultCollabSessionSnapshot): string {
+  return getSessionRawRole(session);
+}
+
+function getSessionRawRole(session: VaultCollabSessionSnapshot): string {
+  if (session.role?.trim()) {
+    return session.role.trim();
+  }
+
   if (session.agentRole?.trim()) {
     return session.agentRole.trim();
   }
@@ -831,11 +1127,19 @@ function formatLastAck(value: string | null, now: Date): string {
   return value ? `ack ${formatRelativeAge(new Date(value), now)}` : 'no ack yet';
 }
 
-function buildHandoffRow(handoff: VaultCollabHandoffSnapshot, now: Date): VaultCollabHandoffRow {
+function buildHandoffRow(
+  handoff: VaultCollabHandoffSnapshot,
+  now: Date,
+  roleLookup: RoleProfileLookup,
+): VaultCollabHandoffRow {
   const queueLabel = formatQueueSummary(handoff);
   const attention = handoff.status === 'awaiting_user';
   const visibleLabels = handoff.labels.slice(0, 3);
   const extraCount = handoff.labels.length - visibleLabels.length;
+  const suggestedRoleProfileId = getHandoffRoleProfileId(handoff, roleLookup);
+  const routeHintLabel = suggestedRoleProfileId
+    ? `${getRoleDisplayName(suggestedRoleProfileId, suggestedRoleProfileId, roleLookup)} office`
+    : null;
 
   return {
     uid: handoff.handoffUid,
@@ -848,6 +1152,8 @@ function buildHandoffRow(handoff: VaultCollabHandoffSnapshot, now: Date): VaultC
     railClass: getHandoffRailClass(handoff.status),
     priorityLabel: handoff.urgent ? 'urgent' : handoff.priority,
     routeLabel: `${handoff.sourceProject} -> ${handoff.targetProject}`,
+    routeHintLabel,
+    suggestedRoleProfileId,
     queueLabel,
     ownerLabel: handoff.claimedBySessionUid
       ? formatVaultCollabShortUid(handoff.claimedBySessionUid)
@@ -887,9 +1193,14 @@ function buildSelectedHandoff(
   permissionEvent: VaultCollabEventSnapshot | null,
   now: Date,
   dashboardSessionUid: string | null,
+  roleLookup: RoleProfileLookup,
 ): VaultCollabSelectedHandoff {
   const attentionQuestion = handoff.status === 'awaiting_user'
     ? handoff.progressNote || getPermissionQuestionFromEvent(permissionEvent)
+    : null;
+  const suggestedRoleProfileId = getHandoffRoleProfileId(handoff, roleLookup);
+  const suggestedOffice = suggestedRoleProfileId
+    ? getRoleDisplayName(suggestedRoleProfileId, suggestedRoleProfileId, roleLookup)
     : null;
 
   return {
@@ -904,6 +1215,7 @@ function buildSelectedHandoff(
     meta: [
       { label: 'Priority', value: handoff.urgent ? 'urgent' : handoff.priority },
       { label: 'Route', value: `${handoff.sourceProject} -> ${handoff.targetProject}` },
+      ...(suggestedOffice ? [{ label: 'Suggested office', value: suggestedOffice }] : []),
       { label: 'Queue', value: formatQueueSummary(handoff), mono: true },
       { label: 'Claimed by', value: handoff.claimedBySessionUid || 'none', mono: Boolean(handoff.claimedBySessionUid) },
       { label: 'Dependency', value: handoff.dependsOnHandoffUid || 'none', mono: Boolean(handoff.dependsOnHandoffUid) },
@@ -1395,6 +1707,14 @@ function getConnectionLabel(state: VaultCollabSessionSnapshot['connectionState']
 
 function formatLooseLabel(value: string): string {
   return value.replace(/[_-]/g, ' ');
+}
+
+function formatTitleLabel(value: string): string {
+  return formatLooseLabel(value)
+    .split(/\s+/)
+    .filter((part) => part.length > 0)
+    .map((part) => `${part.slice(0, 1).toUpperCase()}${part.slice(1)}`)
+    .join(' ');
 }
 
 function formatStatusLabel(value: string): string {

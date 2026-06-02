@@ -1000,6 +1000,186 @@ describe('Vault Collab extension runtime config', () => {
     expect(serializedSnapshot).not.toContain('permission-claim-secret');
   });
 
+  it('reads role profile registry fields and role routing hints from the v2 dashboard database', () => {
+    const vaultRoot = mkdtempSync(join(tmpdir(), 'vault-collab-dashboard-roles-'));
+    const config = getDefaultVaultCollabRuntimeConfig(vaultRoot);
+    const db = createVaultCollabV2FixtureDatabase(config.databasePath);
+
+    db.exec(`
+      ALTER TABLE sessions ADD COLUMN role TEXT NOT NULL DEFAULT 'implementer';
+      ALTER TABLE sessions ADD COLUMN role_profile_id TEXT;
+      ALTER TABLE agent_profiles ADD COLUMN role_profile_id TEXT;
+      ALTER TABLE handoffs ADD COLUMN suggested_role_profile_id TEXT;
+
+      CREATE TABLE role_profiles (
+        role_profile_id TEXT PRIMARY KEY,
+        schema_version TEXT NOT NULL,
+        display_name TEXT NOT NULL,
+        purpose TEXT NOT NULL,
+        lifecycle_stage TEXT NOT NULL,
+        default_mutation TEXT NOT NULL,
+        capability_set_json TEXT NOT NULL DEFAULT '[]',
+        tool_grants_json TEXT NOT NULL DEFAULT '[]',
+        trigger_labels_json TEXT NOT NULL DEFAULT '[]',
+        requires_evidence_json TEXT NOT NULL DEFAULT '[]',
+        output_contract_json TEXT NOT NULL DEFAULT '{}',
+        stop_conditions_json TEXT NOT NULL DEFAULT '[]',
+        confidence_gates_json TEXT NOT NULL DEFAULT '[]',
+        requires_roles_json TEXT NOT NULL DEFAULT '[]',
+        suggested_roles_json TEXT NOT NULL DEFAULT '[]',
+        suggested_next_roles_json TEXT NOT NULL DEFAULT '[]',
+        skills_json TEXT NOT NULL DEFAULT '{"primary":[],"secondary":[]}',
+        status TEXT NOT NULL DEFAULT 'active',
+        source TEXT NOT NULL DEFAULT 'built_in',
+        sort_order INTEGER NOT NULL DEFAULT 1000,
+        is_overridden INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        archived_at TEXT
+      );
+
+      CREATE TABLE role_profile_aliases (
+        alias TEXT PRIMARY KEY,
+        role_profile_id TEXT NOT NULL,
+        source TEXT NOT NULL DEFAULT 'legacy',
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+    `);
+
+    db.prepare(`
+      INSERT INTO role_profiles (
+        role_profile_id,
+        schema_version,
+        display_name,
+        purpose,
+        lifecycle_stage,
+        default_mutation,
+        capability_set_json,
+        trigger_labels_json,
+        suggested_next_roles_json,
+        skills_json,
+        status,
+        sort_order,
+        created_at,
+        updated_at
+      )
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      'qa-evaluator',
+      'vault_collab.role_profile.v1',
+      'QA Evaluator',
+      'Verify completed work.',
+      'verification',
+      'read_only',
+      JSON.stringify(['run_tests', 'browser_check']),
+      JSON.stringify(['qa', 'verification']),
+      JSON.stringify(['release-agent']),
+      JSON.stringify({
+        primary: [{ skill: 'verification-loop', path: 'skills/verification-loop/SKILL.md' }],
+        secondary: [{ skill: 'browser-qa', path: 'skills/browser-qa/SKILL.md' }],
+      }),
+      'active',
+      100,
+      '2026-05-28T11:00:00.000Z',
+      '2026-05-28T11:00:00.000Z',
+    );
+    db.prepare('INSERT INTO role_profile_aliases (alias, role_profile_id, source, created_at, updated_at) VALUES (?, ?, ?, ?, ?)').run(
+      'qa',
+      'qa-evaluator',
+      'legacy',
+      '2026-05-28T11:00:00.000Z',
+      '2026-05-28T11:00:00.000Z',
+    );
+    db.prepare(`
+      INSERT INTO sessions (
+        session_uid,
+        display_name,
+        client_type,
+        project,
+        workspace_path,
+        status,
+        status_detail,
+        capabilities_json,
+        agent_uid,
+        current_handoff_uid,
+        session_token,
+        last_heartbeat_at,
+        created_at,
+        updated_at,
+        disconnected_at,
+        role,
+        role_profile_id
+      )
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      'vc_sess_qa',
+      'QA worker',
+      'codex',
+      'the-vault',
+      'C:\\workspace\\the-vault',
+      'idle',
+      null,
+      '{}',
+      null,
+      null,
+      'qa-session-secret',
+      '2026-05-28T11:59:30.000Z',
+      '2026-05-28T11:00:00.000Z',
+      '2026-05-28T11:59:30.000Z',
+      null,
+      'qa',
+      'qa-evaluator',
+    );
+    insertV2Handoff(db, {
+      handoffUid: 'vc_handoff_qa',
+      shortPrompt: 'Verify the dashboard UI.',
+      labels: ['qa'],
+      queuePosition: 1,
+      createdAt: '2026-05-28T11:40:00.000Z',
+      updatedAt: '2026-05-28T11:59:00.000Z',
+    });
+    db.prepare('UPDATE handoffs SET suggested_role_profile_id = ? WHERE handoff_uid = ?').run('qa-evaluator', 'vc_handoff_qa');
+    db.close();
+
+    const snapshot = getVaultCollabDashboardSnapshot(config, {
+      now: new Date('2026-05-28T12:00:00.000Z'),
+      staleSessionAfterMs: 5 * 60 * 1000,
+      sessionLimit: 10,
+      handoffLimit: 10,
+    });
+
+    expect(snapshot.roleProfiles).toEqual([
+      expect.objectContaining({
+        roleProfileId: 'qa-evaluator',
+        displayName: 'QA Evaluator',
+        lifecycleStage: 'verification',
+        defaultMutation: 'read_only',
+        capabilitySet: ['run_tests', 'browser_check'],
+        triggerLabels: ['qa', 'verification'],
+        suggestedNextRoleProfileIds: ['release-agent'],
+        skills: {
+          primary: ['verification-loop'],
+          secondary: ['browser-qa'],
+        },
+      }),
+    ]);
+    expect(snapshot.roleProfileAliases).toEqual([
+      { alias: 'qa', roleProfileId: 'qa-evaluator' },
+    ]);
+    expect(snapshot.sessions[0]).toEqual(expect.objectContaining({
+      sessionUid: 'vc_sess_qa',
+      role: 'qa',
+      roleProfileId: 'qa-evaluator',
+    }));
+    expect(snapshot.handoffs[0]).toEqual(expect.objectContaining({
+      handoffUid: 'vc_handoff_qa',
+      suggestedRoleProfileId: 'qa-evaluator',
+    }));
+
+    expect(JSON.stringify(snapshot)).not.toContain('qa-session-secret');
+  });
+
   it('reads launch request records as an optional read-only dashboard slice', () => {
     const vaultRoot = mkdtempSync(join(tmpdir(), 'vault-collab-dashboard-launch-'));
     const config = getDefaultVaultCollabRuntimeConfig(vaultRoot);

@@ -24,6 +24,7 @@ export function VaultCollabView({ vaultStatus }: VaultCollabViewProps) {
   const [snapshot, setSnapshot] = useState<VaultCollabSnapshot | null>(null);
   const [projectWorkspaces, setProjectWorkspaces] = useState<ProjectWorkspaceConfig[]>([]);
   const [selectedHandoffUid, setSelectedHandoffUid] = useState<string | null>(null);
+  const [selectedRoleProfileId, setSelectedRoleProfileId] = useState<string | null>(null);
   const [lastLoadedAt, setLastLoadedAt] = useState<Date | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -60,9 +61,10 @@ export function VaultCollabView({ vaultStatus }: VaultCollabViewProps) {
       ? buildVaultCollabDashboardViewModel(snapshot, lastLoadedAt ?? new Date(), selectedHandoffUid, {
         approvedLaunchCommands,
         dashboardSessionUid,
+        selectedRoleProfileId,
       })
       : null,
-    [approvedLaunchCommands, dashboardSessionUid, lastLoadedAt, selectedHandoffUid, snapshot],
+    [approvedLaunchCommands, dashboardSessionUid, lastLoadedAt, selectedHandoffUid, selectedRoleProfileId, snapshot],
   );
 
   const requestAgentProjectOptions = useMemo<RequestAgentProjectOption[]>(() => {
@@ -213,7 +215,12 @@ export function VaultCollabView({ vaultStatus }: VaultCollabViewProps) {
               onCopyLaunchCommand={(uid, command) => void actions.copyLaunchCommand(uid, command)}
             />
             <section className="vault-collab-cockpit-grid">
-              <Roster groups={model.cockpit.roster} />
+              <Roster
+                groups={model.cockpit.roster}
+                selectedRoleProfile={model.cockpit.selectedRoleProfile}
+                selectedRoleProfileId={selectedRoleProfileId ?? model.cockpit.selectedRoleProfile?.roleProfileId ?? null}
+                onSelectRoleProfile={setSelectedRoleProfileId}
+              />
               <WorkBoard
                 columns={model.cockpit.work}
                 selectedHandoffUid={model.cockpit.selectedHandoff?.uid ?? null}

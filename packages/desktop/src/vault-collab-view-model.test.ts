@@ -890,8 +890,9 @@ describe('Vault Collab dashboard view model', () => {
     }), now);
 
     expect(model.cockpit.roster).toEqual([
-      {
+      expect.objectContaining({
         role: 'implementer',
+        roleDisplayName: 'Implementer',
         agents: [
           expect.objectContaining({
             sessionUid: 'vc_sess_impl_1234567890',
@@ -901,9 +902,10 @@ describe('Vault Collab dashboard view model', () => {
             freshness: 'fresh',
           }),
         ],
-      },
-      {
+      }),
+      expect.objectContaining({
         role: 'reviewer',
+        roleDisplayName: 'Reviewer',
         agents: [
           expect.objectContaining({
             sessionUid: 'vc_sess_review_1234567890',
@@ -912,8 +914,133 @@ describe('Vault Collab dashboard view model', () => {
             freshness: 'fresh',
           }),
         ],
-      },
+      }),
     ]);
+  });
+
+  it('builds role offices from role profile data and resolves legacy role strings', () => {
+    const model = buildVaultCollabDashboardViewModel(snapshot({
+      roleProfiles: [
+        {
+          roleProfileId: 'implementer',
+          displayName: 'Implementer',
+          purpose: 'Execute approved changes.',
+          lifecycleStage: 'implementation',
+          defaultMutation: 'workspace_write',
+          capabilitySet: ['edit_files', 'run_tests'],
+          triggerLabels: ['implementation', 'feature'],
+          suggestedNextRoleProfileIds: ['reviewer'],
+          skills: {
+            primary: ['tdd-workflow'],
+            secondary: ['coding-standards'],
+          },
+        },
+        {
+          roleProfileId: 'runtime-loop-operator',
+          displayName: 'Runtime Loop Operator',
+          purpose: 'Supervise live coordination health.',
+          lifecycleStage: 'operations',
+          defaultMutation: 'coordination_write',
+          capabilitySet: ['vault_collab_read', 'vault_collab_write'],
+          triggerLabels: ['runtime', 'stale'],
+          suggestedNextRoleProfileIds: ['coordinator'],
+          skills: {
+            primary: ['agent-introspection-debugging'],
+            secondary: ['continuous-agent-loop'],
+          },
+        },
+        {
+          roleProfileId: 'loop-resolver',
+          displayName: 'Loop Resolver',
+          purpose: 'Close already-complete open loops with evidence.',
+          lifecycleStage: 'operations',
+          defaultMutation: 'read_only',
+          capabilitySet: ['resolve_loop'],
+          triggerLabels: ['loop', 'cleanup'],
+          suggestedNextRoleProfileIds: ['coordinator'],
+          skills: {
+            primary: ['verification-loop'],
+            secondary: ['autonomous-loops'],
+          },
+        },
+      ],
+      roleProfileAliases: [
+        { alias: 'sweeper', roleProfileId: 'runtime-loop-operator' },
+      ],
+      sessions: [
+        session({
+          sessionUid: 'vc_sess_impl_1234567890',
+          displayName: 'Codex implementer',
+          role: 'implementer',
+          roleProfileId: 'implementer',
+          effectiveStatus: 'working',
+        }),
+        session({
+          sessionUid: 'vc_sess_sweeper_1234567890',
+          displayName: 'Legacy sweeper',
+          role: 'sweeper',
+          roleProfileId: null,
+          effectiveStatus: 'idle',
+        }),
+      ],
+      handoffs: [
+        handoff({
+          handoffUid: 'vc_handoff_review_1234567890',
+          shortPrompt: 'Route implementation to review.',
+          suggestedRoleProfileId: 'implementer',
+          queueKey: 'implementation',
+          labels: ['feature'],
+        }),
+        handoff({
+          handoffUid: 'vc_handoff_loop_1234567890',
+          shortPrompt: 'Close completed loop.',
+          suggestedRoleProfileId: 'loop-resolver',
+          queueKey: 'loop',
+          labels: ['cleanup'],
+        }),
+      ],
+    }), now, 'vc_handoff_loop_1234567890', {
+      selectedRoleProfileId: 'runtime-loop-operator',
+    });
+
+    expect(model.cockpit.roster.map((office) => office.roleProfileId)).toEqual([
+      'implementer',
+      'runtime-loop-operator',
+      'loop-resolver',
+    ]);
+    expect(model.cockpit.roster[1]).toEqual(expect.objectContaining({
+      roleProfileId: 'runtime-loop-operator',
+      roleDisplayName: 'Runtime Loop Operator',
+      role: 'runtime-loop-operator',
+      isWatchdog: false,
+    }));
+    expect(model.cockpit.roster[1].agents[0]).toEqual(expect.objectContaining({
+      rawRole: 'sweeper',
+      roleProfileId: 'runtime-loop-operator',
+      roleDisplayName: 'Runtime Loop Operator',
+      roleLabel: 'Runtime Loop Operator / sweeper',
+    }));
+    expect(model.cockpit.roster[2]).toEqual(expect.objectContaining({
+      roleProfileId: 'loop-resolver',
+      isWatchdog: true,
+    }));
+    expect(model.cockpit.roster[2].handoffs[0]).toEqual(expect.objectContaining({
+      uid: 'vc_handoff_loop_1234567890',
+      routeHintLabel: 'Loop Resolver office',
+    }));
+    expect(model.cockpit.selectedRoleProfile).toEqual(expect.objectContaining({
+      roleProfileId: 'runtime-loop-operator',
+      displayName: 'Runtime Loop Operator',
+      mutationLabel: 'coordination write',
+      capabilities: ['vault collab read', 'vault collab write'],
+      triggerLabels: ['runtime', 'stale'],
+      suggestedNextRoleLabels: ['Coordinator'],
+      primarySkillNames: ['agent-introspection-debugging'],
+      secondarySkillNames: ['continuous-agent-loop'],
+    }));
+    expect(model.selectedHandoff?.meta).toEqual(expect.arrayContaining([
+      expect.objectContaining({ label: 'Suggested office', value: 'Loop Resolver' }),
+    ]));
   });
 
   it('excludes dashboard-admin sessions from the cockpit roster', () => {
@@ -941,8 +1068,9 @@ describe('Vault Collab dashboard view model', () => {
     }), now);
 
     expect(model.cockpit.roster).toEqual([
-      {
+      expect.objectContaining({
         role: 'implementer',
+        roleDisplayName: 'Implementer',
         agents: [
           expect.objectContaining({
             sessionUid: 'vc_sess_worker_1234567890',
@@ -950,7 +1078,7 @@ describe('Vault Collab dashboard view model', () => {
             status: 'working',
           }),
         ],
-      },
+      }),
     ]);
   });
 

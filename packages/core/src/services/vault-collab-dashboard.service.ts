@@ -19,6 +19,8 @@ import type {
   VaultCollabJsonRecord,
   VaultCollabLaunchRequestSnapshot,
   VaultCollabLaunchRequestStatus,
+  VaultCollabRoleProfileAliasSnapshot,
+  VaultCollabRoleProfileSnapshot,
   VaultCollabRuntimeConfig,
   VaultCollabSessionConnectionState,
   VaultCollabSessionSnapshot,
@@ -53,6 +55,8 @@ interface SessionRow {
   client_type: string;
   project: string;
   workspace_path: string;
+  role: string | null;
+  role_profile_id: string | null;
   status: string;
   status_detail: string | null;
   capabilities_json: string;
@@ -82,6 +86,7 @@ interface HandoffRow {
   source_session_uid: string | null;
   suggested_session_uid: string | null;
   suggested_client_type: string | null;
+  suggested_role_profile_id: string | null;
   queue_key: string;
   labels_json: string;
   queue_position: number | null;
@@ -117,6 +122,7 @@ interface LaunchRequestRow {
   project: string | null;
   workspace_path: string | null;
   role: string | null;
+  role_profile_id: string | null;
   initial_instructions: string | null;
   permission_mode: string | null;
   command_preview: string | null;
@@ -177,6 +183,23 @@ interface DiscussionMessageRow {
   created_at: string;
 }
 
+interface RoleProfileRow {
+  role_profile_id: string;
+  display_name: string;
+  purpose: string;
+  lifecycle_stage: string;
+  default_mutation: string;
+  capability_set_json: string;
+  trigger_labels_json: string;
+  suggested_next_roles_json: string;
+  skills_json: string;
+}
+
+interface RoleProfileAliasRow {
+  alias: string;
+  role_profile_id: string;
+}
+
 export function getVaultCollabDashboardSnapshot(
   config: VaultCollabRuntimeConfig,
   options: VaultCollabDashboardOptions = {},
@@ -218,12 +241,16 @@ export function getVaultCollabDashboardSnapshot(
     const launchRequests = listLaunchRequests(db, clampLimit(options.launchRequestLimit, DEFAULT_LAUNCH_REQUEST_LIMIT));
     const deliveryAttempts = listRecentDeliveryAttempts(db, clampLimit(options.eventLimit, DEFAULT_EVENT_LIMIT));
     const events = listRecentEvents(db, clampLimit(options.eventLimit, DEFAULT_EVENT_LIMIT));
+    const roleProfiles = listRoleProfiles(db);
+    const roleProfileAliases = listRoleProfileAliases(db);
 
     return {
       ...base,
       dataReady: true,
       sessions,
       handoffs,
+      roleProfiles,
+      roleProfileAliases,
       launchRequests,
       deliveryAttempts,
       events,
@@ -261,11 +288,14 @@ function listSessions(
   closedSessionVisibilityMs: number,
 ): VaultCollabSessionSnapshot[] {
   const scanLimit = Math.min(MAX_SESSION_SCAN_LIMIT, Math.max(limit, limit * 8));
+  const hasSessionRole = columnExists(db, 'sessions', 'role');
+  const hasSessionRoleProfileId = columnExists(db, 'sessions', 'role_profile_id');
   const hasSessionAgentUid = columnExists(db, 'sessions', 'agent_uid');
   const hasAgentProfiles = hasSessionAgentUid && tableExists(db, 'agent_profiles');
   const hasAgentStableName = hasAgentProfiles && columnExists(db, 'agent_profiles', 'stable_name');
   const hasAgentDisplayName = hasAgentProfiles && columnExists(db, 'agent_profiles', 'display_name');
   const hasAgentRole = hasAgentProfiles && columnExists(db, 'agent_profiles', 'role');
+  const hasAgentRoleProfileId = hasAgentProfiles && columnExists(db, 'agent_profiles', 'role_profile_id');
   const deliveryModeSelect = columnExists(db, 'sessions', 'delivery_mode') ? 'sessions.delivery_mode' : "'manual_poll'";
   const deliveryWakeableSelect = columnExists(db, 'sessions', 'delivery_wakeable') ? 'sessions.delivery_wakeable' : '0';
   const deliveryLastAckEventIdSelect = columnExists(db, 'sessions', 'delivery_last_ack_event_id') ? 'sessions.delivery_last_ack_event_id' : 'NULL';
@@ -277,6 +307,14 @@ function listSessions(
   const agentNameSelect = hasAgentStableName ? 'agent_profiles.stable_name' : 'NULL';
   const agentDisplayNameSelect = hasAgentDisplayName ? 'agent_profiles.display_name' : 'NULL';
   const agentRoleSelect = hasAgentRole ? 'agent_profiles.role' : 'NULL';
+  const roleSelect = hasSessionRole ? 'sessions.role' : 'NULL';
+  const roleProfileIdSelect = hasSessionRoleProfileId && hasAgentRoleProfileId
+    ? 'COALESCE(sessions.role_profile_id, agent_profiles.role_profile_id)'
+    : hasSessionRoleProfileId
+      ? 'sessions.role_profile_id'
+      : hasAgentRoleProfileId
+        ? 'agent_profiles.role_profile_id'
+        : 'NULL';
 
   const rows = db.prepare(`
     SELECT
@@ -285,6 +323,8 @@ function listSessions(
       sessions.client_type,
       sessions.project,
       sessions.workspace_path,
+      ${roleSelect} AS role,
+      ${roleProfileIdSelect} AS role_profile_id,
       sessions.status,
       sessions.status_detail,
       sessions.capabilities_json,
@@ -319,6 +359,7 @@ function listOpenHandoffs(db: Database.Database, limit: number): VaultCollabHand
   const labelsSelect = columnExists(db, 'handoffs', 'labels_json') ? 'labels_json' : "'[]'";
   const queuePositionSelect = columnExists(db, 'handoffs', 'queue_position') ? 'queue_position' : 'NULL';
   const dependsOnSelect = columnExists(db, 'handoffs', 'depends_on_handoff_uid') ? 'depends_on_handoff_uid' : 'NULL';
+  const suggestedRoleProfileIdSelect = columnExists(db, 'handoffs', 'suggested_role_profile_id') ? 'suggested_role_profile_id' : 'NULL';
 
   const rows = db.prepare(`
     SELECT
@@ -332,6 +373,7 @@ function listOpenHandoffs(db: Database.Database, limit: number): VaultCollabHand
       source_session_uid,
       suggested_session_uid,
       suggested_client_type,
+      ${suggestedRoleProfileIdSelect} AS suggested_role_profile_id,
       ${queueKeySelect} AS queue_key,
       ${labelsSelect} AS labels_json,
       ${queuePositionSelect} AS queue_position,
@@ -421,6 +463,7 @@ function listLaunchRequests(db: Database.Database, limit: number): VaultCollabLa
 
   const effortLevelSelect = columnExists(db, 'launch_requests', 'effort_level') ? 'effort_level' : 'NULL';
   const roleSelect = columnExists(db, 'launch_requests', 'role') ? 'role' : 'NULL';
+  const roleProfileIdSelect = columnExists(db, 'launch_requests', 'role_profile_id') ? 'role_profile_id' : 'NULL';
   const initialInstructionsSelect = columnExists(db, 'launch_requests', 'initial_instructions') ? 'initial_instructions' : "''";
   const permissionModeSelect = columnExists(db, 'launch_requests', 'permission_mode') ? 'permission_mode' : "''";
   const commandPreviewSelect = columnExists(db, 'launch_requests', 'command_preview') ? 'command_preview' : 'NULL';
@@ -447,6 +490,7 @@ function listLaunchRequests(db: Database.Database, limit: number): VaultCollabLa
       project,
       workspace_path,
       ${roleSelect} AS role,
+      ${roleProfileIdSelect} AS role_profile_id,
       ${initialInstructionsSelect} AS initial_instructions,
       ${permissionModeSelect} AS permission_mode,
       ${commandPreviewSelect} AS command_preview,
@@ -489,6 +533,57 @@ function listLaunchRequests(db: Database.Database, limit: number): VaultCollabLa
   return rows.map(mapLaunchRequestRow);
 }
 
+function listRoleProfiles(db: Database.Database): VaultCollabRoleProfileSnapshot[] {
+  if (!tableExists(db, 'role_profiles')) {
+    return [];
+  }
+
+  const rows = db.prepare(`
+    SELECT
+      role_profile_id,
+      display_name,
+      purpose,
+      lifecycle_stage,
+      default_mutation,
+      capability_set_json,
+      trigger_labels_json,
+      suggested_next_roles_json,
+      skills_json
+    FROM role_profiles
+    WHERE status = 'active'
+    ORDER BY sort_order ASC, role_profile_id ASC
+  `).all() as RoleProfileRow[];
+
+  return rows.map((row) => ({
+    roleProfileId: row.role_profile_id,
+    displayName: row.display_name,
+    purpose: row.purpose,
+    lifecycleStage: row.lifecycle_stage,
+    defaultMutation: row.default_mutation,
+    capabilitySet: parseStringArray(row.capability_set_json),
+    triggerLabels: parseStringArray(row.trigger_labels_json),
+    suggestedNextRoleProfileIds: parseStringArray(row.suggested_next_roles_json),
+    skills: parseRoleProfileSkills(row.skills_json),
+  }));
+}
+
+function listRoleProfileAliases(db: Database.Database): VaultCollabRoleProfileAliasSnapshot[] {
+  if (!tableExists(db, 'role_profile_aliases')) {
+    return [];
+  }
+
+  const rows = db.prepare(`
+    SELECT alias, role_profile_id
+    FROM role_profile_aliases
+    ORDER BY alias ASC
+  `).all() as RoleProfileAliasRow[];
+
+  return rows.map((row) => ({
+    alias: row.alias,
+    roleProfileId: row.role_profile_id,
+  }));
+}
+
 function mapSessionRow(row: SessionRow, now: Date, staleSessionAfterMs: number): VaultCollabSessionSnapshot {
   const status = parseSessionStatus(row.status);
   const heartbeatAgeMs = getAgeMs(now, row.last_heartbeat_at);
@@ -501,6 +596,8 @@ function mapSessionRow(row: SessionRow, now: Date, staleSessionAfterMs: number):
     clientType: parseClientType(row.client_type),
     project: row.project,
     workspacePath: row.workspace_path,
+    role: row.role,
+    roleProfileId: row.role_profile_id,
     status,
     effectiveStatus,
     connectionState,
@@ -537,6 +634,7 @@ function mapHandoffRow(row: HandoffRow): VaultCollabHandoffSnapshot {
     sourceSessionUid: row.source_session_uid,
     suggestedSessionUid: row.suggested_session_uid,
     suggestedClientType: row.suggested_client_type ? parseClientType(row.suggested_client_type) : null,
+    suggestedRoleProfileId: row.suggested_role_profile_id,
     queueKey: row.queue_key || 'default',
     labels: parseStringArray(row.labels_json),
     queuePosition: row.queue_position,
@@ -566,6 +664,7 @@ function mapLaunchRequestRow(row: LaunchRequestRow): VaultCollabLaunchRequestSna
     project: row.project ?? '',
     workspacePath: row.workspace_path ?? '',
     role: row.role,
+    roleProfileId: row.role_profile_id,
     initialInstructions: row.initial_instructions ?? '',
     permissionMode: row.permission_mode ?? '',
     commandPreview: row.command_preview,
@@ -803,6 +902,8 @@ function createEmptySnapshot(
     errorMessage: null,
     sessions: [],
     handoffs: [],
+    roleProfiles: [],
+    roleProfileAliases: [],
     launchRequests: [],
     deliveryAttempts: [],
     events: [],
@@ -1023,6 +1124,42 @@ function parseStringArray(value: string): string[] {
   } catch {
     return [];
   }
+}
+
+function parseRoleProfileSkills(value: string): VaultCollabRoleProfileSnapshot['skills'] {
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      return { primary: [], secondary: [] };
+    }
+
+    const record = parsed as Record<string, unknown>;
+    return {
+      primary: parseSkillNameArray(record.primary),
+      secondary: parseSkillNameArray(record.secondary),
+    };
+  } catch {
+    return { primary: [], secondary: [] };
+  }
+}
+
+function parseSkillNameArray(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value.flatMap((entry) => {
+    if (typeof entry === 'string' && entry.trim().length > 0) {
+      return [entry.trim()];
+    }
+
+    if (entry && typeof entry === 'object' && !Array.isArray(entry)) {
+      const skill = (entry as { skill?: unknown }).skill;
+      return typeof skill === 'string' && skill.trim().length > 0 ? [skill.trim()] : [];
+    }
+
+    return [];
+  });
 }
 
 function parseSessionDeliveryMode(value: string): VaultCollabSessionSnapshot['delivery']['mode'] {
