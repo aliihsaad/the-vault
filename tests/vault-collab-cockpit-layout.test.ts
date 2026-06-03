@@ -14,15 +14,35 @@ describe('Vault Collab cockpit layout', () => {
   it('keeps the Phase 6 cockpit in tabbed sections with normal page flow', () => {
     expect(cssBlock('.vault-collab-dashboard')).toContain('display: flex');
     expect(cssBlock('.vault-collab-dashboard')).toContain('flex-direction: column');
-    expect(cssBlock('.vault-collab-dashboard')).toContain('overflow: visible');
-    expect(cssBlock('.vault-collab-dashboard')).not.toContain('height: calc(100vh - 112px)');
+    expect(cssBlock('.vault-collab-dashboard')).toContain('flex: 1 1 auto');
+    expect(cssBlock('.vault-collab-dashboard')).toContain('height: 100%');
+    expect(cssBlock('.vault-collab-dashboard')).toContain('overflow: hidden');
     expect(cssBlock('.vault-collab-cockpit-shell')).toContain('display: flex');
     expect(cssBlock('.vault-collab-cockpit-shell')).toContain('flex-direction: column');
+    expect(cssBlock('.vault-collab-cockpit-shell')).toContain('flex: 1 1 auto');
+    expect(cssBlock('.vault-collab-cockpit-shell')).toContain('height: 100%');
+    expect(cssBlock('.vault-collab-cockpit-shell')).toContain('min-height: 0');
+    expect(cssBlock('.vault-collab-cockpit-shell')).toContain('overflow: hidden');
     expect(cssBlock('.vault-collab-cockpit-tabs')).toContain('display: flex');
     expect(cssBlock('.vault-collab-cockpit-tabs')).toContain('overflow-x: auto');
+    expect(cssBlock('.vault-collab-cockpit-tab-panel')).toContain('display: flex');
+    expect(cssBlock('.vault-collab-cockpit-tab-panel')).toContain('flex: 1 1 auto');
+    expect(cssBlock('.vault-collab-cockpit-tab-panel')).toContain('flex-direction: column');
     expect(cssBlock('.vault-collab-cockpit-tab-panel')).toContain('min-width: 0');
-    expect(cssBlock('.vault-collab-zone')).toContain('overflow: visible');
-    expect(cssBlock('.vault-collab-zone-scroll')).toContain('overflow: visible');
+    expect(cssBlock('.vault-collab-cockpit-tab-panel')).toContain('min-height: 0');
+    expect(cssBlock('.vault-collab-cockpit-tab-panel')).toContain('height: 100%');
+    expect(cssBlock('.vault-collab-cockpit-tab-panel')).toContain('overflow: hidden');
+    expect(cssBlock('.vault-collab-cockpit-tab-panel')).not.toContain('overflow: visible');
+    expect(cssBlock('.vault-collab-zone')).toContain('min-height: 0');
+    expect(cssBlock('.vault-collab-zone')).toContain('height: 100%');
+    expect(cssBlock('.vault-collab-zone')).toContain('overflow: hidden');
+    expect(cssBlock('.vault-collab-zone-scroll')).toContain('min-height: 0');
+    expect(cssBlock('.vault-collab-zone-scroll')).toContain('overflow-y: auto');
+    expect(cssBlock('.vault-collab-work-columns')).toContain('flex: 1 1 auto');
+    expect(cssBlock('.vault-collab-work-columns')).toContain('min-height: 0');
+    expect(cssBlock('.vault-collab-work-columns')).toContain('grid-template-columns: repeat(auto-fit, minmax(260px, 1fr))');
+    expect(cssBlock('.vault-collab-work-columns')).toContain('overflow-y: auto');
+    expect(cssBlock('.vault-collab-work-columns')).not.toContain('overflow: visible');
   });
 
   it('keeps the all-clear Needs You state compact', () => {
@@ -39,13 +59,28 @@ describe('Vault Collab cockpit layout', () => {
     expect(cssBlock('.vault-collab-command-preview')).not.toContain('white-space: nowrap');
   });
 
-  it('renders selected handoff details as a compact inspector instead of a raw drawer', () => {
-    expect(cssBlock('.vault-collab-selected-handoff-body')).toContain('grid-template-columns: minmax(0, 0.95fr) minmax(360px, 0.8fr)');
-    expect(cssBlock('.vault-collab-selected-handoff-title')).toContain('display: -webkit-box');
-    expect(cssBlock('.vault-collab-selected-handoff-title')).toContain('-webkit-line-clamp: 4');
-    expect(cssBlock('.vault-collab-selected-meta-grid')).toContain('grid-template-columns: repeat(auto-fit, minmax(170px, 1fr))');
-    expect(cssBlock('.vault-collab-selected-thread-composer')).toContain('grid-template-columns: minmax(0, 1fr) auto');
-    expect(cssBlock('.vault-collab-selected-thread-events')).toContain('max-height: 260px');
+  it('renders handoff details in a modal instead of reserving tab-panel height', () => {
+    expect(cssBlock('.vault-collab-selected-handoff')).toBe('');
+    expect(cssBlock('.vault-collab-handoff-modal-backdrop')).toContain('position: fixed');
+    expect(cssBlock('.vault-collab-handoff-modal-backdrop')).toContain('inset: 0');
+    expect(cssBlock('.vault-collab-handoff-modal')).toContain('max-height: min(820px, calc(100vh - 48px))');
+    expect(cssBlock('.vault-collab-handoff-modal')).toContain('overflow: hidden');
+    expect(cssBlock('.vault-collab-handoff-modal-body')).toContain('grid-template-columns: minmax(0, 0.95fr) minmax(360px, 0.8fr)');
+    expect(cssBlock('.vault-collab-handoff-modal-body')).toContain('overflow-y: auto');
+    expect(cssBlock('.vault-collab-handoff-modal-title')).toContain('display: -webkit-box');
+    expect(cssBlock('.vault-collab-handoff-modal-title')).toContain('-webkit-line-clamp: 5');
+    expect(cssBlock('.vault-collab-handoff-modal-meta-grid')).toContain('grid-template-columns: repeat(auto-fit, minmax(170px, 1fr))');
+    expect(cssBlock('.vault-collab-handoff-modal-thread-composer')).toContain('grid-template-columns: minmax(0, 1fr) auto');
+    expect(cssBlock('.vault-collab-handoff-modal-thread-events')).toContain('max-height: 340px');
+  });
+
+  it('keeps office details and Request agent as modal surfaces', () => {
+    expect(cssBlock('.vault-collab-role-profile-panel')).toBe('');
+    expect(appCssSource).toContain('.vault-collab-role-profile-modal-backdrop');
+    expect(appCssSource).toContain('.vault-collab-role-profile-modal');
+    expect(appCssSource).toContain('.vault-collab-request-agent-modal-backdrop');
+    expect(appCssSource).toContain('.vault-collab-request-agent-modal');
+    expect(appCssSource).not.toContain('.vault-collab-request-agent-form {\n  grid-column: 1 / -1;');
   });
 
   it('allows long conversation tokens to wrap instead of widening the page', () => {

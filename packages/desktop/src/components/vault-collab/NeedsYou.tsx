@@ -1,5 +1,5 @@
 import { useEffect, useState, type FormEvent } from 'react';
-import { AlertTriangle, CheckCircle2, Copy, Rocket, UserPlus } from 'lucide-react';
+import { AlertTriangle, CheckCircle2, Copy, Rocket, UserPlus, X } from 'lucide-react';
 
 import type {
   VaultCollabLaunchRequestRow,
@@ -11,6 +11,7 @@ interface NeedsYouProps {
   launchRequests: VaultCollabLaunchRequestRow[];
   actionBusy: string | null;
   projectOptions: RequestAgentProjectOption[];
+  roleOptions: RequestAgentRoleOption[];
   defaultProject: string;
   defaultWorkspacePath: string;
   onRequestAgent: (input: RequestAgentInput) => void;
@@ -22,6 +23,11 @@ interface NeedsYouProps {
 interface RequestAgentProjectOption {
   project: string;
   workspacePath: string;
+}
+
+interface RequestAgentRoleOption {
+  role: string;
+  label: string;
 }
 
 interface RequestAgentInput {
@@ -42,6 +48,7 @@ export function NeedsYou({
   launchRequests,
   actionBusy,
   projectOptions,
+  roleOptions,
   defaultProject,
   defaultWorkspacePath,
   onRequestAgent,
@@ -63,8 +70,8 @@ export function NeedsYou({
             type="button"
             className="header-button"
             disabled={actionBusy === 'agent-request'}
-            onClick={() => setRequestFormOpen((current) => !current)}
-            title={requestFormOpen ? 'Hide request form' : 'Request agent'}
+            onClick={() => setRequestFormOpen(true)}
+            title="Request agent"
           >
             <UserPlus size={14} />
             <span>Request agent</span>
@@ -74,16 +81,6 @@ export function NeedsYou({
       </div>
 
       <div className="vault-collab-needs-list">
-        {requestFormOpen ? (
-          <RequestAgentForm
-            disabled={actionBusy === 'agent-request'}
-            projectOptions={projectOptions}
-            defaultProject={defaultProject}
-            defaultWorkspacePath={defaultWorkspacePath}
-            onCancel={() => setRequestFormOpen(false)}
-            onRequestAgent={onRequestAgent}
-          />
-        ) : null}
         {items.length === 0 ? (
           <div className="empty-state">All clear.</div>
         ) : items.map((item) => {
@@ -143,13 +140,26 @@ export function NeedsYou({
             );
           })}
       </div>
+
+      {requestFormOpen ? (
+        <RequestAgentModal
+          disabled={actionBusy === 'agent-request'}
+          projectOptions={projectOptions}
+          roleOptions={roleOptions}
+          defaultProject={defaultProject}
+          defaultWorkspacePath={defaultWorkspacePath}
+          onCancel={() => setRequestFormOpen(false)}
+          onRequestAgent={onRequestAgent}
+        />
+      ) : null}
     </section>
   );
 }
 
-function RequestAgentForm({
+function RequestAgentModal({
   disabled,
   projectOptions,
+  roleOptions,
   defaultProject,
   defaultWorkspacePath,
   onCancel,
@@ -157,16 +167,87 @@ function RequestAgentForm({
 }: {
   disabled: boolean;
   projectOptions: RequestAgentProjectOption[];
+  roleOptions: RequestAgentRoleOption[];
   defaultProject: string;
   defaultWorkspacePath: string;
   onCancel: () => void;
   onRequestAgent: (input: RequestAgentInput) => void;
 }) {
+  useEffect(() => {
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === 'Escape') {
+        onCancel();
+      }
+    }
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [onCancel]);
+
+  return (
+    <div className="vault-collab-request-agent-modal-backdrop" onClick={onCancel}>
+      <section
+        className="vault-collab-request-agent-modal"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="vault-collab-request-agent-modal-title"
+        onClick={(event) => event.stopPropagation()}
+      >
+        <header className="vault-collab-request-agent-modal-header">
+          <div>
+            <span>Runtime</span>
+            <strong id="vault-collab-request-agent-modal-title">Request agent</strong>
+          </div>
+          <button
+            type="button"
+            className="header-button icon-only-button vault-collab-request-agent-modal-close"
+            onClick={onCancel}
+            title="Close request agent"
+          >
+            <X size={15} />
+          </button>
+        </header>
+        <RequestAgentForm
+          disabled={disabled}
+          projectOptions={projectOptions}
+          roleOptions={roleOptions}
+          defaultProject={defaultProject}
+          defaultWorkspacePath={defaultWorkspacePath}
+          onCancel={onCancel}
+          onRequestAgent={onRequestAgent}
+        />
+      </section>
+    </div>
+  );
+}
+
+function RequestAgentForm({
+  disabled,
+  projectOptions,
+  roleOptions,
+  defaultProject,
+  defaultWorkspacePath,
+  onCancel,
+  onRequestAgent,
+}: {
+  disabled: boolean;
+  projectOptions: RequestAgentProjectOption[];
+  roleOptions: RequestAgentRoleOption[];
+  defaultProject: string;
+  defaultWorkspacePath: string;
+  onCancel: () => void;
+  onRequestAgent: (input: RequestAgentInput) => void;
+}) {
+  const defaultRole = getDefaultRole(roleOptions);
   const [project, setProject] = useState(defaultProject);
   const [workspacePath, setWorkspacePath] = useState(defaultWorkspacePath);
-  const [role, setRole] = useState('implementation-worker');
+  const [role, setRole] = useState(defaultRole);
   const [provider, setProvider] = useState<RequestAgentInput['provider']>('codex');
   const [agentInstructions, setAgentInstructions] = useState('');
+  const projectSelectOptions = project.trim()
+    && !projectOptions.some((option) => option.project === project)
+    ? [{ project, workspacePath }, ...projectOptions]
+    : projectOptions;
 
   useEffect(() => {
     setProject((current) => current.trim() ? current : defaultProject);
@@ -175,6 +256,10 @@ function RequestAgentForm({
   useEffect(() => {
     setWorkspacePath((current) => current.trim() ? current : defaultWorkspacePath);
   }, [defaultWorkspacePath]);
+
+  useEffect(() => {
+    setRole((current) => roleOptions.some((option) => option.role === current) ? current : defaultRole);
+  }, [defaultRole, roleOptions]);
 
   function updateProject(nextProject: string) {
     setProject(nextProject);
@@ -204,84 +289,82 @@ function RequestAgentForm({
   }
 
   return (
-    <form className="vault-collab-need-row vault-collab-request-agent-form" onSubmit={submit}>
-      <span className="vault-collab-need-icon">
+    <form className="vault-collab-request-agent-form" onSubmit={submit}>
+      <div className="vault-collab-request-agent-provider">
         <UserPlus size={15} />
-      </span>
-      <div className="vault-collab-need-main">
-        <div className="vault-collab-row-title">
-          <strong>Request agent</strong>
-          <span>{provider}</span>
-        </div>
-        <label className="field-row">
-          <span className="field-label">Project</span>
-          <input
-            className="text-input"
-            list="vault-collab-request-agent-projects"
-            value={project}
-            onChange={(event) => updateProject(event.target.value)}
-            placeholder="Project name"
-          />
-          <datalist id="vault-collab-request-agent-projects">
-            {projectOptions.map((option) => (
-              <option key={option.project} value={option.project} />
-            ))}
-          </datalist>
-        </label>
-        <label className="field-row">
-          <span className="field-label">Workspace</span>
-          <input
-            className="text-input"
-            value={workspacePath}
-            onChange={(event) => setWorkspacePath(event.target.value)}
-            placeholder="Absolute workspace path"
-          />
-        </label>
-        <label className="field-row">
-          <span className="field-label">Role</span>
-          <input
-            className="text-input"
-            value={role}
-            onChange={(event) => setRole(event.target.value)}
-          />
-        </label>
-        <label className="field-row">
-          <span className="field-label">Provider</span>
-          <select
-            className="text-input"
-            value={provider}
-            onChange={(event) => setProvider(event.target.value as RequestAgentInput['provider'])}
-          >
-            {REQUEST_AGENT_PROVIDERS.map((option) => (
-              <option key={option.provider} value={option.provider}>{option.label}</option>
-            ))}
-          </select>
-        </label>
-        <label className="field-row">
-          <span className="field-label">Instructions</span>
-          <textarea
-            className="text-area-input"
-            value={agentInstructions}
-            onChange={(event) => setAgentInstructions(event.target.value)}
-            rows={3}
-          />
-        </label>
-        <div className="inline-actions vault-collab-action-row">
-          <button
-            type="submit"
-            className="primary-button"
-            disabled={disabled || !project.trim() || !workspacePath.trim() || !role.trim() || !agentInstructions.trim()}
-          >
-            Request agent
-          </button>
-          <button
-            type="button"
-            className="header-button"
-            onClick={onCancel}
-          >
-            Cancel
-          </button>
-        </div>
+        <span>{provider}</span>
+      </div>
+      <label className="field-row">
+        <span className="field-label">Project</span>
+        <select
+          className="text-input"
+          value={project}
+          onChange={(event) => updateProject(event.target.value)}
+        >
+          <option value="" disabled>Choose project</option>
+          {projectSelectOptions.map((option) => (
+            <option key={option.project} value={option.project}>{option.project}</option>
+          ))}
+        </select>
+      </label>
+      <label className="field-row">
+        <span className="field-label">Workspace</span>
+        <input
+          className="text-input"
+          value={workspacePath}
+          onChange={(event) => setWorkspacePath(event.target.value)}
+          placeholder="Absolute workspace path"
+        />
+      </label>
+      <label className="field-row">
+        <span className="field-label">Role</span>
+        <select
+          className="text-input"
+          value={role}
+          onChange={(event) => setRole(event.target.value)}
+        >
+          <option value="" disabled>Choose office</option>
+          {roleOptions.map((option) => (
+            <option key={option.role} value={option.role}>{option.label}</option>
+          ))}
+        </select>
+      </label>
+      <label className="field-row">
+        <span className="field-label">Provider</span>
+        <select
+          className="text-input"
+          value={provider}
+          onChange={(event) => setProvider(event.target.value as RequestAgentInput['provider'])}
+        >
+          {REQUEST_AGENT_PROVIDERS.map((option) => (
+            <option key={option.provider} value={option.provider}>{option.label}</option>
+          ))}
+        </select>
+      </label>
+      <label className="field-row">
+        <span className="field-label">Instructions</span>
+        <textarea
+          className="text-area-input"
+          value={agentInstructions}
+          onChange={(event) => setAgentInstructions(event.target.value)}
+          rows={3}
+        />
+      </label>
+      <div className="inline-actions vault-collab-action-row">
+        <button
+          type="submit"
+          className="primary-button"
+          disabled={disabled || !project.trim() || !workspacePath.trim() || !role.trim() || !agentInstructions.trim()}
+        >
+          Request agent
+        </button>
+        <button
+          type="button"
+          className="header-button"
+          onClick={onCancel}
+        >
+          Cancel
+        </button>
       </div>
     </form>
   );
@@ -289,4 +372,10 @@ function RequestAgentForm({
 
 function shortId(value: string): string {
   return value.length > 14 ? `${value.slice(0, 14)}...` : value;
+}
+
+function getDefaultRole(roleOptions: RequestAgentRoleOption[]): string {
+  return roleOptions.find((option) => option.role === 'implementer')?.role
+    ?? roleOptions[0]?.role
+    ?? '';
 }

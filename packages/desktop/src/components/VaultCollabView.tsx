@@ -25,6 +25,11 @@ interface RequestAgentProjectOption {
   workspacePath: string;
 }
 
+interface RequestAgentRoleOption {
+  role: string;
+  label: string;
+}
+
 type VaultCollabCockpitTabId = 'work' | 'agents' | 'events' | 'policy' | 'registry';
 
 export function VaultCollabView({ vaultStatus }: VaultCollabViewProps) {
@@ -32,7 +37,9 @@ export function VaultCollabView({ vaultStatus }: VaultCollabViewProps) {
   const [eventTypes, setEventTypes] = useState<VaultCollabEventTypes>([]);
   const [projectWorkspaces, setProjectWorkspaces] = useState<ProjectWorkspaceConfig[]>([]);
   const [selectedHandoffUid, setSelectedHandoffUid] = useState<string | null>(null);
+  const [handoffDetailOpen, setHandoffDetailOpen] = useState(false);
   const [selectedRoleProfileId, setSelectedRoleProfileId] = useState<string | null>(null);
+  const [roleProfileDetailOpen, setRoleProfileDetailOpen] = useState(false);
   const [selectedEventTypePrefix, setSelectedEventTypePrefix] = useState('session.');
   const [activeCockpitTab, setActiveCockpitTab] = useState<VaultCollabCockpitTabId>('work');
   const [policyBusyUid, setPolicyBusyUid] = useState<string | null>(null);
@@ -42,6 +49,8 @@ export function VaultCollabView({ vaultStatus }: VaultCollabViewProps) {
   const [dashboardSessionUid, setDashboardSessionUid] = useState<string | null>(null);
   const [discussionDraft, setDiscussionDraft] = useState('');
   const [approvedLaunchCommands, setApprovedLaunchCommands] = useState<Record<string, string>>({});
+  const activeHandoffUid = handoffDetailOpen ? selectedHandoffUid : null;
+  const activeRoleProfileId = roleProfileDetailOpen ? selectedRoleProfileId : null;
 
   useEffect(() => {
     void loadDashboard();
@@ -50,13 +59,14 @@ export function VaultCollabView({ vaultStatus }: VaultCollabViewProps) {
   }, []);
 
   useEffect(() => {
-    if (!selectedHandoffUid) {
+    if (!activeHandoffUid) {
+      setDashboardSessionUid(null);
       return;
     }
 
     let cancelled = false;
     void (async () => {
-      const response = await window.vaultAPI.getVaultCollabHandoffActions(selectedHandoffUid);
+      const response = await window.vaultAPI.getVaultCollabHandoffActions(activeHandoffUid);
       if (!cancelled && response.success && response.data) {
         setDashboardSessionUid(response.data.actingSessionUid);
       }
@@ -65,19 +75,31 @@ export function VaultCollabView({ vaultStatus }: VaultCollabViewProps) {
     return () => {
       cancelled = true;
     };
-  }, [selectedHandoffUid]);
+  }, [activeHandoffUid]);
+
+  useEffect(() => {
+    if (!selectedHandoffUid || !snapshot) {
+      return;
+    }
+
+    if (!snapshot.handoffs.some((handoff) => handoff.handoffUid === selectedHandoffUid)) {
+      setHandoffDetailOpen(false);
+      setSelectedHandoffUid(null);
+      setDiscussionDraft('');
+    }
+  }, [selectedHandoffUid, snapshot]);
 
   const model = useMemo(
     () => snapshot
-      ? buildVaultCollabDashboardViewModel(snapshot, lastLoadedAt ?? new Date(), selectedHandoffUid, {
+      ? buildVaultCollabDashboardViewModel(snapshot, lastLoadedAt ?? new Date(), activeHandoffUid, {
         approvedLaunchCommands,
         dashboardSessionUid,
         eventTypePrefix: selectedEventTypePrefix,
         eventTypes,
-        selectedRoleProfileId,
+        selectedRoleProfileId: activeRoleProfileId,
       })
       : null,
-    [approvedLaunchCommands, dashboardSessionUid, eventTypes, lastLoadedAt, selectedEventTypePrefix, selectedHandoffUid, selectedRoleProfileId, snapshot],
+    [activeHandoffUid, activeRoleProfileId, approvedLaunchCommands, dashboardSessionUid, eventTypes, lastLoadedAt, selectedEventTypePrefix, snapshot],
   );
 
   const requestAgentProjectOptions = useMemo<RequestAgentProjectOption[]>(() => {
@@ -96,6 +118,25 @@ export function VaultCollabView({ vaultStatus }: VaultCollabViewProps) {
 
     return Array.from(options.values()).sort((left, right) => left.project.localeCompare(right.project));
   }, [projectWorkspaces, vaultStatus?.projects]);
+
+  const requestAgentRoleOptions = useMemo<RequestAgentRoleOption[]>(() => {
+    const seen = new Set<string>();
+    const options: RequestAgentRoleOption[] = [];
+
+    for (const group of model?.cockpit.officeGroups ?? []) {
+      if (!group.roleProfileId || seen.has(group.roleProfileId)) {
+        continue;
+      }
+
+      seen.add(group.roleProfileId);
+      options.push({
+        role: group.roleProfileId,
+        label: group.roleDisplayName,
+      });
+    }
+
+    return options;
+  }, [model?.cockpit.officeGroups]);
 
   const requestAgentDefault = useMemo(() => {
     const activeWorkspaceRoot = normalizeWorkspacePath(vaultStatus?.workspaceRoot ?? '');
@@ -148,15 +189,6 @@ export function VaultCollabView({ vaultStatus }: VaultCollabViewProps) {
       }
       setEventTypes(eventTypesResponse.success ? eventTypesResponse.data ?? [] : []);
       setLastLoadedAt(new Date());
-      setSelectedHandoffUid((current) => {
-        if (response.data!.handoffs.length === 0) {
-          return null;
-        }
-
-        return current && response.data!.handoffs.some((handoff) => handoff.handoffUid === current)
-          ? current
-          : response.data!.handoffs[0].handoffUid;
-      });
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load Vault Collab dashboard data');
     } finally {
@@ -192,6 +224,7 @@ export function VaultCollabView({ vaultStatus }: VaultCollabViewProps) {
       launchRequests={model.launchRequestRows}
       actionBusy={actions.actionBusy}
       projectOptions={requestAgentProjectOptions}
+      roleOptions={requestAgentRoleOptions}
       defaultProject={requestAgentDefault.defaultProject}
       defaultWorkspacePath={requestAgentDefault.defaultWorkspacePath}
       onRequestAgent={(input) => void actions.requestAgent(input)}
@@ -228,6 +261,28 @@ export function VaultCollabView({ vaultStatus }: VaultCollabViewProps) {
       count: model.cockpit.eventRegistry.totalCount,
     },
   ] : [];
+
+  function openHandoffDetail(handoffUid: string) {
+    setDiscussionDraft('');
+    setSelectedHandoffUid(handoffUid);
+    setHandoffDetailOpen(true);
+  }
+
+  function closeHandoffDetail() {
+    setHandoffDetailOpen(false);
+    setSelectedHandoffUid(null);
+    setDiscussionDraft('');
+  }
+
+  function openRoleProfileDetail(roleProfileId: string) {
+    setSelectedRoleProfileId(roleProfileId);
+    setRoleProfileDetailOpen(true);
+  }
+
+  function closeRoleProfileDetail() {
+    setRoleProfileDetailOpen(false);
+    setSelectedRoleProfileId(null);
+  }
 
   return (
     <div className="vault-collab-dashboard">
@@ -307,20 +362,22 @@ export function VaultCollabView({ vaultStatus }: VaultCollabViewProps) {
               {activeCockpitTab === 'agents' ? (
                 <Roster
                   groups={model.cockpit.officeGroups}
-                  selectedRoleProfile={model.cockpit.selectedRoleProfile}
-                  selectedRoleProfileId={selectedRoleProfileId ?? model.cockpit.selectedRoleProfile?.roleProfileId ?? null}
-                  onSelectRoleProfile={setSelectedRoleProfileId}
+                  selectedRoleProfile={roleProfileDetailOpen ? model.cockpit.selectedRoleProfile : null}
+                  selectedRoleProfileId={activeRoleProfileId}
+                  onSelectRoleProfile={openRoleProfileDetail}
+                  onCloseRoleProfile={closeRoleProfileDetail}
                 />
               ) : null}
               {activeCockpitTab === 'work' ? (
                 <WorkBoard
                   columns={model.cockpit.work}
-                  selectedHandoffUid={model.cockpit.selectedHandoff?.uid ?? null}
-                  selectedHandoff={model.cockpit.selectedHandoff}
+                  selectedHandoffUid={activeHandoffUid}
+                  selectedHandoff={handoffDetailOpen ? model.cockpit.selectedHandoff : null}
                   conversation={model.cockpit.conversation}
                   discussionDraft={discussionDraft}
-                  discussionDisabled={Boolean(actions.actionBusy) || !model.cockpit.selectedHandoff}
-                  onSelectHandoff={setSelectedHandoffUid}
+                  discussionDisabled={Boolean(actions.actionBusy) || !handoffDetailOpen || !model.cockpit.selectedHandoff}
+                  onSelectHandoff={openHandoffDetail}
+                  onCloseHandoff={closeHandoffDetail}
                   onDiscussionDraftChange={setDiscussionDraft}
                   onDiscussionSubmit={() => void actions.runDiscussionAction()}
                 />

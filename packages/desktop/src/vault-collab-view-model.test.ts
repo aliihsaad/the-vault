@@ -594,6 +594,19 @@ describe('Vault Collab dashboard view model', () => {
     }));
   });
 
+  it('does not auto-select a handoff when no handoff uid is selected', () => {
+    const model = buildVaultCollabDashboardViewModel(snapshot({
+      handoffs: [
+        handoff({ handoffUid: 'vc_handoff_available_1234567890', status: 'available', shortPrompt: 'Available work.' }),
+        handoff({ handoffUid: 'vc_handoff_claimed_1234567890', status: 'claimed', shortPrompt: 'Claimed work.' }),
+      ],
+    }), now);
+
+    expect(model.selectedHandoff).toBeNull();
+    expect(model.cockpit.selectedHandoff).toBeNull();
+    expect(model.cockpit.conversation).toEqual([]);
+  });
+
   it('builds read-only launch request rows separately from handoffs', () => {
     const model = buildVaultCollabDashboardViewModel(snapshot({
       launchRequests: [
@@ -1108,6 +1121,167 @@ describe('Vault Collab dashboard view model', () => {
         0,
       ]),
     );
+  });
+
+  it('routes qa-reviewer sessions into the canonical QA evaluator office', () => {
+    const model = buildVaultCollabDashboardViewModel(snapshot({
+      roleProfiles: [
+        roleProfile({ roleProfileId: 'qa-evaluator', displayName: 'QA Evaluator' }),
+      ],
+      roleProfileAliases: [
+        { alias: 'qa-reviewer', roleProfileId: 'qa-evaluator' },
+      ],
+      sessions: [
+        session({
+          sessionUid: 'vc_sess_qa_profile_1234567890',
+          displayName: 'Codex QA profile',
+          role: 'qa',
+          roleProfileId: 'qa-reviewer',
+          effectiveStatus: 'working',
+        }),
+        session({
+          sessionUid: 'vc_sess_qa_role_1234567890',
+          displayName: 'Codex QA role',
+          role: 'qa-reviewer',
+          roleProfileId: null,
+          effectiveStatus: 'idle',
+        }),
+      ],
+    }), now);
+
+    expect(model.cockpit.officeGroups).toHaveLength(1);
+    expect(model.cockpit.officeGroups[0]).toEqual(expect.objectContaining({
+      roleProfileId: 'qa-evaluator',
+      roleDisplayName: 'QA Evaluator',
+      stateLabel: '2 live',
+    }));
+    expect(model.cockpit.officeGroups[0].agents).toEqual([
+      expect.objectContaining({
+        sessionUid: 'vc_sess_qa_profile_1234567890',
+        rawRole: 'qa',
+        roleProfileId: 'qa-evaluator',
+        roleDisplayName: 'QA Evaluator',
+      }),
+      expect.objectContaining({
+        sessionUid: 'vc_sess_qa_role_1234567890',
+        rawRole: 'qa-reviewer',
+        roleProfileId: 'qa-evaluator',
+        roleDisplayName: 'QA Evaluator',
+        roleLabel: 'QA Evaluator / qa-reviewer',
+      }),
+    ]);
+    expect(model.cockpit.officeGroups.map((office) => office.label)).not.toContain('Qa Reviewer');
+  });
+
+  it('routes launched implementation worker roles into the canonical implementer office', () => {
+    const model = buildVaultCollabDashboardViewModel(snapshot({
+      roleProfiles: [
+        roleProfile({
+          roleProfileId: 'implementer',
+          displayName: 'Implementer',
+          lifecycleStage: 'implementation',
+          triggerLabels: ['implementation', 'feature', 'build'],
+        }),
+      ],
+      sessions: [
+        session({
+          sessionUid: 'vc_sess_launch_worker_1234567890',
+          displayName: 'Codex launched worker',
+          role: 'implementation-worker',
+          roleProfileId: null,
+          effectiveStatus: 'working',
+        }),
+        session({
+          sessionUid: 'vc_sess_future_feature_worker_1234567890',
+          displayName: 'Codex future feature worker',
+          role: 'feature-worker',
+          roleProfileId: null,
+          effectiveStatus: 'idle',
+        }),
+        session({
+          sessionUid: 'vc_sess_future_phase_worker_1234567890',
+          displayName: 'Codex Phase 7 implementation',
+          role: 'phase-7-implementation',
+          roleProfileId: null,
+          effectiveStatus: 'idle',
+        }),
+        session({
+          sessionUid: 'vc_sess_phase_worker_1234567890',
+          displayName: 'Codex Phase 6 QA fail fixer',
+          role: 'phase-6-implementer',
+          roleProfileId: 'phase-6-implementer',
+          effectiveStatus: 'working',
+        }),
+      ],
+    }), now);
+
+    expect(model.cockpit.officeGroups.map((office) => office.label)).toEqual(['Implementer']);
+    expect(model.cockpit.officeGroups[0]).toEqual(expect.objectContaining({
+      roleProfileId: 'implementer',
+      stateLabel: '4 live',
+    }));
+    expect(model.cockpit.officeGroups[0].agents).toEqual([
+      expect.objectContaining({
+        sessionUid: 'vc_sess_launch_worker_1234567890',
+        rawRole: 'implementation-worker',
+        roleProfileId: 'implementer',
+        roleDisplayName: 'Implementer',
+        roleLabel: 'Implementer / implementation-worker',
+      }),
+      expect.objectContaining({
+        sessionUid: 'vc_sess_future_feature_worker_1234567890',
+        rawRole: 'feature-worker',
+        roleProfileId: 'implementer',
+        roleDisplayName: 'Implementer',
+        roleLabel: 'Implementer / feature-worker',
+      }),
+      expect.objectContaining({
+        sessionUid: 'vc_sess_future_phase_worker_1234567890',
+        rawRole: 'phase-7-implementation',
+        roleProfileId: 'implementer',
+        roleDisplayName: 'Implementer',
+        roleLabel: 'Implementer / phase-7-implementation',
+      }),
+      expect.objectContaining({
+        sessionUid: 'vc_sess_phase_worker_1234567890',
+        rawRole: 'phase-6-implementer',
+        roleProfileId: 'implementer',
+        roleDisplayName: 'Implementer',
+        roleLabel: 'Implementer / phase-6-implementer',
+      }),
+    ]);
+  });
+
+  it('does not create ad hoc office cards for unrecognized roles when canonical offices exist', () => {
+    const model = buildVaultCollabDashboardViewModel(snapshot({
+      roleProfiles: [
+        roleProfile({ roleProfileId: 'implementer', displayName: 'Implementer' }),
+      ],
+      sessions: [
+        session({
+          sessionUid: 'vc_sess_unknown_worker_1234567890',
+          displayName: 'Codex Custom Investigator',
+          role: 'custom-investigator',
+          roleProfileId: 'custom-investigator',
+          effectiveStatus: 'working',
+        }),
+      ],
+    }), now);
+
+    expect(model.cockpit.officeGroups.map((office) => office.label)).toEqual(['Implementer', 'Other']);
+    expect(model.cockpit.officeGroups.map((office) => office.label)).not.toContain('Custom Investigator');
+    expect(model.cockpit.officeGroups[1]).toEqual(expect.objectContaining({
+      role: 'other',
+      roleProfileId: null,
+      stateLabel: '1 live',
+    }));
+    expect(model.cockpit.officeGroups[1].agents[0]).toEqual(expect.objectContaining({
+      sessionUid: 'vc_sess_unknown_worker_1234567890',
+      rawRole: 'custom-investigator',
+      roleProfileId: null,
+      roleDisplayName: 'Other',
+      roleLabel: 'Custom Investigator',
+    }));
   });
 
   it('builds an eventFeed filtered by event type prefix with newest policy events first', () => {

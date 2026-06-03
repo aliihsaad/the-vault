@@ -10,7 +10,9 @@ describe('desktop shell navigation', () => {
   const collabSource = readFileSync(join(process.cwd(), 'packages/desktop/src/components/VaultCollabView.tsx'), 'utf8');
   const collabConversationSource = readFileSync(join(process.cwd(), 'packages/desktop/src/components/vault-collab/ConversationStream.tsx'), 'utf8');
   const collabHandoffDetailSource = readFileSync(join(process.cwd(), 'packages/desktop/src/components/vault-collab/HandoffDetail.tsx'), 'utf8');
+  const collabHandoffDetailModalSource = readFileSync(join(process.cwd(), 'packages/desktop/src/components/vault-collab/HandoffDetailModal.tsx'), 'utf8');
   const collabNeedsYouSource = readFileSync(join(process.cwd(), 'packages/desktop/src/components/vault-collab/NeedsYou.tsx'), 'utf8');
+  const collabRoleProfileModalSource = readFileSync(join(process.cwd(), 'packages/desktop/src/components/vault-collab/RoleProfileModal.tsx'), 'utf8');
   const collabRosterSource = readFileSync(join(process.cwd(), 'packages/desktop/src/components/vault-collab/Roster.tsx'), 'utf8');
   const collabWorkBoardSource = readFileSync(join(process.cwd(), 'packages/desktop/src/components/vault-collab/WorkBoard.tsx'), 'utf8');
   const collabViewModelSource = readFileSync(join(process.cwd(), 'packages/desktop/src/vault-collab-view-model.ts'), 'utf8');
@@ -19,7 +21,9 @@ describe('desktop shell navigation', () => {
     collabSource,
     collabConversationSource,
     collabHandoffDetailSource,
+    collabHandoffDetailModalSource,
     collabNeedsYouSource,
+    collabRoleProfileModalSource,
     collabRosterSource,
     collabWorkBoardSource,
   ].join('\n');
@@ -164,8 +168,38 @@ describe('desktop shell navigation', () => {
     expect(collabComponentSurface).toContain('Conversation');
     expect(collabWorkBoardSource).toContain('card.title');
     expect(collabWorkBoardSource).toContain('card.promptPreview');
+    expect(collabWorkBoardSource).toContain('RESOLVED_CARD_COLLAPSED_LIMIT = 3');
+    expect(collabWorkBoardSource).toContain("column.state === 'resolved'");
+    expect(collabWorkBoardSource).toContain('Show more');
+    expect(collabWorkBoardSource).toContain('HandoffDetailModal');
+    expect(collabWorkBoardSource).toContain('onCloseHandoff');
+    expect(collabHandoffDetailModalSource).toContain('role="dialog"');
+    expect(collabHandoffDetailModalSource).toContain('aria-modal="true"');
+    expect(collabHandoffDetailModalSource).toContain("event.key === 'Escape'");
+    expect(collabHandoffDetailModalSource).toContain('vault-collab-handoff-modal-backdrop');
+    expect(collabWorkBoardSource).not.toContain('aria-label="Selected handoff"');
+    expect(collabWorkBoardSource).not.toContain('vault-collab-selected-handoff');
     expect(collabWorkBoardSource).not.toContain('<strong>{card.prompt}</strong>');
     expect(collabSource).toContain('vault-collab-ops-bar');
+    expect(collabSource).toContain('openHandoffDetail');
+    expect(collabSource).toContain('closeHandoffDetail');
+    expect(collabSource).toContain('handoffDetailOpen');
+    expect(collabSource).toContain('const activeHandoffUid = handoffDetailOpen ? selectedHandoffUid : null');
+    expect(collabSource).toContain('setHandoffDetailOpen(true)');
+    expect(collabSource).toContain('setHandoffDetailOpen(false)');
+    expect(collabSource).toContain('selectedHandoff={handoffDetailOpen ? model.cockpit.selectedHandoff : null}');
+    expect(collabSource).toContain('roleProfileDetailOpen');
+    expect(collabSource).toContain('const activeRoleProfileId = roleProfileDetailOpen ? selectedRoleProfileId : null');
+    expect(collabSource).toContain('setRoleProfileDetailOpen(true)');
+    expect(collabSource).toContain('setRoleProfileDetailOpen(false)');
+    expect(collabSource).toContain('selectedRoleProfile={roleProfileDetailOpen ? model.cockpit.selectedRoleProfile : null}');
+    expect(collabRosterSource).toContain('RoleProfileModal');
+    expect(collabRosterSource).toContain('onCloseRoleProfile');
+    expect(collabRosterSource).not.toContain('vault-collab-role-profile-panel');
+    expect(collabRoleProfileModalSource).toContain('role="dialog"');
+    expect(collabRoleProfileModalSource).toContain('aria-modal="true"');
+    expect(collabRoleProfileModalSource).toContain("event.key === 'Escape'");
+    expect(collabRoleProfileModalSource).toContain('vault-collab-role-profile-modal-backdrop');
     expect(collabSource).not.toContain('Session mesh');
     expect(collabSource).not.toContain('vault-collab-live-map');
     expect(collabSource).not.toContain('vault-collab-hero');
@@ -236,9 +270,26 @@ describe('desktop shell navigation', () => {
     expect(requestAgentSurface).toContain('defaultWorkspacePath');
     expect(requestAgentSurface).toContain('project: trimmedProject');
     expect(requestAgentSurface).toContain('workspacePath: trimmedWorkspacePath');
+    expect(requestAgentSurface).toContain('requestAgentRoleOptions');
+    expect(requestAgentSurface).toContain('roleOptions={requestAgentRoleOptions}');
+    expect(requestAgentSurface).toContain('roleOptions.map');
+    expect(requestAgentSurface).toContain('<option value="" disabled>Choose office</option>');
+    expect(requestAgentSurface).toContain('<option key={option.role} value={option.role}>{option.label}</option>');
+    expect(requestAgentSurface).not.toContain("useState('implementation-worker')");
+    expect(requestAgentSurface).toContain('projectSelectOptions.map');
+    expect(requestAgentSurface).toContain('<option value="" disabled>Choose project</option>');
+    expect(requestAgentSurface).toContain('<option key={option.project} value={option.project}>{option.project}</option>');
+    expect(requestAgentSurface).not.toContain('datalist id="vault-collab-request-agent-projects"');
+    expect(requestAgentSurface).not.toContain('list="vault-collab-request-agent-projects"');
     expect(requestAgentSurface).toContain('agentInstructions');
     expect(requestAgentSurface).toContain('requestFormOpen');
+    expect(requestAgentSurface).toContain('RequestAgentModal');
+    expect(requestAgentSurface).toContain('role="dialog"');
+    expect(requestAgentSurface).toContain('aria-modal="true"');
+    expect(requestAgentSurface).toContain("event.key === 'Escape'");
+    expect(requestAgentSurface).toContain('vault-collab-request-agent-modal-backdrop');
     expect(requestAgentSurface).toContain('vault-collab-request-agent-form');
+    expect(requestAgentSurface).not.toContain('vault-collab-need-row vault-collab-request-agent-form');
     expect(requestAgentSurface).toContain('Cancel');
   });
 

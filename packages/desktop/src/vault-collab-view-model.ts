@@ -146,6 +146,8 @@ export interface VaultCollabActionDescriptor {
 export interface VaultCollabSelectedHandoff {
   uid: string;
   shortUid: string;
+  sourceProject: string;
+  targetProject: string;
   prompt: string;
   statusLabel: string;
   badgeClass: string;
@@ -532,9 +534,12 @@ const LEGACY_ROLE_ALIASES: Array<[string, string]> = [
   ['coordinator', 'coordinator'],
   ['implementer', 'implementer'],
   ['reviewer', 'reviewer'],
+  ['qa-reviewer', 'qa-evaluator'],
   ['sweeper', 'runtime-loop-operator'],
   ['observer', 'reviewer'],
 ];
+const OTHER_ROLE_GROUP_KEY = 'other';
+const OTHER_ROLE_DISPLAY_NAME = 'Other';
 
 function buildRoleProfileLookup(snapshot: VaultCollabDashboardSnapshot): RoleProfileLookup {
   const profiles = snapshot.roleProfiles ?? [];
@@ -546,7 +551,10 @@ function buildRoleProfileLookup(snapshot: VaultCollabDashboardSnapshot): RolePro
   }
 
   for (const alias of snapshot.roleProfileAliases ?? []) {
-    aliasToProfileId.set(normalizeRoleKey(alias.alias), alias.roleProfileId);
+    const profile = byId.get(normalizeRoleKey(alias.roleProfileId));
+    if (profile) {
+      aliasToProfileId.set(normalizeRoleKey(alias.alias), profile.roleProfileId);
+    }
   }
 
   for (const [alias, roleProfileId] of LEGACY_ROLE_ALIASES) {
@@ -567,6 +575,7 @@ function buildRoleGroups(
   const groups = new Map<string, VaultCollabRoleGroup>();
   const seenSessionUids = new Set<string>();
   const handoffRowsByUid = new Map(handoffRows.map((row) => [row.uid, row]));
+  const hasCanonicalProfiles = roleLookup.profiles.length > 0;
 
   for (const profile of roleLookup.profiles) {
     groups.set(profile.roleProfileId, buildEmptyRoleGroup(profile, roleLookup));
@@ -580,17 +589,26 @@ function buildRoleGroups(
     seenSessionUids.add(session.sessionUid);
     const rawRole = getSessionRawRole(session);
     const roleProfileId = resolveRoleProfileId(session.roleProfileId ?? null, rawRole, roleLookup);
-    const groupKey = roleProfileId ?? rawRole;
     const roleProfile = roleProfileId ? roleLookup.byId.get(normalizeRoleKey(roleProfileId)) ?? null : null;
-    const group = groups.get(groupKey) ?? buildLegacyRoleGroup(rawRole, roleProfileId, roleProfile, roleLookup);
+    const groupKey = roleProfileId ?? (hasCanonicalProfiles ? OTHER_ROLE_GROUP_KEY : rawRole);
+    const group = groups.get(groupKey)
+      ?? (hasCanonicalProfiles && !roleProfileId
+        ? buildOtherRoleGroup()
+        : buildLegacyRoleGroup(rawRole, roleProfileId, roleProfile, roleLookup));
+    const roleDisplayName = roleProfileId
+      ? getRoleDisplayName(roleProfileId, rawRole, roleLookup)
+      : group.roleDisplayName;
+    const roleLabel = roleProfileId
+      ? formatSessionRoleLabel(rawRole, roleProfileId, roleLookup)
+      : formatTitleLabel(rawRole);
     group.agents.push({
       sessionUid: session.sessionUid,
       displayName: getSessionDisplayName(session),
       clientType: session.clientType,
       rawRole,
       roleProfileId,
-      roleDisplayName: getRoleDisplayName(roleProfileId, rawRole, roleLookup),
-      roleLabel: formatSessionRoleLabel(rawRole, roleProfileId, roleLookup),
+      roleDisplayName,
+      roleLabel,
       status: session.effectiveStatus,
       currentHandoffUid: session.currentHandoffUid,
       freshness: session.connectionState === 'fresh' ? 'fresh' : 'stale',
@@ -616,6 +634,27 @@ function buildRoleGroups(
   }
 
   return Array.from(groups.values()).map(finalizeOfficeGroup);
+}
+
+function buildOtherRoleGroup(): VaultCollabRoleGroup {
+  return {
+    key: OTHER_ROLE_GROUP_KEY,
+    label: OTHER_ROLE_DISPLAY_NAME,
+    stateLabel: 'idle',
+    role: OTHER_ROLE_GROUP_KEY,
+    roleProfileId: null,
+    roleDisplayName: OTHER_ROLE_DISPLAY_NAME,
+    purpose: null,
+    mutationLabel: null,
+    triggerLabels: [],
+    primarySkillNames: [],
+    secondarySkillNames: [],
+    capabilities: [],
+    suggestedNextRoleLabels: [],
+    handoffs: [],
+    isWatchdog: false,
+    agents: [],
+  };
 }
 
 function buildEmptyRoleGroup(
@@ -753,18 +792,112 @@ function resolveRoleProfileId(
 ): string | null {
   const explicit = explicitRoleProfileId?.trim();
   if (explicit) {
-    const normalized = normalizeRoleKey(explicit);
-    return roleLookup.byId.get(normalized)?.roleProfileId ?? explicit;
+    return resolveExactRoleProfileId(explicit, roleLookup)
+      ?? resolveRoleProfileIdFromProfileSignals(explicit, roleLookup)
+      ?? null;
   }
 
-  const normalizedRole = normalizeRoleKey(rawRole ?? '');
-  if (!normalizedRole) {
+  const raw = rawRole?.trim();
+  if (!raw) {
     return null;
   }
 
-  return roleLookup.aliasToProfileId.get(normalizedRole)
-    ?? roleLookup.byId.get(normalizedRole)?.roleProfileId
+  return resolveExactRoleProfileId(raw, roleLookup)
+    ?? resolveRoleProfileIdFromProfileSignals(raw, roleLookup);
+}
+
+function resolveExactRoleProfileId(
+  value: string,
+  roleLookup: RoleProfileLookup,
+): string | null {
+  const normalized = normalizeRoleKey(value);
+  if (!normalized) {
+    return null;
+  }
+
+  return roleLookup.byId.get(normalized)?.roleProfileId
+    ?? roleLookup.aliasToProfileId.get(normalized)
     ?? null;
+}
+
+function resolveRoleProfileIdFromProfileSignals(
+  value: string,
+  roleLookup: RoleProfileLookup,
+): string | null {
+  const normalizedValue = normalizeRoleKey(value);
+  const valueTokens = tokenizeRoleKey(normalizedValue);
+  if (!normalizedValue || valueTokens.length === 0) {
+    return null;
+  }
+
+  let bestRoleProfileId: string | null = null;
+  let bestScore = 0;
+  let ambiguous = false;
+  for (const profile of roleLookup.profiles) {
+    const score = scoreRoleProfileSignalMatch(normalizedValue, valueTokens, profile);
+    if (score > bestScore) {
+      bestRoleProfileId = profile.roleProfileId;
+      bestScore = score;
+      ambiguous = false;
+    } else if (score > 0 && score === bestScore) {
+      ambiguous = true;
+    }
+  }
+
+  return ambiguous ? null : bestRoleProfileId;
+}
+
+function scoreRoleProfileSignalMatch(
+  normalizedValue: string,
+  valueTokens: string[],
+  profile: VaultCollabRoleProfileSnapshot,
+): number {
+  const strongSignals = [
+    profile.roleProfileId,
+    profile.displayName,
+  ].map(normalizeRoleKey).filter(Boolean);
+  const triggerSignals = [
+    profile.lifecycleStage,
+    ...profile.triggerLabels,
+  ].map(normalizeRoleKey).filter(Boolean);
+  let score = 0;
+
+  for (const signal of strongSignals) {
+    if (containsRoleSignal(normalizedValue, signal)) {
+      score += 100 + tokenizeRoleKey(signal).length;
+    }
+  }
+
+  for (const signal of triggerSignals) {
+    if (containsRoleSignal(normalizedValue, signal)) {
+      score += 45 + tokenizeRoleKey(signal).length;
+    }
+  }
+
+  const signalTokens = new Set<string>();
+  for (const signal of [...strongSignals, ...triggerSignals]) {
+    for (const token of tokenizeRoleKey(signal)) {
+      signalTokens.add(token);
+      const stem = stemRoleToken(token);
+      if (stem && stem !== token) {
+        signalTokens.add(stem);
+      }
+    }
+  }
+
+  let tokenMatches = 0;
+  for (const valueToken of valueTokens) {
+    const stem = stemRoleToken(valueToken);
+    if (signalTokens.has(valueToken) || (stem ? signalTokens.has(stem) : false)) {
+      tokenMatches += 1;
+    }
+  }
+
+  if (tokenMatches > 0) {
+    score += tokenMatches * 8;
+  }
+
+  return score;
 }
 
 function resolveRoleProfileIdFromTriggers(value: string, roleLookup: RoleProfileLookup): string | null {
@@ -802,8 +935,47 @@ function formatSessionRoleLabel(
 }
 
 function normalizeRoleKey(value: string): string {
-  return value.trim().toLowerCase();
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '');
 }
+
+function tokenizeRoleKey(value: string): string[] {
+  return normalizeRoleKey(value)
+    .split('-')
+    .filter((token) => token.length >= 3 && !ROLE_SIGNAL_STOP_WORDS.has(token));
+}
+
+function containsRoleSignal(normalizedValue: string, normalizedSignal: string): boolean {
+  if (!normalizedSignal) {
+    return false;
+  }
+
+  return normalizedValue === normalizedSignal
+    || normalizedValue.startsWith(`${normalizedSignal}-`)
+    || normalizedValue.endsWith(`-${normalizedSignal}`)
+    || normalizedValue.includes(`-${normalizedSignal}-`);
+}
+
+function stemRoleToken(token: string): string | null {
+  if (token.endsWith('ation') && token.length > 7) {
+    return token.slice(0, -5);
+  }
+
+  if (token.endsWith('ing') && token.length > 6) {
+    return token.slice(0, -3);
+  }
+
+  if (token.endsWith('er') && token.length > 5) {
+    return token.slice(0, -2);
+  }
+
+  return token;
+}
+
+const ROLE_SIGNAL_STOP_WORDS = new Set(['agent', 'worker', 'office', 'role']);
 
 function buildWorkColumns(
   handoffs: VaultCollabHandoffSnapshot[],
@@ -1292,6 +1464,8 @@ function buildSelectedHandoff(
   return {
     uid: handoff.handoffUid,
     shortUid: formatVaultCollabShortUid(handoff.handoffUid),
+    sourceProject: handoff.sourceProject,
+    targetProject: handoff.targetProject,
     prompt: handoff.shortPrompt,
     statusLabel: formatStatusLabel(handoff.status),
     badgeClass: getHandoffBadgeClass(handoff.status),
@@ -1554,11 +1728,11 @@ function getSelectedHandoff(
   handoffs: VaultCollabHandoffSnapshot[],
   selectedHandoffUid?: string | null,
 ): VaultCollabHandoffSnapshot | null {
-  if (handoffs.length === 0) {
+  if (!selectedHandoffUid || handoffs.length === 0) {
     return null;
   }
 
-  return handoffs.find((handoff) => handoff.handoffUid === selectedHandoffUid) ?? handoffs[0];
+  return handoffs.find((handoff) => handoff.handoffUid === selectedHandoffUid) ?? null;
 }
 
 function getLatestEventBySessionUid(

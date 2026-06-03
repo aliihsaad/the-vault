@@ -1781,10 +1781,13 @@ select.text-input optgroup {
 
 .vault-collab-dashboard {
   min-width: 0;
+  min-height: 0;
+  flex: 1 1 auto;
+  height: 100%;
   display: flex;
   flex-direction: column;
   gap: 16px;
-  overflow: visible;
+  overflow: hidden;
 }
 
 .vault-collab-dashboard-top {
@@ -2621,9 +2624,12 @@ select.text-input optgroup {
 .vault-collab-cockpit-shell {
   display: flex;
   min-width: 0;
+  min-height: 0;
+  flex: 1 1 auto;
+  height: 100%;
   flex-direction: column;
   gap: 12px;
-  overflow: visible;
+  overflow: hidden;
 }
 
 .vault-collab-cockpit-tabs {
@@ -2674,27 +2680,37 @@ select.text-input optgroup {
 }
 
 .vault-collab-cockpit-tab-panel {
+  display: flex;
   min-width: 0;
-  overflow: visible;
+  min-height: 0;
+  flex: 1 1 auto;
+  flex-direction: column;
+  height: 100%;
+  overflow: hidden;
 }
 
 .vault-collab-zone,
 .vault-collab-needs-you {
   display: flex;
   min-width: 0;
+  min-height: 0;
   flex-direction: column;
-  overflow: visible;
+  overflow: hidden;
   border: 1px solid rgba(141, 174, 214, 0.12);
   border-radius: 8px;
   background: rgba(255, 255, 255, 0.026);
 }
 
 .vault-collab-zone {
-  overflow: visible;
+  min-height: 0;
+  flex: 1 1 auto;
+  height: 100%;
+  overflow: hidden;
 }
 
 .vault-collab-needs-you {
   flex: 0 0 auto;
+  overflow: visible;
 }
 
 .vault-collab-zone-header {
@@ -2773,10 +2789,6 @@ select.text-input optgroup {
   background: rgba(245, 165, 36, 0.06);
 }
 
-.vault-collab-request-agent-form {
-  grid-column: 1 / -1;
-}
-
 .vault-collab-need-icon {
   display: inline-flex;
   align-items: center;
@@ -2827,10 +2839,12 @@ select.text-input optgroup {
 .vault-collab-office-layout {
   display: flex;
   min-width: 0;
+  min-height: 0;
+  flex: 1 1 auto;
   flex-direction: column;
   gap: 12px;
   padding: 12px;
-  overflow: visible;
+  overflow-y: auto;
 }
 
 .vault-collab-office-lanes {
@@ -2890,7 +2904,6 @@ select.text-input optgroup {
 
 .vault-collab-office-lane-head,
 .vault-collab-office-lane-meta,
-.vault-collab-role-profile-head,
 .vault-collab-office-handoff-pill {
   display: flex;
   min-width: 0;
@@ -2899,8 +2912,7 @@ select.text-input optgroup {
   gap: 8px;
 }
 
-.vault-collab-office-lane-head strong,
-.vault-collab-role-profile-head strong {
+.vault-collab-office-lane-head strong {
   min-width: 0;
   color: var(--text-primary);
   font-size: 0.82rem;
@@ -2976,39 +2988,12 @@ select.text-input optgroup {
   vertical-align: -0.16em;
 }
 
-.vault-collab-role-profile-panel {
-  display: flex;
-  min-width: 0;
-  flex-direction: column;
-  gap: 10px;
-  padding: 12px;
-  border: 1px solid rgba(141, 174, 214, 0.12);
-  border-radius: 8px;
-  background: rgba(255, 255, 255, 0.018);
-}
-
-.vault-collab-role-profile-head > div {
-  display: flex;
-  min-width: 0;
-  flex-direction: column;
-  gap: 4px;
-}
-
-.vault-collab-role-profile-head span,
 .vault-collab-role-chip-block > span {
   color: var(--text-muted);
   font-family: var(--font-mono);
   font-size: 0.68rem;
   letter-spacing: 0.08em;
   text-transform: uppercase;
-}
-
-.vault-collab-role-profile-panel p {
-  margin: 0;
-  color: var(--text-secondary);
-  font-size: 0.78rem;
-  line-height: 1.5;
-  overflow-wrap: anywhere;
 }
 
 .vault-collab-role-chip-block {
@@ -3056,10 +3041,12 @@ select.text-input optgroup {
 
 .vault-collab-work-columns {
   display: grid;
+  min-height: 0;
+  flex: 1 1 auto;
   grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
   gap: 12px;
   padding: 12px;
-  overflow: visible;
+  overflow-y: auto;
 }
 
 .vault-collab-work-column {
@@ -3094,6 +3081,23 @@ select.text-input optgroup {
   background: rgba(92, 224, 230, 0.045);
 }
 
+.vault-collab-work-show-more {
+  min-height: 34px;
+  padding: 7px 10px;
+  border: 1px dashed rgba(92, 224, 230, 0.22);
+  border-radius: 8px;
+  background: rgba(92, 224, 230, 0.055);
+  color: var(--accent-primary);
+  font-size: 0.74rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.vault-collab-work-show-more:hover {
+  border-color: rgba(92, 224, 230, 0.34);
+  background: rgba(92, 224, 230, 0.085);
+}
+
 .vault-collab-work-card .queue-status-rail {
   position: absolute;
   top: 12px;
@@ -3103,7 +3107,8 @@ select.text-input optgroup {
 
 .vault-collab-zone-scroll {
   min-width: 0;
-  overflow: visible;
+  min-height: 0;
+  overflow-y: auto;
 }
 
 .vault-collab-work-card-labels {
@@ -3120,32 +3125,58 @@ select.text-input optgroup {
   white-space: nowrap;
 }
 
-.vault-collab-selected-handoff {
-  margin: 0 12px 12px;
-  overflow: hidden;
-  border: 1px solid rgba(141, 174, 214, 0.12);
-  border-radius: 8px;
-  background: rgba(3, 8, 15, 0.34);
+.vault-collab-request-agent-modal-backdrop,
+.vault-collab-role-profile-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 120;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgba(2, 6, 12, 0.72);
+  backdrop-filter: blur(16px);
 }
 
-.vault-collab-selected-handoff-header {
+.vault-collab-request-agent-modal,
+.vault-collab-role-profile-modal {
+  display: flex;
+  width: min(760px, calc(100vw - 48px));
+  max-height: min(760px, calc(100vh - 48px));
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  flex-direction: column;
+  border: 1px solid rgba(141, 174, 214, 0.18);
+  border-radius: 8px;
+  background: rgba(4, 10, 19, 0.96);
+  box-shadow: 0 22px 80px rgba(0, 0, 0, 0.55);
+}
+
+.vault-collab-role-profile-modal {
+  width: min(820px, calc(100vw - 48px));
+}
+
+.vault-collab-request-agent-modal-header,
+.vault-collab-role-profile-modal-header {
   display: flex;
   min-width: 0;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  padding: 11px 12px;
-  border-bottom: 1px solid rgba(141, 174, 214, 0.1);
+  padding: 13px 14px;
+  border-bottom: 1px solid rgba(141, 174, 214, 0.12);
 }
 
-.vault-collab-selected-handoff-header > div {
+.vault-collab-request-agent-modal-header > div,
+.vault-collab-role-profile-modal-header > div:first-child {
   display: flex;
   min-width: 0;
   flex-direction: column;
   gap: 3px;
 }
 
-.vault-collab-selected-handoff-header span:first-child {
+.vault-collab-request-agent-modal-header span,
+.vault-collab-role-profile-modal-header > div:first-child > span {
   color: var(--text-muted);
   font-family: var(--font-mono);
   font-size: 0.66rem;
@@ -3153,7 +3184,124 @@ select.text-input optgroup {
   text-transform: uppercase;
 }
 
-.vault-collab-selected-handoff-header strong {
+.vault-collab-request-agent-modal-header strong,
+.vault-collab-role-profile-modal-header > div:first-child > strong {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-primary);
+  font-size: 0.9rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.vault-collab-role-profile-modal-actions {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-muted);
+}
+
+.vault-collab-request-agent-modal-close,
+.vault-collab-role-profile-modal-close {
+  width: 30px;
+  height: 30px;
+}
+
+.vault-collab-request-agent-form,
+.vault-collab-role-profile-modal-body {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex-direction: column;
+  gap: 12px;
+  padding: 14px;
+  overflow-y: auto;
+}
+
+.vault-collab-request-agent-provider {
+  display: inline-flex;
+  width: fit-content;
+  align-items: center;
+  gap: 7px;
+  padding: 5px 8px;
+  border: 1px solid rgba(141, 174, 214, 0.12);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.026);
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+}
+
+.vault-collab-request-agent-form select.text-input {
+  background-color: rgba(12, 16, 24, 0.96);
+  color: var(--text-primary);
+}
+
+.vault-collab-request-agent-form select.text-input option {
+  background-color: #0c1018;
+  color: #e8eef7;
+}
+
+.vault-collab-role-profile-modal-body p {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 0.8rem;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.vault-collab-handoff-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 120;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgba(2, 6, 12, 0.72);
+  backdrop-filter: blur(16px);
+}
+
+.vault-collab-handoff-modal {
+  display: flex;
+  width: min(1120px, calc(100vw - 48px));
+  max-height: min(820px, calc(100vh - 48px));
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  flex-direction: column;
+  border: 1px solid rgba(141, 174, 214, 0.18);
+  border-radius: 8px;
+  background: rgba(4, 10, 19, 0.96);
+  box-shadow: 0 22px 80px rgba(0, 0, 0, 0.55);
+}
+
+.vault-collab-handoff-modal-header {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 13px 14px;
+  border-bottom: 1px solid rgba(141, 174, 214, 0.12);
+}
+
+.vault-collab-handoff-modal-header > div:first-child {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.vault-collab-handoff-modal-header > div:first-child > span {
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 0.66rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.vault-collab-handoff-modal-header > div:first-child > strong {
   min-width: 0;
   overflow: hidden;
   color: var(--text-primary);
@@ -3162,35 +3310,50 @@ select.text-input optgroup {
   white-space: nowrap;
 }
 
-.vault-collab-selected-handoff-body {
+.vault-collab-handoff-modal-actions {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 8px;
+}
+
+.vault-collab-handoff-modal-close {
+  width: 30px;
+  height: 30px;
+}
+
+.vault-collab-handoff-modal-body {
   display: grid;
   min-width: 0;
+  min-height: 0;
   grid-template-columns: minmax(0, 0.95fr) minmax(360px, 0.8fr);
   gap: 14px;
-  padding: 12px;
+  padding: 14px;
+  overflow-y: auto;
   align-items: start;
 }
 
-.vault-collab-selected-handoff-summary,
-.vault-collab-selected-thread {
+.vault-collab-handoff-modal-summary,
+.vault-collab-handoff-modal-thread,
+.vault-collab-handoff-modal-section {
   display: flex;
   min-width: 0;
   flex-direction: column;
   gap: 10px;
 }
 
-.vault-collab-selected-handoff-title {
+.vault-collab-handoff-modal-title {
   display: -webkit-box;
   overflow: hidden;
   color: var(--text-primary);
-  font-size: 0.9rem;
+  font-size: 0.94rem;
   line-height: 1.45;
   overflow-wrap: anywhere;
   -webkit-box-orient: vertical;
-  -webkit-line-clamp: 4;
+  -webkit-line-clamp: 5;
 }
 
-.vault-collab-selected-handoff-note {
+.vault-collab-handoff-modal-note {
   margin: 0;
   padding: 9px 10px;
   border: 1px solid rgba(245, 165, 36, 0.18);
@@ -3202,14 +3365,14 @@ select.text-input optgroup {
   overflow-wrap: anywhere;
 }
 
-.vault-collab-selected-meta-grid {
+.vault-collab-handoff-modal-meta-grid {
   display: grid;
   min-width: 0;
   grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
   gap: 8px;
 }
 
-.vault-collab-selected-meta-grid > span {
+.vault-collab-handoff-modal-meta-grid > span {
   display: flex;
   min-width: 0;
   flex-direction: column;
@@ -3220,7 +3383,7 @@ select.text-input optgroup {
   background: rgba(255, 255, 255, 0.022);
 }
 
-.vault-collab-selected-meta-grid span span {
+.vault-collab-handoff-modal-meta-grid span span {
   color: var(--text-muted);
   font-family: var(--font-mono);
   font-size: 0.64rem;
@@ -3228,7 +3391,7 @@ select.text-input optgroup {
   text-transform: uppercase;
 }
 
-.vault-collab-selected-meta-grid strong {
+.vault-collab-handoff-modal-meta-grid strong {
   min-width: 0;
   overflow: hidden;
   color: var(--text-primary);
@@ -3238,7 +3401,14 @@ select.text-input optgroup {
   text-overflow: ellipsis;
 }
 
-.vault-collab-selected-thread-composer {
+.vault-collab-handoff-modal-path-list {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.vault-collab-handoff-modal-thread-composer {
   display: grid;
   min-width: 0;
   grid-template-columns: minmax(0, 1fr) auto;
@@ -3246,7 +3416,7 @@ select.text-input optgroup {
   align-items: stretch;
 }
 
-.vault-collab-selected-thread-composer textarea {
+.vault-collab-handoff-modal-thread-composer textarea {
   width: 100%;
   min-height: 64px;
   resize: vertical;
@@ -3259,23 +3429,23 @@ select.text-input optgroup {
   line-height: 1.45;
 }
 
-.vault-collab-selected-thread-composer textarea:focus {
+.vault-collab-handoff-modal-thread-composer textarea:focus {
   outline: none;
   border-color: rgba(92, 224, 230, 0.34);
   box-shadow: 0 0 0 1px rgba(92, 224, 230, 0.12);
 }
 
-.vault-collab-selected-thread-composer .primary-button {
+.vault-collab-handoff-modal-thread-composer .primary-button {
   min-width: 92px;
   min-height: 40px;
   padding-inline: 13px;
   border-radius: 8px;
 }
 
-.vault-collab-selected-thread-events {
+.vault-collab-handoff-modal-thread-events {
   display: flex;
   min-width: 0;
-  max-height: 260px;
+  max-height: 340px;
   flex-direction: column;
   gap: 8px;
   overflow-x: hidden;
@@ -3283,8 +3453,7 @@ select.text-input optgroup {
   padding-right: 4px;
 }
 
-.vault-collab-selected-thread-empty,
-.vault-collab-selected-empty {
+.vault-collab-handoff-modal-thread-empty {
   min-height: 62px;
   display: grid;
   place-items: center;
@@ -3293,10 +3462,6 @@ select.text-input optgroup {
   color: var(--text-muted);
   font-size: 0.78rem;
   text-align: center;
-}
-
-.vault-collab-selected-empty {
-  margin: 12px;
 }
 
 .vault-collab-prefix-filter {
@@ -3546,9 +3711,27 @@ select.text-input optgroup {
     flex: 0 0 auto;
   }
 
-  .vault-collab-selected-handoff-body,
-  .vault-collab-selected-thread-composer {
+  .vault-collab-handoff-modal-body,
+  .vault-collab-handoff-modal-thread-composer {
     grid-template-columns: minmax(0, 1fr);
+  }
+
+  .vault-collab-handoff-modal-backdrop {
+    align-items: stretch;
+    padding: 12px;
+  }
+
+  .vault-collab-request-agent-modal-backdrop,
+  .vault-collab-role-profile-modal-backdrop {
+    align-items: stretch;
+    padding: 12px;
+  }
+
+  .vault-collab-request-agent-modal,
+  .vault-collab-role-profile-modal,
+  .vault-collab-handoff-modal {
+    width: 100%;
+    max-height: calc(100vh - 24px);
   }
 }
 
