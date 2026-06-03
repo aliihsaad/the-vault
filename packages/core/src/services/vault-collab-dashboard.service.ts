@@ -19,6 +19,7 @@ import type {
   VaultCollabJsonRecord,
   VaultCollabLaunchRequestSnapshot,
   VaultCollabLaunchRequestStatus,
+  VaultCollabPolicyPackSnapshot,
   VaultCollabRoleProfileAliasSnapshot,
   VaultCollabRoleProfileSnapshot,
   VaultCollabRuntimeConfig,
@@ -200,6 +201,16 @@ interface RoleProfileAliasRow {
   role_profile_id: string;
 }
 
+interface PolicyPackRow {
+  uid: string;
+  name: string;
+  version: string;
+  active: 0 | 1;
+  is_builtin: 0 | 1;
+  rules_json: string;
+  updated_at: string;
+}
+
 export function getVaultCollabDashboardSnapshot(
   config: VaultCollabRuntimeConfig,
   options: VaultCollabDashboardOptions = {},
@@ -243,6 +254,7 @@ export function getVaultCollabDashboardSnapshot(
     const events = listRecentEvents(db, clampLimit(options.eventLimit, DEFAULT_EVENT_LIMIT));
     const roleProfiles = listRoleProfiles(db);
     const roleProfileAliases = listRoleProfileAliases(db);
+    const policyPacks = listPolicyPacks(db);
 
     return {
       ...base,
@@ -251,6 +263,7 @@ export function getVaultCollabDashboardSnapshot(
       handoffs,
       roleProfiles,
       roleProfileAliases,
+      policyPacks,
       launchRequests,
       deliveryAttempts,
       events,
@@ -584,6 +597,35 @@ function listRoleProfileAliases(db: Database.Database): VaultCollabRoleProfileAl
   }));
 }
 
+function listPolicyPacks(db: Database.Database): VaultCollabPolicyPackSnapshot[] {
+  if (!tableExists(db, 'policy_packs') || !hasPolicyPackSnapshotColumns(db)) {
+    return [];
+  }
+
+  const rows = db.prepare(`
+    SELECT
+      uid,
+      name,
+      version,
+      active,
+      is_builtin,
+      rules_json,
+      updated_at
+    FROM policy_packs
+    ORDER BY is_builtin DESC, name ASC, uid ASC
+  `).all() as PolicyPackRow[];
+
+  return rows.map((row) => ({
+    uid: row.uid,
+    name: row.name,
+    version: row.version,
+    active: row.active === 1,
+    builtIn: row.is_builtin === 1,
+    ruleCount: countPolicyRules(row.rules_json),
+    updatedAt: row.updated_at,
+  }));
+}
+
 function mapSessionRow(row: SessionRow, now: Date, staleSessionAfterMs: number): VaultCollabSessionSnapshot {
   const status = parseSessionStatus(row.status);
   const heartbeatAgeMs = getAgeMs(now, row.last_heartbeat_at);
@@ -904,6 +946,7 @@ function createEmptySnapshot(
     handoffs: [],
     roleProfiles: [],
     roleProfileAliases: [],
+    policyPacks: [],
     launchRequests: [],
     deliveryAttempts: [],
     events: [],
@@ -1241,6 +1284,36 @@ function hasDiscussionMessagePreviewColumns(db: Database.Database): boolean {
     'body',
     'created_at',
   ].every((column) => columnExists(db, 'discussion_messages', column));
+}
+
+function hasPolicyPackSnapshotColumns(db: Database.Database): boolean {
+  return [
+    'uid',
+    'name',
+    'version',
+    'active',
+    'is_builtin',
+    'rules_json',
+    'updated_at',
+  ].every((column) => columnExists(db, 'policy_packs', column));
+}
+
+function countPolicyRules(value: string): number {
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    if (Array.isArray(parsed)) {
+      return parsed.length;
+    }
+
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      const rules = (parsed as { rules?: unknown }).rules;
+      return Array.isArray(rules) ? rules.length : 0;
+    }
+
+    return 0;
+  } catch {
+    return 0;
+  }
 }
 
 function clampLimit(value: number | undefined, fallback: number): number {

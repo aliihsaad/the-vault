@@ -469,6 +469,10 @@ function buildActionArgs(
     return buildSessionActionArgs(databasePath, actor, input);
   }
 
+  if (input.kind === 'policy') {
+    return buildPolicyActionArgs(databasePath, actor, input);
+  }
+
   return buildLaunchActionArgs(databasePath, actor, input);
 }
 
@@ -715,6 +719,27 @@ function buildLaunchActionArgs(
         requiredValue(input.reason, 'Launch failure reason'),
       ];
   }
+}
+
+function buildPolicyActionArgs(
+  databasePath: string,
+  actor: VaultCollabDashboardActor,
+  input: Extract<VaultCollabDashboardActionInput, { kind: 'policy' }>,
+): string[] {
+  const identifierArgs = input.uid?.trim()
+    ? ['--uid', input.uid.trim()]
+    : ['--name', requiredValue(input.name, 'Policy pack name')];
+
+  return [
+    input.action === 'activate_policy_pack' ? 'policy-pack-activate' : 'policy-pack-deactivate',
+    '--db',
+    databasePath,
+    '--session-uid',
+    actor.sessionUid,
+    TOKEN_OPTION,
+    actor.sessionToken,
+    ...identifierArgs,
+  ];
 }
 
 function requiredValue(value: string | undefined, label: string): string {

@@ -1,9 +1,12 @@
 import { Activity, Eye, Route, Users } from 'lucide-react';
 
 import type {
+  VaultCollabRosterAgent,
   VaultCollabRoleGroup,
   VaultCollabSelectedRoleProfile,
 } from '../../vault-collab-view-model.js';
+import claudeIconUrl from '../../../../../assets/claude-color.svg';
+import codexIconUrl from '../../../../../assets/codex-color.svg';
 
 interface RosterProps {
   groups: VaultCollabRoleGroup[];
@@ -59,6 +62,7 @@ export function Roster({
                   <span className="vault-collab-office-agent-stack">
                     {group.agents.slice(0, 3).map((agent) => (
                       <span key={agent.sessionUid} className="vault-collab-office-agent-pill">
+                        <AgentClientIcon agent={agent} />
                         {agent.displayName}
                       </span>
                     ))}
@@ -109,7 +113,9 @@ export function Roster({
                 </div>
                 {group.agents.map((agent) => (
                   <div key={agent.sessionUid} className="vault-collab-agent-row">
-                    <span className="vault-collab-client-dot">{agent.displayName.slice(0, 2)}</span>
+                    <span className="vault-collab-client-dot">
+                      <AgentClientIcon agent={agent} />
+                    </span>
                     <div className="vault-collab-roster-main">
                       <div className="vault-collab-row-title">
                         <strong>{agent.displayName}</strong>
@@ -151,6 +157,34 @@ export function Roster({
       )}
     </section>
   );
+}
+
+function AgentClientIcon({ agent }: { agent: VaultCollabRosterAgent }) {
+  const iconUrl = getAgentIconUrl(agent);
+  if (iconUrl) {
+    return (
+      <img
+        className="vault-collab-agent-client-icon"
+        src={iconUrl}
+        alt=""
+        aria-hidden="true"
+      />
+    );
+  }
+
+  return <span className="vault-collab-agent-client-fallback">{agent.displayName.slice(0, 2)}</span>;
+}
+
+function getAgentIconUrl(agent: VaultCollabRosterAgent): string | null {
+  if (agent.clientType === 'codex') {
+    return codexIconUrl;
+  }
+
+  if (agent.clientType === 'claude-code' || agent.clientType === 'claude-desktop') {
+    return claudeIconUrl;
+  }
+
+  return null;
 }
 
 function ChipBlock({ title, chips, muted = false }: { title: string; chips: string[]; muted?: boolean }) {

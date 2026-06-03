@@ -62,9 +62,12 @@ import type {
   VaultCollabDashboardActor,
   VaultCollabHandoffActionSet,
   VaultCollabDashboardOptions,
+  VaultCollabEventTypeSnapshot,
   VaultCollabLaunchApprovalResult,
   VaultCollabLaunchCommand,
   VaultCollabLaunchRequestSnapshot,
+  VaultCollabPolicyPackActionInput,
+  VaultCollabPolicyPackSnapshot,
   VaultCollabRuntimeConfig,
   SaveVaultCollabRuntimeConfigInput,
 } from '@the-vault/core';
@@ -2525,6 +2528,152 @@ app.whenReady().then(() => {
       : `claude --add-dir "${workspacePath}"`;
   }
 
+  const eventTypeTokenSafety = {
+    forbiddenPayloadKeys: [
+      'sessionToken',
+      'session_token',
+      'ownerToken',
+      'owner_token',
+      'claimToken',
+      'claim_token',
+      'actorSessionToken',
+      'actor_session_token',
+    ],
+    rules: [
+      'Never include owner tokens, session tokens, or claim tokens in event payloads.',
+      'Payloads may include stable UIDs, project labels, statuses, counts, thresholds, and redacted argument-key metadata.',
+      'Tool events must never include raw arguments, raw results, or exception text that contains owner-token values.',
+    ],
+  };
+
+  function createVaultCollabEventTypeSnapshot(
+    canonicalName: string,
+    namespace: string,
+    summary: string,
+    payloadShape: Record<string, unknown>,
+    attention: VaultCollabEventTypeSnapshot['attention'] = { scope: 'none', itemKind: null, roleProfileIds: [] },
+    legacyAliases: string[] = [],
+  ): VaultCollabEventTypeSnapshot {
+    return {
+      canonicalName,
+      namespace,
+      summary,
+      payloadShape,
+      tokenSafety: eventTypeTokenSafety,
+      attention,
+      legacyAliases,
+    };
+  }
+
+  function listVaultCollabEventTypeFallbacks(): VaultCollabEventTypeSnapshot[] {
+    return [
+      createVaultCollabEventTypeSnapshot('session.registered', 'session', 'A provider-neutral session joined a project.', {
+        clientType: 'ClientType',
+        project: 'string',
+      }),
+      createVaultCollabEventTypeSnapshot('session.state_updated', 'session', 'A session status/detail changed.', {
+        status: 'SessionStatus',
+        detail: 'string | null',
+      }),
+      createVaultCollabEventTypeSnapshot('session.pinged', 'session', 'A passive soft ping targets a session.', {
+        actorSessionUid: 'vc_sess_* | null',
+        message: 'string | null',
+      }, { scope: 'session', itemKind: 'session_ping', roleProfileIds: [] }),
+      createVaultCollabEventTypeSnapshot('handoff.published', 'handoff', 'A handoff was published to an inbox.', {
+        sourceProject: 'string',
+        targetProject: 'string',
+        priority: 'HandoffPriority',
+      }),
+      createVaultCollabEventTypeSnapshot('handoff.claimed', 'handoff', 'A session claimed available work.', {
+        claimedBySessionUid: 'vc_sess_*',
+      }),
+      createVaultCollabEventTypeSnapshot('handoff.updated', 'handoff', 'Claimed handoff progress/status changed.', {
+        status: 'HandoffStatus',
+        progressNote: 'string',
+      }),
+      createVaultCollabEventTypeSnapshot('handoff.resolved', 'handoff', 'A claimed handoff completed.', {
+        summary: 'string',
+      }),
+      createVaultCollabEventTypeSnapshot('tool.call_before', 'tool', 'An MCP tool call is about to run.', {
+        toolName: 'string',
+        argumentKeys: 'string[]',
+        redactedArgumentKeys: 'string[]',
+      }),
+      createVaultCollabEventTypeSnapshot('tool.call_failure', 'tool', 'An MCP tool call failed.', {
+        toolName: 'string',
+        errorClass: 'string',
+      }, { scope: 'project_role', itemKind: 'tool_failure', roleProfileIds: ['coordinator', 'runtime-loop-operator'] }),
+      createVaultCollabEventTypeSnapshot('security.finding', 'security', 'A deterministic security scan finding needs review.', {
+        project: 'string',
+        severity: 'low | medium | high | critical',
+        findingSummary: 'token-safe summary',
+      }, { scope: 'project_role', itemKind: 'security_finding', roleProfileIds: ['coordinator', 'security-reviewer'] }),
+      createVaultCollabEventTypeSnapshot('policy.violation', 'policy', 'A policy rule denied, gated, or rate-limited an action.', {
+        policyPackName: 'string',
+        enforcement: 'deny | require_approval | rate_limit',
+        reason: 'string',
+      }, { scope: 'project_role', itemKind: 'policy_notice', roleProfileIds: ['coordinator', 'security-reviewer'] }),
+      createVaultCollabEventTypeSnapshot('policy.approved', 'policy', 'A coordinator-approved policy-gated action was accepted.', {
+        actionType: 'string',
+        decision: 'approved',
+      }),
+      createVaultCollabEventTypeSnapshot('loop.stall_detected', 'loop', 'A claimed handoff has not received progress for the configured threshold.', {
+        handoffUid: 'vc_handoff_*',
+        stalledForMs: 'number',
+      }, { scope: 'project_role', itemKind: 'loop_stall', roleProfileIds: ['coordinator', 'runtime-loop-operator'] }),
+    ];
+  }
+
+  function parsePolicyPackActionInput(input: unknown): VaultCollabPolicyPackActionInput {
+    const raw = input && typeof input === 'object' ? input as Record<string, unknown> : {};
+    const uid = typeof raw.uid === 'string' ? raw.uid.trim() : '';
+    const name = typeof raw.name === 'string' ? raw.name.trim() : '';
+
+    if (!uid && !name) {
+      throw new Error('Policy pack UID or name is required.');
+    }
+
+    return {
+      ...(uid ? { uid } : {}),
+      ...(name ? { name } : {}),
+    };
+  }
+
+  function normalizePolicyPackSnapshot(
+    value: unknown,
+    input: VaultCollabPolicyPackActionInput,
+    active: boolean,
+  ): VaultCollabPolicyPackSnapshot {
+    const record = value && typeof value === 'object' ? value as Record<string, unknown> : {};
+    const uid = typeof record.uid === 'string' ? record.uid : input.uid;
+    const name = typeof record.name === 'string' ? record.name : input.name;
+    if (!uid || !name) {
+      throw new Error('Vault Collab policy action did not return a policy pack identifier.');
+    }
+
+    const rules = Array.isArray(record.rules) ? record.rules : [];
+    const ruleCount = typeof record.ruleCount === 'number'
+      ? record.ruleCount
+      : rules.length;
+    const builtIn = typeof record.builtIn === 'boolean'
+      ? record.builtIn
+      : Boolean(record.isBuiltin);
+
+    return {
+      uid,
+      name,
+      version: typeof record.version === 'string' ? record.version : '',
+      active: typeof record.active === 'boolean' ? record.active : active,
+      builtIn,
+      ruleCount,
+      updatedAt: typeof record.updatedAt === 'string'
+        ? record.updatedAt
+        : typeof record.createdAt === 'string'
+          ? record.createdAt
+          : new Date().toISOString(),
+    };
+  }
+
   ipcMain.handle('vault:performVaultCollabDashboardAction', async (_, input) => {
     try {
       const actor = await ensureVaultCollabDashboardActor();
@@ -2534,6 +2683,52 @@ app.whenReady().then(() => {
         (input || {}) as VaultCollabDashboardActionInput,
       ) as VaultCollabActionResult;
       return { success: data.ok, data, error: data.error || undefined };
+    } catch (e: any) {
+      return { success: false, error: e.message };
+    }
+  });
+
+  ipcMain.handle('vault:listVaultCollabEventTypes', () => {
+    try {
+      return { success: true, data: listVaultCollabEventTypeFallbacks() };
+    } catch (e: any) {
+      return { success: false, error: e.message };
+    }
+  });
+
+  ipcMain.handle('vault:activateVaultCollabPolicyPack', async (_, input) => {
+    try {
+      const request = parsePolicyPackActionInput(input);
+      const actor = await ensureVaultCollabDashboardActor();
+      const data = await executeVaultCollabAction(
+        getVaultCollabDashboardActionRuntimeConfig(),
+        actor,
+        { kind: 'policy', action: 'activate_policy_pack', ...request },
+      ) as VaultCollabActionResult;
+      if (!data.ok) {
+        throw new Error(data.error || 'Vault Collab policy pack activation failed.');
+      }
+
+      return { success: true, data: normalizePolicyPackSnapshot(data.data, request, true) };
+    } catch (e: any) {
+      return { success: false, error: e.message };
+    }
+  });
+
+  ipcMain.handle('vault:deactivateVaultCollabPolicyPack', async (_, input) => {
+    try {
+      const request = parsePolicyPackActionInput(input);
+      const actor = await ensureVaultCollabDashboardActor();
+      const data = await executeVaultCollabAction(
+        getVaultCollabDashboardActionRuntimeConfig(),
+        actor,
+        { kind: 'policy', action: 'deactivate_policy_pack', ...request },
+      ) as VaultCollabActionResult;
+      if (!data.ok) {
+        throw new Error(data.error || 'Vault Collab policy pack deactivation failed.');
+      }
+
+      return { success: true, data: normalizePolicyPackSnapshot(data.data, request, false) };
     } catch (e: any) {
       return { success: false, error: e.message };
     }

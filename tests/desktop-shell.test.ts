@@ -282,15 +282,18 @@ describe('desktop shell navigation', () => {
     expect(collabSource).not.toContain('pingSession');
   });
 
-  it('lets Vault Collab cockpit content page-scroll outside the conversation feed', () => {
+  it('renders Vault Collab cockpit sections behind tabs with normal page flow', () => {
     const appCssSource = readFileSync(join(process.cwd(), 'packages/desktop/src/app.css'), 'utf8');
 
-    expect(collabSource).toContain('vault-collab-cockpit-grid');
+    expect(collabSource).toContain('vault-collab-cockpit-shell');
+    expect(collabSource).toContain('role="tablist"');
+    expect(collabSource).toContain('role="tabpanel"');
+    expect(collabSource).toContain('activeCockpitTab');
     expect(appCssSource).not.toContain('height: min(780px, calc(100vh - 238px))');
-    expect(appCssSource).toContain('align-items: start');
-    expect(appCssSource).toContain('max-height: min(760px, calc(100vh - 220px))');
+    expect(appCssSource).not.toContain('height: calc(100vh - 112px)');
+    expect(appCssSource).toContain('.vault-collab-cockpit-tabs');
+    expect(appCssSource).toContain('overflow-x: auto');
     expect(appCssSource).toContain('overflow: visible');
-    expect(appCssSource).toContain('overflow-y: auto');
     expect(appCssSource).toContain('overflow-wrap: anywhere');
   });
 

@@ -24,6 +24,7 @@ function snapshot(overrides: Partial<VaultCollabDashboardSnapshot> = {}): VaultC
     errorMessage: null,
     sessions: [],
     handoffs: [],
+    policyPacks: [],
     launchRequests: [],
     deliveryAttempts: [],
     events: [],
@@ -1300,6 +1301,7 @@ describe('Vault Collab dashboard view model', () => {
       handoffs: [
         handoff({ handoffUid: 'vc_handoff_resolved_1234567890', status: 'resolved', shortPrompt: 'Resolved work.' }),
         handoff({ handoffUid: 'vc_handoff_claimed_1234567890', status: 'claimed', shortPrompt: 'Claimed work.' }),
+        handoff({ handoffUid: 'vc_handoff_in_progress_1234567890', status: 'in_progress', shortPrompt: 'In progress work.' }),
         handoff({ handoffUid: 'vc_handoff_available_1234567890', status: 'available', shortPrompt: longPrompt }),
         handoff({ handoffUid: 'vc_handoff_verification_1234567890', status: 'verification_needed', shortPrompt: 'Verify work.' }),
         handoff({ handoffUid: 'vc_handoff_blocked_1234567890', status: 'blocked', shortPrompt: 'Blocked work.' }),
@@ -1309,10 +1311,9 @@ describe('Vault Collab dashboard view model', () => {
 
     expect(model.cockpit.work.map((column) => [column.state, column.label, column.cards.map((card) => card.uid)])).toEqual([
       ['available', 'Available', ['vc_handoff_available_1234567890']],
-      ['in_progress', 'In progress', ['vc_handoff_claimed_1234567890']],
+      ['claimed', 'Claimed', ['vc_handoff_claimed_1234567890']],
+      ['in_progress', 'In progress', ['vc_handoff_in_progress_1234567890']],
       ['verification_needed', 'Needs verification', ['vc_handoff_verification_1234567890']],
-      ['blocked', 'Blocked', ['vc_handoff_blocked_1234567890']],
-      ['awaiting_user', 'Needs user', ['vc_handoff_awaiting_1234567890']],
       ['resolved', 'Resolved', ['vc_handoff_resolved_1234567890']],
     ]);
     expect(model.cockpit.work[0].cards[0]).toEqual(expect.objectContaining({

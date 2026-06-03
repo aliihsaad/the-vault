@@ -2,8 +2,10 @@ import type {
   VaultCollabDashboardSnapshot,
   VaultCollabDeliveryAttemptSnapshot,
   VaultCollabEventSnapshot,
+  VaultCollabEventTypeSnapshot,
   VaultCollabHandoffSnapshot,
   VaultCollabLaunchRequestSnapshot,
+  VaultCollabPolicyPackSnapshot,
   VaultCollabRoleProfileSnapshot,
   VaultCollabSessionSnapshot,
 } from '@the-vault/core';
@@ -169,6 +171,7 @@ export interface VaultCollabNeedsYouItem {
 export interface VaultCollabRosterAgent {
   sessionUid: string;
   displayName: string;
+  clientType: VaultCollabSessionSnapshot['clientType'];
   rawRole: string;
   roleProfileId: string | null;
   roleDisplayName: string;
@@ -180,6 +183,8 @@ export interface VaultCollabRosterAgent {
 
 export interface VaultCollabRoleGroup {
   key: string;
+  label: string;
+  stateLabel: string;
   role: string;
   roleProfileId: string | null;
   roleDisplayName: string;
@@ -194,6 +199,8 @@ export interface VaultCollabRoleGroup {
   isWatchdog: boolean;
   agents: VaultCollabRosterAgent[];
 }
+
+export type VaultCollabOfficeGroup = VaultCollabRoleGroup;
 
 export interface VaultCollabSelectedRoleProfile {
   roleProfileId: string;
@@ -210,10 +217,9 @@ export interface VaultCollabSelectedRoleProfile {
 
 export type VaultCollabWorkColumnState =
   | 'available'
+  | 'claimed'
   | 'in_progress'
   | 'verification_needed'
-  | 'blocked'
-  | 'awaiting_user'
   | 'resolved';
 
 export interface VaultCollabWorkCard extends VaultCollabHandoffRow {
@@ -235,19 +241,68 @@ export interface VaultCollabConversationEntry {
   handoffUid?: string;
 }
 
+export interface VaultCollabEventFeedRow {
+  id: number;
+  type: string;
+  timeLabel: string;
+  sessionLabel: string;
+  summary: string;
+}
+
+export interface VaultCollabEventFeedModel {
+  prefixes: string[];
+  selectedPrefix: string;
+  visibleEvents: VaultCollabEventFeedRow[];
+}
+
+export interface VaultCollabPolicyPackRow {
+  uid: string;
+  name: string;
+  active: boolean;
+  builtInBadge: string | null;
+  toggleAction: 'activate' | 'deactivate';
+}
+
+export interface VaultCollabPolicyPanelModel {
+  packs: VaultCollabPolicyPackRow[];
+  recentEvents: VaultCollabEventFeedRow[];
+}
+
+export interface VaultCollabEventRegistryRow {
+  canonicalName: string;
+  namespace: string;
+  summary: string;
+  payloadKeys: string[];
+  attentionLabel: string;
+  tokenSafeLabel: string;
+  legacyAliasLabel: string | null;
+}
+
+export interface VaultCollabEventRegistryModel {
+  rows: VaultCollabEventRegistryRow[];
+  namespaces: string[];
+  totalCount: number;
+}
+
 export interface VaultCollabCockpitViewModel {
   needsYou: VaultCollabNeedsYouItem[];
+  officeGroups: VaultCollabOfficeGroup[];
   roster: VaultCollabRoleGroup[];
   selectedRoleProfile: VaultCollabSelectedRoleProfile | null;
   work: VaultCollabWorkColumn[];
   conversation: VaultCollabConversationEntry[];
   selectedHandoff: VaultCollabSelectedHandoff | null;
+  eventFeed: VaultCollabEventFeedModel;
+  policyPanel: VaultCollabPolicyPanelModel;
+  eventRegistry: VaultCollabEventRegistryModel;
 }
 
 export interface VaultCollabDashboardViewModelOptions {
   dashboardSessionUid?: string | null;
   approvedLaunchCommands?: Record<string, string>;
   selectedRoleProfileId?: string | null;
+  eventTypePrefix?: string | null;
+  eventTypes?: VaultCollabEventTypeSnapshot[];
 }
 
 export interface VaultCollabDashboardViewModel {
@@ -353,17 +408,26 @@ export function buildVaultCollabDashboardViewModel(
       options.dashboardSessionUid ?? null,
       roleLookup,
       options.selectedRoleProfileId ?? null,
+      options,
     ),
   };
 }
 
 const WORK_COLUMNS: Array<{ state: VaultCollabWorkColumnState; label: string }> = [
   { state: 'available', label: 'Available' },
+  { state: 'claimed', label: 'Claimed' },
   { state: 'in_progress', label: 'In progress' },
   { state: 'verification_needed', label: 'Needs verification' },
-  { state: 'blocked', label: 'Blocked' },
-  { state: 'awaiting_user', label: 'Needs user' },
   { state: 'resolved', label: 'Resolved' },
+];
+
+const EVENT_FEED_PREFIXES = [
+  'session.',
+  'handoff.',
+  'policy.',
+  'security.',
+  'tool.',
+  'loop.',
 ];
 
 function buildCockpitViewModel(
@@ -376,23 +440,28 @@ function buildCockpitViewModel(
   dashboardSessionUid: string | null,
   roleLookup: RoleProfileLookup,
   selectedRoleProfileId: string | null,
+  options: VaultCollabDashboardViewModelOptions = {},
 ): VaultCollabCockpitViewModel {
-  const roster = buildRoleGroups(snapshot.sessions, snapshot.handoffs, handoffRows, roleLookup);
+  const officeGroups = buildRoleGroups(snapshot.sessions, snapshot.handoffs, handoffRows, roleLookup);
   const selectedHandoffRoleProfileId = selectedHandoffUid
     ? handoffRows.find((row) => row.uid === selectedHandoffUid)?.suggestedRoleProfileId ?? null
     : null;
   return {
     needsYou: buildNeedsYouItems(snapshot, launchRequestRows, handoffRows, dashboardSessionUid),
-    roster,
+    officeGroups,
+    roster: officeGroups,
     selectedRoleProfile: buildSelectedRoleProfile(
       roleLookup,
       selectedRoleProfileId
         ?? selectedHandoffRoleProfileId
-        ?? firstOccupiedRoleProfileId(roster),
+        ?? firstOccupiedRoleProfileId(officeGroups),
     ),
     work: buildWorkColumns(snapshot.handoffs, handoffRows),
     conversation: buildConversationEntries(snapshot.handoffs, snapshot.events, selectedHandoffUid, now),
     selectedHandoff,
+    eventFeed: buildEventFeed(snapshot.events, now, options.eventTypePrefix ?? null),
+    policyPanel: buildPolicyPanel(snapshot.policyPacks ?? [], snapshot.events, now),
+    eventRegistry: buildEventRegistry(options.eventTypes ?? []),
   };
 }
 
@@ -517,6 +586,7 @@ function buildRoleGroups(
     group.agents.push({
       sessionUid: session.sessionUid,
       displayName: getSessionDisplayName(session),
+      clientType: session.clientType,
       rawRole,
       roleProfileId,
       roleDisplayName: getRoleDisplayName(roleProfileId, rawRole, roleLookup),
@@ -545,7 +615,7 @@ function buildRoleGroups(
     }
   }
 
-  return Array.from(groups.values());
+  return Array.from(groups.values()).map(finalizeOfficeGroup);
 }
 
 function buildEmptyRoleGroup(
@@ -554,6 +624,8 @@ function buildEmptyRoleGroup(
 ): VaultCollabRoleGroup {
   return {
     key: profile.roleProfileId,
+    label: profile.displayName,
+    stateLabel: 'idle',
     role: profile.roleProfileId,
     roleProfileId: profile.roleProfileId,
     roleDisplayName: profile.displayName,
@@ -585,6 +657,8 @@ function buildLegacyRoleGroup(
   const roleDisplayName = getRoleDisplayName(roleProfileId, rawRole, roleLookup);
   return {
     key: roleProfileId ?? rawRole,
+    label: roleDisplayName,
+    stateLabel: 'idle',
     role: roleProfileId ?? rawRole,
     roleProfileId,
     roleDisplayName,
@@ -598,6 +672,18 @@ function buildLegacyRoleGroup(
     handoffs: [],
     isWatchdog: roleProfileId === 'loop-resolver',
     agents: [],
+  };
+}
+
+function finalizeOfficeGroup(group: VaultCollabRoleGroup): VaultCollabRoleGroup {
+  return {
+    ...group,
+    label: group.roleDisplayName,
+    stateLabel: group.agents.length > 0
+      ? `${group.agents.length} live`
+      : group.handoffs.length > 0
+        ? `${group.handoffs.length} routed`
+        : 'idle',
   };
 }
 
@@ -815,15 +901,15 @@ function getWorkColumnState(status: VaultCollabHandoffSnapshot['status']): Vault
   switch (status) {
     case 'available':
       return 'available';
-    case 'claimed':
     case 'in_progress':
       return 'in_progress';
+    case 'claimed':
+      return 'claimed';
     case 'verification_needed':
       return 'verification_needed';
     case 'blocked':
-      return 'blocked';
     case 'awaiting_user':
-      return 'awaiting_user';
+      return null;
     case 'resolved':
       return 'resolved';
     case 'abandoned':
@@ -1345,6 +1431,123 @@ function buildEventRows(
       timeLabel: formatRelativeAge(new Date(event.createdAt), now),
       summary: formatEventPayload(event),
     }));
+}
+
+function buildEventFeed(
+  events: VaultCollabEventSnapshot[],
+  now: Date,
+  selectedPrefix: string | null,
+): VaultCollabEventFeedModel {
+  const safePrefix = selectedPrefix && EVENT_FEED_PREFIXES.includes(selectedPrefix)
+    ? selectedPrefix
+    : EVENT_FEED_PREFIXES[0];
+  const visibleEvents = events
+    .filter((event) => event.eventType.startsWith(safePrefix))
+    .sort(compareEventsNewestFirst)
+    .slice(0, 30)
+    .map((event) => buildEventFeedRow(event, now));
+
+  return {
+    prefixes: [...EVENT_FEED_PREFIXES],
+    selectedPrefix: safePrefix,
+    visibleEvents,
+  };
+}
+
+function buildPolicyPanel(
+  policyPacks: VaultCollabPolicyPackSnapshot[],
+  events: VaultCollabEventSnapshot[],
+  now: Date,
+): VaultCollabPolicyPanelModel {
+  return {
+    packs: policyPacks.map((pack) => ({
+      uid: pack.uid,
+      name: pack.name,
+      active: pack.active,
+      builtInBadge: pack.builtIn ? 'built in' : null,
+      toggleAction: pack.active ? 'deactivate' : 'activate',
+    })),
+    recentEvents: events
+      .filter((event) => event.eventType.startsWith('policy.'))
+      .sort(compareEventsNewestFirst)
+      .slice(0, 8)
+      .map((event) => buildEventFeedRow(event, now)),
+  };
+}
+
+function buildEventRegistry(eventTypes: VaultCollabEventTypeSnapshot[]): VaultCollabEventRegistryModel {
+  const rows = eventTypes
+    .map((eventType) => ({
+      canonicalName: eventType.canonicalName,
+      namespace: eventType.namespace,
+      summary: eventType.summary,
+      payloadKeys: Object.keys(eventType.payloadShape ?? {}),
+      attentionLabel: formatEventAttentionLabel(eventType.attention),
+      tokenSafeLabel: eventType.tokenSafety.forbiddenPayloadKeys.length > 0 ? 'token-safe' : 'no token rules',
+      legacyAliasLabel: eventType.legacyAliases.length > 0
+        ? eventType.legacyAliases.join(', ')
+        : null,
+    }))
+    .sort((left, right) => left.canonicalName.localeCompare(right.canonicalName));
+
+  return {
+    rows,
+    namespaces: Array.from(new Set(rows.map((row) => row.namespace))).sort(),
+    totalCount: rows.length,
+  };
+}
+
+function buildEventFeedRow(event: VaultCollabEventSnapshot, now: Date): VaultCollabEventFeedRow {
+  return {
+    id: event.eventId,
+    type: event.eventType,
+    timeLabel: formatRelativeAge(new Date(event.createdAt), now),
+    sessionLabel: event.sessionUid
+      ? formatVaultCollabShortUid(event.sessionUid)
+      : event.handoffUid
+        ? formatVaultCollabShortUid(event.handoffUid)
+        : 'system',
+    summary: event.eventType.startsWith('policy.')
+      ? formatPolicyEventSummary(event)
+      : formatEventPayload(event),
+  };
+}
+
+function compareEventsNewestFirst(
+  left: VaultCollabEventSnapshot,
+  right: VaultCollabEventSnapshot,
+): number {
+  const timeDelta = Date.parse(right.createdAt) - Date.parse(left.createdAt);
+  return timeDelta !== 0 ? timeDelta : right.eventId - left.eventId;
+}
+
+function formatPolicyEventSummary(event: VaultCollabEventSnapshot): string {
+  const packName = getStringPayloadValue(event.payload, 'policyPackName')
+    ?? getStringPayloadValue(event.payload, 'policyPackUid')
+    ?? 'policy';
+  const action = getStringPayloadValue(event.payload, 'action')
+    ?? getStringPayloadValue(event.payload, 'trigger')
+    ?? getStringPayloadValue(event.payload, 'actionType')
+    ?? getStringPayloadValue(event.payload, 'eventType');
+  const reason = getStringPayloadValue(event.payload, 'reason');
+
+  return [packName, action, reason].filter((part): part is string => Boolean(part)).join(' / ');
+}
+
+function getStringPayloadValue(payload: Record<string, unknown>, key: string): string | null {
+  const value = payload[key];
+  return typeof value === 'string' && value.trim().length > 0 ? value.trim() : null;
+}
+
+function formatEventAttentionLabel(attention: VaultCollabEventTypeSnapshot['attention']): string {
+  if (attention.scope === 'none') {
+    return 'none';
+  }
+
+  const roles = attention.roleProfileIds.length > 0
+    ? ` / ${attention.roleProfileIds.join(', ')}`
+    : '';
+  return `${formatStatusLabel(attention.scope)}${roles}`;
 }
 
 function getSelectedHandoff(
