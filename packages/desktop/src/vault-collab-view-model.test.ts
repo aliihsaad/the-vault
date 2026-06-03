@@ -90,6 +90,23 @@ type HandoffSnapshot = VaultCollabDashboardSnapshot['handoffs'][number];
 type LaunchRequestSnapshot = VaultCollabDashboardSnapshot['launchRequests'][number];
 type EventSnapshot = VaultCollabDashboardSnapshot['events'][number];
 type DiscussionThreadSnapshot = HandoffSnapshot['discussionThreads'][number];
+type RoleProfileSnapshot = NonNullable<VaultCollabDashboardSnapshot['roleProfiles']>[number];
+
+const canonicalRoleProfileIds = [
+  'coordinator',
+  'explorer',
+  'planner',
+  'architect',
+  'implementer',
+  'reviewer',
+  'qa-evaluator',
+  'security-reviewer',
+  'documentation-agent',
+  'runtime-loop-operator',
+  'release-agent',
+  'pattern-mining-agent',
+  'loop-resolver',
+];
 
 function session(overrides: Partial<SessionSnapshot> & { sessionUid: string }): SessionSnapshot {
   const { sessionUid, ...rest } = overrides;
@@ -217,6 +234,28 @@ function event(overrides: Partial<EventSnapshot> & { eventId: number; eventType:
     eventType,
     payload: {},
     createdAt: '2026-05-30T00:11:00.000Z',
+    ...rest,
+  };
+}
+
+function roleProfile(overrides: Partial<RoleProfileSnapshot> & { roleProfileId: string }): RoleProfileSnapshot {
+  const { roleProfileId, ...rest } = overrides;
+  return {
+    roleProfileId,
+    displayName: roleProfileId
+      .split('-')
+      .map((part) => `${part.slice(0, 1).toUpperCase()}${part.slice(1)}`)
+      .join(' '),
+    purpose: `Own ${roleProfileId} work.`,
+    lifecycleStage: 'coordination',
+    defaultMutation: 'read_only',
+    capabilitySet: ['vault_collab_read'],
+    triggerLabels: [roleProfileId],
+    suggestedNextRoleProfileIds: [],
+    skills: {
+      primary: [],
+      secondary: [],
+    },
     ...rest,
   };
 }
@@ -1041,6 +1080,179 @@ describe('Vault Collab dashboard view model', () => {
     expect(model.selectedHandoff?.meta).toEqual(expect.arrayContaining([
       expect.objectContaining({ label: 'Suggested office', value: 'Loop Resolver' }),
     ]));
+  });
+
+  it('builds fixed officeGroups from all canonical role profiles even when no sessions are live', () => {
+    const model = buildVaultCollabDashboardViewModel(snapshot({
+      roleProfiles: canonicalRoleProfileIds.map((roleProfileId) => roleProfile({ roleProfileId })),
+      sessions: [],
+    }), now);
+    const cockpit = model.cockpit as typeof model.cockpit & {
+      officeGroups?: Array<{
+        roleProfileId: string;
+        label: string;
+        stateLabel: string;
+        agents: unknown[];
+      }>;
+    };
+
+    expect(cockpit.officeGroups?.map((office) => office.roleProfileId)).toEqual(canonicalRoleProfileIds);
+    expect(cockpit.officeGroups?.map((office) => [office.label, office.stateLabel, office.agents.length])).toEqual(
+      canonicalRoleProfileIds.map((roleProfileId) => [
+        roleProfileId
+          .split('-')
+          .map((part) => `${part.slice(0, 1).toUpperCase()}${part.slice(1)}`)
+          .join(' '),
+        'idle',
+        0,
+      ]),
+    );
+  });
+
+  it('builds an eventFeed filtered by event type prefix with newest policy events first', () => {
+    const model = buildVaultCollabDashboardViewModel(snapshot({
+      events: [
+        event({
+          eventId: 11,
+          eventType: 'session.registered',
+          sessionUid: 'vc_sess_start_1234567890',
+          payload: { displayName: 'Phase 6 worker' },
+          createdAt: '2026-05-30T00:12:00.000Z',
+        }),
+        event({
+          eventId: 12,
+          eventType: 'policy.violation',
+          sessionUid: 'vc_sess_policy_1234567890',
+          payload: { policyPackName: 'approval-gates', action: 'deny', reason: 'owner token missing' },
+          createdAt: '2026-05-30T00:16:00.000Z',
+        }),
+        event({
+          eventId: 13,
+          eventType: 'handoff.claimed',
+          handoffUid: 'vc_handoff_policy_1234567890',
+          sessionUid: 'vc_sess_policy_1234567890',
+          payload: { queueKey: 'phase-6' },
+          createdAt: '2026-05-30T00:17:00.000Z',
+        }),
+        event({
+          eventId: 14,
+          eventType: 'policy.approved',
+          sessionUid: 'vc_sess_policy_1234567890',
+          payload: { policyPackName: 'core-safety', trigger: 'handoff.claim' },
+          createdAt: '2026-05-30T00:18:00.000Z',
+        }),
+      ],
+    }), now, null, { eventTypePrefix: 'policy.' } as unknown as Parameters<typeof buildVaultCollabDashboardViewModel>[3]);
+    const cockpit = model.cockpit as typeof model.cockpit & {
+      eventFeed?: {
+        selectedPrefix: string;
+        prefixes: string[];
+        visibleEvents: Array<{
+          type: string;
+          sessionLabel: string;
+          summary: string;
+        }>;
+      };
+    };
+
+    expect(cockpit.eventFeed?.prefixes).toEqual([
+      'session.',
+      'handoff.',
+      'policy.',
+      'security.',
+      'tool.',
+      'loop.',
+    ]);
+    expect(cockpit.eventFeed?.selectedPrefix).toBe('policy.');
+    expect(cockpit.eventFeed?.visibleEvents.map((eventRow) => [
+      eventRow.type,
+      eventRow.sessionLabel,
+      eventRow.summary,
+    ])).toEqual([
+      ['policy.approved', 'vc_sess_po...', 'core-safety / handoff.claim'],
+      ['policy.violation', 'vc_sess_po...', 'approval-gates / deny / owner token missing'],
+    ]);
+  });
+
+  it('builds a policyPanel from snapshot policy packs and recent policy events', () => {
+    const model = buildVaultCollabDashboardViewModel(snapshot({
+      events: [
+        event({
+          eventId: 21,
+          eventType: 'policy.violation',
+          payload: { policyPackName: 'approval-gates', action: 'deny', reason: 'missing owner token' },
+          createdAt: '2026-05-30T00:14:00.000Z',
+        }),
+        event({
+          eventId: 22,
+          eventType: 'tool.after',
+          payload: { toolName: 'vault_collab_claim_handoff' },
+          createdAt: '2026-05-30T00:15:00.000Z',
+        }),
+        event({
+          eventId: 23,
+          eventType: 'policy.approved',
+          payload: { policyPackName: 'core-safety', trigger: 'handoff.resolve' },
+          createdAt: '2026-05-30T00:17:00.000Z',
+        }),
+      ],
+      policyPacks: [
+        {
+          uid: 'policy_core_safety',
+          name: 'core-safety',
+          version: '1.0.0',
+          active: true,
+          builtIn: true,
+          ruleCount: 4,
+          updatedAt: '2026-05-30T00:00:00.000Z',
+        },
+        {
+          uid: 'policy_rate_limiting',
+          name: 'rate-limiting',
+          version: '1.0.0',
+          active: false,
+          builtIn: true,
+          ruleCount: 2,
+          updatedAt: '2026-05-30T00:00:00.000Z',
+        },
+      ],
+    } as unknown as Partial<VaultCollabDashboardSnapshot>), now);
+    const cockpit = model.cockpit as typeof model.cockpit & {
+      policyPanel?: {
+        packs: Array<{
+          uid: string;
+          name: string;
+          active: boolean;
+          builtInBadge: string | null;
+          toggleAction: 'activate' | 'deactivate';
+        }>;
+        recentEvents: Array<{
+          type: string;
+          summary: string;
+        }>;
+      };
+    };
+
+    expect(cockpit.policyPanel?.packs).toEqual([
+      {
+        uid: 'policy_core_safety',
+        name: 'core-safety',
+        active: true,
+        builtInBadge: 'built in',
+        toggleAction: 'deactivate',
+      },
+      {
+        uid: 'policy_rate_limiting',
+        name: 'rate-limiting',
+        active: false,
+        builtInBadge: 'built in',
+        toggleAction: 'activate',
+      },
+    ]);
+    expect(cockpit.policyPanel?.recentEvents.map((eventRow) => [eventRow.type, eventRow.summary])).toEqual([
+      ['policy.approved', 'core-safety / handoff.resolve'],
+      ['policy.violation', 'approval-gates / deny / missing owner token'],
+    ]);
   });
 
   it('excludes dashboard-admin sessions from the cockpit roster', () => {
