@@ -19,6 +19,7 @@ import type {
   VaultCollabJsonRecord,
   VaultCollabLaunchRequestSnapshot,
   VaultCollabLaunchRequestStatus,
+  VaultCollabPolicyPackSnapshot,
   VaultCollabRoleProfileAliasSnapshot,
   VaultCollabRoleProfileSnapshot,
   VaultCollabRuntimeConfig,
@@ -200,6 +201,16 @@ interface RoleProfileAliasRow {
   role_profile_id: string;
 }
 
+interface PolicyPackRow {
+  uid: string;
+  name: string;
+  version: string;
+  active: 0 | 1;
+  is_builtin: 0 | 1;
+  rules_json: string;
+  updated_at: string;
+}
+
 export function getVaultCollabDashboardSnapshot(
   config: VaultCollabRuntimeConfig,
   options: VaultCollabDashboardOptions = {},
@@ -238,23 +249,26 @@ export function getVaultCollabDashboardSnapshot(
       closedSessionVisibilityMs,
     );
     const handoffs = listOpenHandoffs(db, clampLimit(options.handoffLimit, DEFAULT_HANDOFF_LIMIT));
+    const resolvedHandoffs = listRecentResolvedHandoffs(db, 10);
     const launchRequests = listLaunchRequests(db, clampLimit(options.launchRequestLimit, DEFAULT_LAUNCH_REQUEST_LIMIT));
     const deliveryAttempts = listRecentDeliveryAttempts(db, clampLimit(options.eventLimit, DEFAULT_EVENT_LIMIT));
     const events = listRecentEvents(db, clampLimit(options.eventLimit, DEFAULT_EVENT_LIMIT));
     const roleProfiles = listRoleProfiles(db);
     const roleProfileAliases = listRoleProfileAliases(db);
+    const policyPacks = listPolicyPacks(db);
 
     return {
       ...base,
       dataReady: true,
       sessions,
-      handoffs,
+      handoffs: [...handoffs, ...resolvedHandoffs],
       roleProfiles,
       roleProfileAliases,
+      policyPacks,
       launchRequests,
       deliveryAttempts,
       events,
-      counts: buildDashboardCounts(sessions, handoffs, launchRequests, events),
+      counts: buildDashboardCounts(sessions, [...handoffs, ...resolvedHandoffs], launchRequests, events),
     };
   } catch (error) {
     return {
@@ -400,6 +414,63 @@ function listOpenHandoffs(db: Database.Database, limit: number): VaultCollabHand
       handoff_uid ASC
     LIMIT ?
   `).all(...CLOSED_HANDOFF_STATUSES, limit) as HandoffRow[];
+
+  const discussionThreadsByHandoff = listDiscussionThreadSummaries(
+    db,
+    rows.map((row) => row.handoff_uid),
+  );
+
+  return rows.map((row) => ({
+    ...mapHandoffRow(row),
+    discussionThreads: discussionThreadsByHandoff.get(row.handoff_uid) ?? [],
+  }));
+}
+
+function listRecentResolvedHandoffs(db: Database.Database, limit: number): VaultCollabHandoffSnapshot[] {
+  const queueKeySelect = columnExists(db, 'handoffs', 'queue_key') ? 'queue_key' : "'default'";
+  const labelsSelect = columnExists(db, 'handoffs', 'labels_json') ? 'labels_json' : "'[]'";
+  const queuePositionSelect = columnExists(db, 'handoffs', 'queue_position') ? 'queue_position' : 'NULL';
+  const dependsOnSelect = columnExists(db, 'handoffs', 'depends_on_handoff_uid') ? 'depends_on_handoff_uid' : 'NULL';
+  const suggestedRoleProfileIdSelect = columnExists(db, 'handoffs', 'suggested_role_profile_id') ? 'suggested_role_profile_id' : 'NULL';
+
+  const rows = db.prepare(`
+    SELECT
+      handoff_uid,
+      vault_memory_uid,
+      short_prompt,
+      source_project,
+      target_project,
+      related_projects_json,
+      related_files_json,
+      source_session_uid,
+      suggested_session_uid,
+      suggested_client_type,
+      ${suggestedRoleProfileIdSelect} AS suggested_role_profile_id,
+      ${queueKeySelect} AS queue_key,
+      ${labelsSelect} AS labels_json,
+      ${queuePositionSelect} AS queue_position,
+      ${dependsOnSelect} AS depends_on_handoff_uid,
+      status,
+      priority,
+      urgent,
+      claimed_by_session_uid,
+      lease_expires_at,
+      progress_note,
+      resolution_summary,
+      reopen_reason,
+      created_at,
+      updated_at,
+      resolved_at,
+      stale_at
+    FROM handoffs
+    WHERE status = ?
+    ORDER BY
+      CASE WHEN resolved_at IS NULL THEN 1 ELSE 0 END ASC,
+      resolved_at DESC,
+      updated_at DESC,
+      handoff_uid ASC
+    LIMIT ?
+  `).all('resolved', limit) as HandoffRow[];
 
   const discussionThreadsByHandoff = listDiscussionThreadSummaries(
     db,
@@ -581,6 +652,48 @@ function listRoleProfileAliases(db: Database.Database): VaultCollabRoleProfileAl
   return rows.map((row) => ({
     alias: row.alias,
     roleProfileId: row.role_profile_id,
+  }));
+}
+
+function listPolicyPacks(db: Database.Database): VaultCollabPolicyPackSnapshot[] {
+  if (!tableExists(db, 'policy_packs') || !hasPolicyPackSnapshotColumns(db)) {
+    return [];
+  }
+
+  const versionSelect = columnExists(db, 'policy_packs', 'version') ? 'version' : "'unknown'";
+  const activeSelect = columnExists(db, 'policy_packs', 'active') ? 'active' : '0';
+  const builtInSelect = columnExists(db, 'policy_packs', 'is_builtin')
+    ? 'is_builtin'
+    : columnExists(db, 'policy_packs', 'built_in')
+      ? 'built_in'
+      : '0';
+  const updatedAtSelect = columnExists(db, 'policy_packs', 'updated_at')
+    ? 'updated_at'
+    : columnExists(db, 'policy_packs', 'created_at')
+      ? 'created_at'
+      : 'NULL';
+
+  const rows = db.prepare(`
+    SELECT
+      uid,
+      name,
+      ${versionSelect} AS version,
+      ${activeSelect} AS active,
+      ${builtInSelect} AS is_builtin,
+      rules_json,
+      ${updatedAtSelect} AS updated_at
+    FROM policy_packs
+    ORDER BY is_builtin DESC, name ASC, uid ASC
+  `).all() as PolicyPackRow[];
+
+  return rows.map((row) => ({
+    uid: row.uid,
+    name: row.name,
+    version: row.version,
+    active: row.active === 1,
+    builtIn: row.is_builtin === 1,
+    ruleCount: countPolicyRules(row.rules_json),
+    updatedAt: row.updated_at,
   }));
 }
 
@@ -855,6 +968,7 @@ function buildDashboardCounts(
     launchRequestsByStatus[launchRequest.status] += 1;
   }
 
+  const openHandoffs = handoffs.filter((handoff) => !CLOSED_HANDOFF_STATUSES.includes(handoff.status)).length;
   const permissionNeededSessions = sessions.filter(isPermissionNeededSession).length;
   const permissionNeededHandoffs = handoffs.filter(isPermissionNeededHandoff).length;
 
@@ -864,7 +978,7 @@ function buildDashboardCounts(
     idleSessions: sessionsByStatus.idle,
     staleSessions: sessions.filter((session) => session.connectionState === 'stale').length,
     disconnectedSessions: sessions.filter((session) => session.connectionState === 'disconnected').length,
-    openHandoffs: handoffs.length,
+    openHandoffs,
     availableHandoffs: handoffsByStatus.available,
     urgentHandoffs: handoffs.filter((handoff) => handoff.urgent || handoff.priority === 'urgent').length,
     permissionNeeded: permissionNeededSessions + permissionNeededHandoffs,
@@ -904,6 +1018,7 @@ function createEmptySnapshot(
     handoffs: [],
     roleProfiles: [],
     roleProfileAliases: [],
+    policyPacks: [],
     launchRequests: [],
     deliveryAttempts: [],
     events: [],
@@ -1241,6 +1356,32 @@ function hasDiscussionMessagePreviewColumns(db: Database.Database): boolean {
     'body',
     'created_at',
   ].every((column) => columnExists(db, 'discussion_messages', column));
+}
+
+function hasPolicyPackSnapshotColumns(db: Database.Database): boolean {
+  return [
+    'uid',
+    'name',
+    'rules_json',
+  ].every((column) => columnExists(db, 'policy_packs', column));
+}
+
+function countPolicyRules(value: string): number {
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    if (Array.isArray(parsed)) {
+      return parsed.length;
+    }
+
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      const rules = (parsed as { rules?: unknown }).rules;
+      return Array.isArray(rules) ? rules.length : 0;
+    }
+
+    return 0;
+  } catch {
+    return 0;
+  }
 }
 
 function clampLimit(value: number | undefined, fallback: number): number {

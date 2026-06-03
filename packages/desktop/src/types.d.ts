@@ -19,10 +19,13 @@ import type {
   VaultCollabDashboardActionInput,
   VaultCollabDashboardOptions,
   VaultCollabDashboardSnapshot,
+  VaultCollabEventTypeSnapshot,
   VaultCollabHandoffActionSet,
   VaultCollabInstallPlan,
   VaultCollabLaunchApprovalResult,
   VaultCollabLaunchCommand,
+  VaultCollabPolicyPackActionInput,
+  VaultCollabPolicyPackSnapshot,
   VaultCollabRuntimeConfig,
   VaultCollabRuntimeStatus,
 } from '@the-vault/core';
@@ -733,6 +736,9 @@ declare global {
     getVaultCollabHandoffActions: (handoffUid: string) => Promise<VaultResponse<VaultCollabHandoffActionSet | null>>;
     performVaultCollabDashboardAction: (input: VaultCollabDashboardActionInput) => Promise<VaultResponse<VaultCollabActionResult>>;
     requestVaultCollabAgent: (input: VaultCollabAgentRequestInput) => Promise<VaultResponse<VaultCollabActionResult>>;
+    listVaultCollabEventTypes: () => Promise<VaultResponse<VaultCollabEventTypeSnapshot[]>>;
+    activateVaultCollabPolicyPack: (input: VaultCollabPolicyPackActionInput) => Promise<VaultResponse<VaultCollabPolicyPackSnapshot>>;
+    deactivateVaultCollabPolicyPack: (input: VaultCollabPolicyPackActionInput) => Promise<VaultResponse<VaultCollabPolicyPackSnapshot>>;
     approveVaultCollabLaunchRequest: (launchRequestUid: string) => Promise<VaultResponse<VaultCollabLaunchApprovalResult>>;
     startVaultCollabLaunchRequest: (launchRequestUid: string) => Promise<VaultResponse<{
       launchRequestUid: string;

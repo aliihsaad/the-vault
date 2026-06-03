@@ -189,6 +189,33 @@ export interface VaultCollabEventSnapshot {
   createdAt: string;
 }
 
+export interface VaultCollabPolicyPackSnapshot {
+  uid: string;
+  name: string;
+  version: string;
+  active: boolean;
+  builtIn: boolean;
+  ruleCount: number;
+  updatedAt: string;
+}
+
+export interface VaultCollabEventTypeSnapshot {
+  canonicalName: string;
+  namespace: string;
+  summary: string;
+  payloadShape: VaultCollabJsonRecord;
+  tokenSafety: {
+    forbiddenPayloadKeys: string[];
+    rules: string[];
+  };
+  attention: {
+    scope: string;
+    itemKind: string | null;
+    roleProfileIds: string[];
+  };
+  legacyAliases: string[];
+}
+
 export type VaultCollabDeliveryAttemptStatus = 'delivered' | 'failed';
 
 export interface VaultCollabDeliveryAttemptSnapshot {
@@ -296,6 +323,7 @@ export interface VaultCollabDashboardSnapshot {
   handoffs: VaultCollabHandoffSnapshot[];
   roleProfiles?: VaultCollabRoleProfileSnapshot[];
   roleProfileAliases?: VaultCollabRoleProfileAliasSnapshot[];
+  policyPacks: VaultCollabPolicyPackSnapshot[];
   launchRequests: VaultCollabLaunchRequestSnapshot[];
   deliveryAttempts: VaultCollabDeliveryAttemptSnapshot[];
   events: VaultCollabEventSnapshot[];
@@ -328,6 +356,11 @@ export type VaultCollabDashboardLaunchAction =
   | 'fail';
 
 export type VaultCollabDashboardSessionAction = 'rename' | 'close' | 'ping';
+
+export interface VaultCollabPolicyPackActionInput {
+  uid?: string;
+  name?: string;
+}
 
 export type VaultCollabDashboardDiscussionMessageType =
   | 'note'
@@ -414,6 +447,12 @@ export type VaultCollabDashboardActionInput =
       detail?: string;
       exitCode?: number;
       reason?: string;
+    }
+  | {
+      kind: 'policy';
+      action: 'activate_policy_pack' | 'deactivate_policy_pack';
+      uid?: string;
+      name?: string;
     };
 
 export interface VaultCollabActionInvocation {

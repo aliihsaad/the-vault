@@ -515,6 +515,37 @@ describe('Vault Collab extension runtime config', () => {
       JSON.stringify({ status: 'in_progress' }),
       '2026-05-28T11:58:00.000Z',
     );
+    db.exec(`
+      CREATE TABLE policy_packs (
+        uid TEXT PRIMARY KEY,
+        name TEXT NOT NULL UNIQUE,
+        version TEXT NOT NULL,
+        rules_json TEXT NOT NULL,
+        active INTEGER NOT NULL DEFAULT 1,
+        created_at TEXT NOT NULL,
+        is_builtin INTEGER NOT NULL DEFAULT 0
+      );
+    `);
+    db.prepare(`
+      INSERT INTO policy_packs (
+        uid,
+        name,
+        version,
+        rules_json,
+        active,
+        created_at,
+        is_builtin
+      )
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      'policy_pack_core_safety',
+      'core-safety',
+      '1.0.0',
+      JSON.stringify([{ id: 'owner-token-required' }, { id: 'no-renderer-tokens' }]),
+      1,
+      '2026-05-28T11:40:00.000Z',
+      1,
+    );
     db.close();
 
     const snapshot = getVaultCollabDashboardSnapshot(config, {
@@ -567,6 +598,7 @@ describe('Vault Collab extension runtime config', () => {
     expect(snapshot.handoffs.map((handoff) => handoff.handoffUid)).toEqual([
       'vc_handoff_urgent',
       'vc_handoff_available',
+      'vc_handoff_resolved',
     ]);
     expect(snapshot.handoffs[0]).toEqual(expect.objectContaining({
       priority: 'urgent',
@@ -578,7 +610,22 @@ describe('Vault Collab extension runtime config', () => {
       discussionThreads: [],
       relatedFiles: ['packages/desktop/src/components/VaultAgentView.tsx'],
     }));
-    expect(snapshot.handoffs.some((handoff) => handoff.status === 'resolved')).toBe(false);
+    expect(snapshot.handoffs.find((handoff) => handoff.handoffUid === 'vc_handoff_resolved')).toEqual(expect.objectContaining({
+      status: 'resolved',
+      resolutionSummary: 'Completed earlier',
+      resolvedAt: '2026-05-28T10:10:00.000Z',
+    }));
+    expect(snapshot.policyPacks).toEqual([
+      {
+        uid: 'policy_pack_core_safety',
+        name: 'core-safety',
+        version: '1.0.0',
+        active: true,
+        builtIn: true,
+        ruleCount: 2,
+        updatedAt: '2026-05-28T11:40:00.000Z',
+      },
+    ]);
     expect(snapshot.launchRequests).toEqual([]);
     expect(snapshot.events.map((event) => event.eventId)).toEqual([2, 1]);
     expect(snapshot.events[0].payload).toEqual({ status: 'in_progress' });
@@ -603,6 +650,7 @@ describe('Vault Collab extension runtime config', () => {
     expect(snapshot.counts.handoffsByStatus).toEqual(expect.objectContaining({
       available: 1,
       in_progress: 1,
+      resolved: 1,
     }));
     expect(snapshot.counts.launchRequestsByStatus).toEqual(expect.objectContaining({
       requested: 0,

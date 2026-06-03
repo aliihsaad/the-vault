@@ -1,15 +1,20 @@
-import { Activity, Eye, Route, Users } from 'lucide-react';
+import { Eye, Route, Users } from 'lucide-react';
 
 import type {
+  VaultCollabRosterAgent,
   VaultCollabRoleGroup,
   VaultCollabSelectedRoleProfile,
 } from '../../vault-collab-view-model.js';
+import claudeIconUrl from '../../../../../assets/claude-color.svg';
+import codexIconUrl from '../../../../../assets/codex-color.svg';
+import { RoleProfileModal } from './RoleProfileModal.js';
 
 interface RosterProps {
   groups: VaultCollabRoleGroup[];
   selectedRoleProfile: VaultCollabSelectedRoleProfile | null;
   selectedRoleProfileId: string | null;
   onSelectRoleProfile: (roleProfileId: string) => void;
+  onCloseRoleProfile: () => void;
 }
 
 export function Roster({
@@ -17,6 +22,7 @@ export function Roster({
   selectedRoleProfile,
   selectedRoleProfileId,
   onSelectRoleProfile,
+  onCloseRoleProfile,
 }: RosterProps) {
   const count = groups.reduce((total, group) => total + group.agents.length, 0);
 
@@ -39,7 +45,7 @@ export function Roster({
               <button
                 key={group.key}
                 type="button"
-                className={`vault-collab-office-lane vault-collab-office-lane-${index % 13} ${selectedRoleProfileId === group.roleProfileId ? 'vault-collab-office-lane-active' : ''}`}
+                className={`vault-collab-office-lane vault-collab-office-lane-${index % 13} ${selectedRoleProfileId && selectedRoleProfileId === group.roleProfileId ? 'vault-collab-office-lane-active' : ''}`}
                 onClick={() => group.roleProfileId ? onSelectRoleProfile(group.roleProfileId) : undefined}
               >
                 <span className="vault-collab-office-lane-head">
@@ -59,6 +65,7 @@ export function Roster({
                   <span className="vault-collab-office-agent-stack">
                     {group.agents.slice(0, 3).map((agent) => (
                       <span key={agent.sessionUid} className="vault-collab-office-agent-pill">
+                        <AgentClientIcon agent={agent} />
                         {agent.displayName}
                       </span>
                     ))}
@@ -71,35 +78,6 @@ export function Roster({
             ))}
           </div>
 
-          <div className="vault-collab-role-profile-panel">
-            {selectedRoleProfile ? (
-              <>
-                <div className="vault-collab-role-profile-head">
-                  <div>
-                    <strong>{selectedRoleProfile.displayName}</strong>
-                    <span>{selectedRoleProfile.mutationLabel}</span>
-                  </div>
-                  {selectedRoleProfile.isWatchdog ? (
-                    <span className="vault-collab-watchdog-pill">
-                      <Eye size={13} />
-                      Watchdog
-                    </span>
-                  ) : (
-                    <Activity size={16} />
-                  )}
-                </div>
-                <p>{selectedRoleProfile.purpose}</p>
-                <ChipBlock title="Capabilities" chips={selectedRoleProfile.capabilities} />
-                <ChipBlock title="Triggers" chips={selectedRoleProfile.triggerLabels} />
-                <ChipBlock title="Next roles" chips={selectedRoleProfile.suggestedNextRoleLabels} />
-                <ChipBlock title="Primary ECC skills" chips={selectedRoleProfile.primarySkillNames} />
-                <ChipBlock title="Secondary ECC skills" chips={selectedRoleProfile.secondarySkillNames} muted />
-              </>
-            ) : (
-              <div className="empty-state">No role profile selected.</div>
-            )}
-          </div>
-
           <div className="vault-collab-roster-groups">
             {groups.filter((group) => group.agents.length > 0).map((group) => (
               <div key={group.key} className="vault-collab-roster-group">
@@ -109,7 +87,9 @@ export function Roster({
                 </div>
                 {group.agents.map((agent) => (
                   <div key={agent.sessionUid} className="vault-collab-agent-row">
-                    <span className="vault-collab-client-dot">{agent.displayName.slice(0, 2)}</span>
+                    <span className="vault-collab-client-dot">
+                      <AgentClientIcon agent={agent} />
+                    </span>
                     <div className="vault-collab-roster-main">
                       <div className="vault-collab-row-title">
                         <strong>{agent.displayName}</strong>
@@ -147,27 +127,43 @@ export function Roster({
               <div className="empty-state">No role-routed handoffs.</div>
             )}
           </div>
+
+          <RoleProfileModal
+            roleProfile={selectedRoleProfile}
+            onClose={onCloseRoleProfile}
+          />
         </div>
       )}
     </section>
   );
 }
 
-function ChipBlock({ title, chips, muted = false }: { title: string; chips: string[]; muted?: boolean }) {
-  if (chips.length === 0) {
-    return null;
+function AgentClientIcon({ agent }: { agent: VaultCollabRosterAgent }) {
+  const iconUrl = getAgentIconUrl(agent);
+  if (iconUrl) {
+    return (
+      <img
+        className="vault-collab-agent-client-icon"
+        src={iconUrl}
+        alt=""
+        aria-hidden="true"
+      />
+    );
   }
 
-  return (
-    <div className="vault-collab-role-chip-block">
-      <span>{title}</span>
-      <div className="chip-row">
-        {chips.map((chip) => (
-          <span key={`${title}:${chip}`} className={`chip ${muted ? 'chip-muted' : ''}`}>{chip}</span>
-        ))}
-      </div>
-    </div>
-  );
+  return <span className="vault-collab-agent-client-fallback">{agent.displayName.slice(0, 2)}</span>;
+}
+
+function getAgentIconUrl(agent: VaultCollabRosterAgent): string | null {
+  if (agent.clientType === 'codex') {
+    return codexIconUrl;
+  }
+
+  if (agent.clientType === 'claude-code' || agent.clientType === 'claude-desktop') {
+    return claudeIconUrl;
+  }
+
+  return null;
 }
 
 function shortId(value: string): string {

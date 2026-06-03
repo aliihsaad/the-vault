@@ -15,6 +15,17 @@ interface UseVaultCollabActionsOptions {
   setDiscussionDraft: Dispatch<SetStateAction<string>>;
 }
 
+interface DiscussionProjectSource {
+  sourceProject?: string | null;
+  targetProject?: string | null;
+}
+
+export function getDiscussionThreadProject(handoff: DiscussionProjectSource): string {
+  return handoff.targetProject?.trim()
+    || handoff.sourceProject?.trim()
+    || 'the-vault';
+}
+
 export function useVaultCollabActions({
   discussionDraft,
   selectedHandoff,
@@ -225,7 +236,7 @@ export function useVaultCollabActions({
       kind: 'discussion',
       action: 'create_thread',
       handoffUid: selectedHandoff.uid,
-      project: 'the-vault',
+      project: getDiscussionThreadProject(selectedHandoff),
       title: title.trim(),
     }, `${selectedHandoff.uid}:discussion`);
     const threadUid = createResult && typeof createResult === 'object'
