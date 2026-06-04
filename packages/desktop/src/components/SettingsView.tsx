@@ -255,6 +255,40 @@ const SKILL_ENTRIES: SkillEntry[] = [
       'Tell me where Claude instructions should store it, how to connect Vault MCP beside it, how to bootstrap claude-code-brain or claude-desktop-brain if missing, and how to verify recall/save plus Vault Collab MCP flows afterwards.',
     ].join('\n'),
   },
+  {
+    id: 'codex-collab-skill',
+    title: 'Codex Collab skill',
+    path: 'skills/codex-vault-collab-skill.md',
+    summary: 'Install this when Codex joins the Vault Collab coordination layer — registering sessions, draining attention, and claiming/updating/resolving handoffs. Separate from the memory skill.',
+    snippet: [
+      'Best practice:',
+      '- Install alongside the Codex memory skill, not instead of it.',
+      '- Only needed when the optional Vault Collab MCP server is attached.',
+      '- Have Codex read vault_collab_get_agent_guide as the authoritative live loop.',
+      '- Keep session tokens private; never claim work owned by another active session.',
+    ].join('\n'),
+    assistantPrompt: [
+      'Use the file skills/codex-vault-collab-skill.md as the Vault Collab operating guide for Codex.',
+      'Tell me how Codex should register a session, drain attention, claim and update handoffs, and resolve only after verification.',
+    ].join('\n'),
+  },
+  {
+    id: 'claude-collab-skill',
+    title: 'Claude Collab skill',
+    path: 'skills/claude-vault-collab-skill.md',
+    summary: 'Install this when Claude joins the Vault Collab coordination layer — registering sessions, draining attention, and claiming/updating/resolving handoffs. Separate from the memory skill.',
+    snippet: [
+      'Best practice:',
+      '- Install alongside the Claude memory skill, not instead of it.',
+      '- Only needed when the optional Vault Collab MCP server is attached.',
+      '- Have Claude read vault_collab_get_agent_guide as the authoritative live loop.',
+      '- Keep session tokens private; never claim work owned by another active session.',
+    ].join('\n'),
+    assistantPrompt: [
+      'Use the file skills/claude-vault-collab-skill.md as the Vault Collab operating guide for Claude.',
+      'Tell me how Claude should register a session, drain attention, claim and update handoffs, and resolve only after verification.',
+    ].join('\n'),
+  },
 ];
 
 const PROMPT_SNIPPETS = [
