@@ -4,7 +4,7 @@ import { spawn as spawnProcess } from 'node:child_process';
 import { createCipheriv, createDecipheriv, createHash, randomBytes, scryptSync } from 'node:crypto';
 import { existsSync, readFileSync, watch as fsWatch, type FSWatcher } from 'node:fs';
 import { access, copyFile, mkdir, readFile, readdir, stat, writeFile } from 'node:fs/promises';
-import { homedir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { basename, dirname, extname, isAbsolute, join, relative, resolve } from 'node:path';
 import { createRequire } from 'node:module';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -163,6 +163,13 @@ const managedVaultCollabTerminals = new Map<string, ManagedVaultCollabTerminal>(
 const MANAGED_TERMINAL_ATTENTION_POLL_MS = 3000;
 const MANAGED_TERMINAL_IDLE_WRITE_MS = 2500;
 
+interface ExternalVaultCollabTerminalLaunch {
+  launched: boolean;
+  scriptPath: string | null;
+  shellPath: string | null;
+  note: string;
+}
+
 function getManagedVaultCollabSpawnPty(): NodePtySpawn {
   if (!lazySpawnPty) {
     const nodePty = requireFromMain('node-pty') as typeof import('node-pty');
@@ -175,6 +182,129 @@ function getManagedVaultCollabSpawnPty(): NodePtySpawn {
 function isExperimentalManagedVaultCollabSpawnEnabled(): boolean {
   const value = process.env.VAULT_COLLAB_EXPERIMENTAL_MANAGED_SPAWN;
   return value === '1' || value?.toLowerCase() === 'true';
+}
+
+function getWindowsPowerShellPath(): string {
+  const systemRoot = process.env.SystemRoot || process.env.WINDIR || 'C:\\Windows';
+  const powershellPath = join(systemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
+  return existsSync(powershellPath) ? powershellPath : 'powershell.exe';
+}
+
+function getWindowsCommandShellPath(): string {
+  return process.env.COMSPEC || join(process.env.SystemRoot || process.env.WINDIR || 'C:\\Windows', 'System32', 'cmd.exe');
+}
+
+function formatPowerShellSingleQuotedString(value: string): string {
+  return `'${value.replace(/'/g, "''")}'`;
+}
+
+function buildExternalVaultCollabLaunchScript(
+  launchRequest: VaultCollabLaunchRequestSnapshot,
+  launchCommand: VaultCollabLaunchCommand,
+): string {
+  const args = launchCommand.args.map((arg) => `  ${formatPowerShellSingleQuotedString(arg)}`).join(",\r\n");
+  return [
+    '$ErrorActionPreference = "Stop"',
+    `$env:VAULT_COLLAB_LAUNCH_REQUEST_UID = ${formatPowerShellSingleQuotedString(launchRequest.launchRequestUid)}`,
+    `$env:VAULT_COLLAB_PROVIDER = ${formatPowerShellSingleQuotedString(launchRequest.provider)}`,
+    `Set-Location -LiteralPath ${formatPowerShellSingleQuotedString(launchRequest.workspacePath)}`,
+    `$command = ${formatPowerShellSingleQuotedString(launchCommand.command)}`,
+    '$arguments = @(',
+    args,
+    ')',
+    'Write-Host ""',
+    `Write-Host ${formatPowerShellSingleQuotedString(`Launching Vault Collab ${launchRequest.provider} worker for ${launchRequest.launchRequestUid}`)}`,
+    `Write-Host ${formatPowerShellSingleQuotedString(`Workspace: ${launchRequest.workspacePath}`)}`,
+    'Write-Host ""',
+    '& $command @arguments',
+    '$exitCode = if ($null -ne $LASTEXITCODE) { $LASTEXITCODE } else { 0 }',
+    'if ($exitCode -ne 0) {',
+    '  Write-Host ""',
+    '  Write-Host "Vault Collab worker exited with code $exitCode."',
+    '}',
+  ].join('\r\n');
+}
+
+async function openExternalVaultCollabTerminal(
+  launchRequest: VaultCollabLaunchRequestSnapshot,
+  launchCommand: VaultCollabLaunchCommand,
+): Promise<ExternalVaultCollabTerminalLaunch> {
+  if (process.platform !== 'win32') {
+    return {
+      launched: false,
+      scriptPath: null,
+      shellPath: null,
+      note: 'External terminal auto-launch is only implemented on Windows; use the copied command.',
+    };
+  }
+
+  const scriptRoot = join(tmpdir(), 'the-vault', 'vault-collab-launches');
+  await mkdir(scriptRoot, { recursive: true });
+  const safeUid = launchRequest.launchRequestUid.replace(/[^A-Za-z0-9_.-]/g, '_');
+  const scriptPath = join(scriptRoot, `${safeUid}-${Date.now()}-${randomBytes(4).toString('hex')}.ps1`);
+  await writeFile(scriptPath, buildExternalVaultCollabLaunchScript(launchRequest, launchCommand), 'utf8');
+
+  const powershellPath = getWindowsPowerShellPath();
+  const shellPath = getWindowsCommandShellPath();
+  const child = spawnProcess(shellPath, [
+    '/d',
+    '/s',
+    '/c',
+    'start',
+    '""',
+    powershellPath,
+    '-NoExit',
+    '-ExecutionPolicy',
+    'Bypass',
+    '-File',
+    scriptPath,
+  ], {
+    cwd: launchRequest.workspacePath,
+    detached: true,
+    stdio: 'ignore',
+    windowsHide: false,
+    env: {
+      ...process.env,
+      VAULT_COLLAB_LAUNCH_REQUEST_UID: launchRequest.launchRequestUid,
+      VAULT_COLLAB_PROVIDER: launchRequest.provider,
+    },
+  });
+
+  await new Promise<void>((resolvePromise, rejectPromise) => {
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    function cleanup() {
+      if (!timer) {
+        return;
+      }
+      clearTimeout(timer);
+      timer = null;
+      child.off('spawn', onSpawn);
+      child.off('error', onError);
+    }
+    function onSpawn() {
+      cleanup();
+      resolvePromise();
+    }
+    function onError(error: Error) {
+      cleanup();
+      rejectPromise(error);
+    }
+
+    child.once('spawn', onSpawn);
+    child.once('error', onError);
+    timer = setTimeout(() => {
+      cleanup();
+      resolvePromise();
+    }, 1000);
+  });
+
+  child.unref();
+  return {
+    launched: true,
+    scriptPath,
+    shellPath: powershellPath,
+    note: 'PowerShell launch window opened. The worker will self-register and attach to the launch request.',
+  };
 }
 
 protocol.registerSchemesAsPrivileged([
@@ -2524,8 +2654,8 @@ app.whenReady().then(() => {
     workspacePath: string,
   ): string {
     return provider === 'codex'
-      ? `codex --no-alt-screen -C "${workspacePath}"`
-      : `claude --add-dir "${workspacePath}"`;
+      ? `codex --no-alt-screen -C "${workspacePath}" "[launch instructions]"`
+      : `claude --add-dir "${workspacePath}" -- "[launch instructions]"`;
   }
 
   const eventTypeTokenSafety = {
@@ -2846,6 +2976,45 @@ app.whenReady().then(() => {
 
       const launchCommand = buildVaultCollabLaunchCommand(launchRequest);
       if (!isExperimentalManagedVaultCollabSpawnEnabled()) {
+        if (process.platform === 'win32') {
+          const launching = await executeVaultCollabAction(config, actor, {
+            kind: 'launch',
+            action: 'mark_launching',
+            launchRequestUid,
+            detail: 'The Vault opened an external PowerShell launch window for this request.',
+          });
+          if (!launching.ok) {
+            throw new Error(launching.error || 'Could not mark launch request launching.');
+          }
+
+          try {
+            const externalLaunch = await openExternalVaultCollabTerminal(launchRequest, launchCommand);
+            return {
+              success: true,
+              data: {
+                launchRequestUid,
+                launchedSessionUid: null,
+                command: launchCommand.command,
+                args: launchCommand.args,
+                display: launchCommand.display,
+                launchCommand,
+                externalTerminalLaunched: externalLaunch.launched,
+                externalTerminalScriptPath: externalLaunch.scriptPath,
+                externalTerminalShellPath: externalLaunch.shellPath,
+                statusDetail: externalLaunch.note,
+              },
+            };
+          } catch (error) {
+            await executeVaultCollabAction(config, actor, {
+              kind: 'launch',
+              action: 'fail',
+              launchRequestUid,
+              reason: error instanceof Error ? error.message : String(error),
+            });
+            throw error;
+          }
+        }
+
         return {
           success: true,
           data: {
@@ -2855,6 +3024,10 @@ app.whenReady().then(() => {
             args: launchCommand.args,
             display: launchCommand.display,
             launchCommand,
+            externalTerminalLaunched: false,
+            externalTerminalScriptPath: null,
+            externalTerminalShellPath: null,
+            statusDetail: 'External terminal auto-launch is only implemented on Windows; use the copied command.',
           },
         };
       }
@@ -2897,6 +3070,10 @@ app.whenReady().then(() => {
             args: ['--no-alt-screen', '-C', launchRequest.workspacePath, '[prompt delivered over PTY]'],
             display: launchCommand.display,
             launchCommand,
+            externalTerminalLaunched: false,
+            externalTerminalScriptPath: null,
+            externalTerminalShellPath: null,
+            statusDetail: 'Experimental managed PTY started inside The Vault.',
           },
         };
       } catch (error) {

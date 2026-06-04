@@ -392,7 +392,7 @@ function getLaunchArgsForProvider(
   }
 
   if (provider === 'claude-code' || provider === 'claude-desktop') {
-    return ['--add-dir', workspacePath, instructions];
+    return ['--add-dir', workspacePath, '--', instructions];
   }
 
   return [instructions];

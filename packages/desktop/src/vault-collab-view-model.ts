@@ -442,11 +442,13 @@ export function buildVaultCollabDashboardViewModel(
       && event.eventType === HANDOFF_PERMISSION_REQUESTED_EVENT
     )) ?? null
     : null;
-  const launchRequestRows = snapshot.launchRequests.map((launchRequest) => buildLaunchRequestRow(
-    launchRequest,
-    now,
-    options.approvedLaunchCommands ?? {},
-  ));
+  const launchRequestRows = snapshot.launchRequests
+    .filter((launchRequest) => isVisibleLaunchRequestStatus(launchRequest.status))
+    .map((launchRequest) => buildLaunchRequestRow(
+      launchRequest,
+      now,
+      options.approvedLaunchCommands ?? {},
+    ));
   const handoffRows = snapshot.handoffs.map((handoff) => buildHandoffRow(handoff, now, roleLookup));
   const selectedHandoffModel = selectedHandoff
     ? buildSelectedHandoff(selectedHandoff, selectedPermissionEvent, now, options.dashboardSessionUid ?? null, roleLookup)
@@ -1592,7 +1594,7 @@ function buildLaunchRequestActions(
 
   if (launchRequest.status === 'approved') {
     return [
-      { action: 'mark_launching', label: 'Get command', disabled: false, reason: null, tone: 'primary' },
+      { action: 'mark_launching', label: 'Launch', disabled: false, reason: 'Open a PowerShell launch window for this approved request.', tone: 'primary' },
       { action: 'cancel', label: 'Cancel', disabled: false, reason: null, tone: 'warning' },
       { action: 'fail', label: 'Fail', disabled: false, reason: null, tone: 'danger' },
     ];
@@ -2444,6 +2446,10 @@ function isActiveLaunchRequestStatus(status: VaultCollabLaunchRequestSnapshot['s
   return status === 'approved'
     || status === 'launching'
     || status === 'running';
+}
+
+function isVisibleLaunchRequestStatus(status: VaultCollabLaunchRequestSnapshot['status']): boolean {
+  return status === 'requested' || isActiveLaunchRequestStatus(status);
 }
 
 function getConnectionClass(state: VaultCollabSessionSnapshot['connectionState']): string {

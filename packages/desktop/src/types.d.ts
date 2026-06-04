@@ -753,6 +753,10 @@ declare global {
       args: string[];
       display: string;
       launchCommand: VaultCollabLaunchCommand;
+      externalTerminalLaunched: boolean;
+      externalTerminalScriptPath: string | null;
+      externalTerminalShellPath: string | null;
+      statusDetail: string;
     }>>;
     getVaultCollabManagedTerminals: () => Promise<VaultResponse<VaultCollabManagedTerminalStatus[]>>;
     controlVaultCollabManagedTerminal: (input: {

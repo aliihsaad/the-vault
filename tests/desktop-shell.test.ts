@@ -239,6 +239,13 @@ describe('desktop shell navigation', () => {
     expect(collabModelSurface).toContain('launchRequests');
     expect(collabModelSurface).toContain('activeLaunchRequests');
     expect(collabViewModelSource).toContain('launch_request.');
+    expect(collabViewModelSource).toContain("label: 'Launch'");
+    expect(electronMainSource).toContain('openExternalVaultCollabTerminal');
+    expect(electronMainSource).toContain('getWindowsCommandShellPath');
+    expect(electronMainSource).toContain("'start'");
+    expect(electronMainSource).toContain('PowerShell launch window opened');
+    expect(electronMainSource).toContain("action: 'mark_launching'");
+    expect(electronMainSource).toContain('externalTerminalLaunched');
     expect(appCssSource).toContain('vault-collab-command-preview');
     expect(collabSource).not.toContain('approveLaunchRequest');
     expect(collabSource).not.toContain('rejectLaunchRequest');
@@ -313,6 +320,7 @@ describe('desktop shell navigation', () => {
     expect(requestAgentHandlerSource).toContain('project: request.project');
     expect(requestAgentHandlerSource).toContain('workspacePath: request.workspacePath');
     expect(requestAgentHandlerSource).toContain('getVaultCollabAgentRequestCommandPreview(request.provider, request.workspacePath)');
+    expect(electronMainSource).toContain('claude --add-dir "${workspacePath}" -- "[launch instructions]"');
     expect(requestAgentHandlerSource).not.toContain("project: 'the-vault'");
     expect(requestAgentHandlerSource).not.toContain("const workspacePath = resolve(__dirname, '../../..')");
   });

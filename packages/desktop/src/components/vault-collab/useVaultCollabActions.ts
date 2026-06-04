@@ -144,7 +144,7 @@ export function useVaultCollabActions({
     }
 
     if (action === 'mark_launching') {
-      await prepareLaunchCommand(launchRequestUid);
+      await startLaunchRequest(launchRequestUid);
       return;
     }
 
@@ -170,7 +170,17 @@ export function useVaultCollabActions({
         ...current,
         [launchRequestUid]: response.data!.launchCommand!.display,
       }));
-      setActionNotice('Launch command ready. Run it in a new terminal to start the agent.');
+
+      const launchResponse = await window.vaultAPI.startVaultCollabLaunchRequest(launchRequestUid);
+      if (!launchResponse.success || !launchResponse.data) {
+        throw new Error(launchResponse.error || 'Launch request approved, but The Vault could not start it.');
+      }
+
+      setApprovedLaunchCommands((current) => ({
+        ...current,
+        [launchRequestUid]: launchResponse.data!.display,
+      }));
+      setActionNotice(getLaunchRequestStartNotice(launchResponse.data));
       await loadDashboard(true);
     } catch (err) {
       setActionError(err instanceof Error ? err.message : 'Vault Collab launch approval failed');
@@ -179,7 +189,7 @@ export function useVaultCollabActions({
     }
   }
 
-  async function prepareLaunchCommand(launchRequestUid: string) {
+  async function startLaunchRequest(launchRequestUid: string) {
     setActionBusy(`${launchRequestUid}:mark_launching`);
     setActionError(null);
     setActionNotice(null);
@@ -193,13 +203,19 @@ export function useVaultCollabActions({
         ...current,
         [launchRequestUid]: response.data!.display,
       }));
-      setActionNotice('Launch command ready. Run it in a new terminal to start the agent.');
+      setActionNotice(getLaunchRequestStartNotice(response.data));
       await loadDashboard(true);
     } catch (err) {
-      setActionError(err instanceof Error ? err.message : 'The Vault launch request could not be prepared.');
+      setActionError(err instanceof Error ? err.message : 'The Vault launch request could not be started.');
     } finally {
       setActionBusy(null);
     }
+  }
+
+  function getLaunchRequestStartNotice(data: { externalTerminalLaunched?: boolean }) {
+    return data.externalTerminalLaunched
+      ? 'PowerShell launch window opened. The worker will register itself in Vault Collab.'
+      : 'Launch command ready. Run it in a new terminal to start the agent.';
   }
 
   async function runSessionCleanup() {

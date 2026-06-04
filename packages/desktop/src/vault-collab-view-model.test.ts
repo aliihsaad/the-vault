@@ -861,7 +861,9 @@ describe('Vault Collab dashboard view model', () => {
     });
 
     expect(model.statusItems).toContain('2 active launches');
-    expect(model.launchRequestRows).toHaveLength(5);
+    expect(model.launchRequestRows).toHaveLength(3);
+    expect(model.launchRequestRows.map((row) => row.uid)).not.toContain('vc_launch_stopped_1234567890');
+    expect(model.launchRequestRows.map((row) => row.uid)).not.toContain('vc_launch_failed_1234567890');
     expect(model.handoffRows).toHaveLength(0);
     expect(model.launchRequestRows[0]).toMatchObject({
       uid: 'vc_launch_0772c645-c3ef-4d4a-bf0c-7c0fa035cfe8',
@@ -887,6 +889,10 @@ describe('Vault Collab dashboard view model', () => {
       'cancel',
       'fail',
     ]);
+    expect(model.launchRequestRows[1].actions[0]).toMatchObject({
+      label: 'Launch',
+      reason: 'Open a PowerShell launch window for this approved request.',
+    });
     expect(model.launchRequestRows[0].approvedLaunchCommand).toBeNull();
     expect(model.launchRequestRows[1].approvedLaunchCommand).toBe('codex --no-alt-screen -C C:/workspace/the-vault "Launch after approval."');
     expect(model.launchRequestRows[2].actions.map((action) => action.action)).toEqual([
@@ -894,20 +900,6 @@ describe('Vault Collab dashboard view model', () => {
       'fail',
     ]);
     expect(model.launchRequestRows[2].actorLabel).toBe('handled by vc_sess_...');
-    expect(model.launchRequestRows[3]).toMatchObject({
-      statusLabel: 'stopped',
-      badgeClass: 'badge-task-complete',
-      railClass: 'queue-status-rail-completed',
-      attention: false,
-      detail: 'Managed Codex worker stopped from The Vault.',
-    });
-    expect(model.launchRequestRows[4]).toMatchObject({
-      statusLabel: 'failed',
-      badgeClass: 'badge-task-fail',
-      railClass: 'queue-status-rail-failed',
-      attention: false,
-      detail: 'Broker failed before launch.',
-    });
   });
 
   it('builds Needs You from launch approvals, blocked handoffs, and blocked agents', () => {

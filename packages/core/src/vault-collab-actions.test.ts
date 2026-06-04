@@ -80,6 +80,26 @@ describe('Vault Collab dashboard action invocation', () => {
     expect(JSON.stringify(launchCommand)).not.toContain('super-secret-token');
   });
 
+  it('separates Claude Code add-dir values from the initial prompt', () => {
+    const launchCommand = buildVaultCollabLaunchCommand(makeLaunchRequest({
+      provider: 'claude-code',
+      model: 'claude-code',
+      role: 'explorer',
+    }));
+
+    expect(launchCommand.provider).toBe('claude-code');
+    expect(launchCommand.command).toBe('claude');
+    expect(launchCommand.args.slice(0, 3)).toEqual([
+      '--add-dir',
+      'C:\\Users\\Mini\\Desktop\\Projects\\the-vault',
+      '--',
+    ]);
+    expect(launchCommand.args[3]).toContain('Launch request UID: vc_launch_123');
+    expect(launchCommand.args[3]).toContain('Role: explorer');
+    expect(launchCommand.display).toContain('claude --add-dir');
+    expect(launchCommand.display).toContain(' -- ');
+  });
+
   it('builds a generic launch command for unknown providers instead of throwing', () => {
     const launchCommand = buildVaultCollabLaunchCommand(makeLaunchRequest({
       provider: 'again-provider' as VaultCollabLaunchRequestSnapshot['provider'],
