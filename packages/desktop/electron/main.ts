@@ -3089,6 +3089,13 @@ app.whenReady().then(() => {
   const claudeSkillPath = resolve(skillsPath, 'claude-vault-skill.md');
   const codexAgentsPath = join(homedir(), '.codex', 'AGENTS.md');
   const codexSkillPath = resolve(skillsPath, 'codex-vault-skill.md');
+  // Vault Collab skills are separate, opt-in operating guides for the coordination
+  // layer. Claude Code loads them from ~/.claude/skills/vault-collab/SKILL.md;
+  // Codex reads them via a reference section appended to AGENTS.md.
+  const claudeUserCollabSkillDir = join(homedir(), '.claude', 'skills', 'vault-collab');
+  const claudeUserCollabSkillPath = join(claudeUserCollabSkillDir, 'SKILL.md');
+  const claudeCollabSkillPath = resolve(skillsPath, 'claude-vault-collab-skill.md');
+  const codexCollabSkillPath = resolve(skillsPath, 'codex-vault-collab-skill.md');
 
   async function fileExists(filePath: string): Promise<boolean> {
     try {
@@ -3516,12 +3523,16 @@ app.whenReady().then(() => {
       const claudeSkillInstalled = await fileExists(claudeUserSkillPath);
 
       let codexSkillInstalled = false;
+      let codexCollabSkillInstalled = false;
       try {
         const codexAgentsContent = await readFile(codexAgentsPath, 'utf8');
         codexSkillInstalled = codexAgentsContent.includes('codex-vault-skill') || codexAgentsContent.includes('Vault Memory Skill');
+        codexCollabSkillInstalled = codexAgentsContent.includes('codex-vault-collab-skill') || codexAgentsContent.includes('Vault Collab Skill');
       } catch {
         // File doesn't exist — not installed
       }
+
+      const claudeCollabSkillInstalled = await fileExists(claudeUserCollabSkillPath);
 
       const codexConfigContent = await readTextFileIfExists(codexConfigPath);
 
@@ -3548,6 +3559,12 @@ app.whenReady().then(() => {
             claudeSkillPath: claudeUserSkillPath,
             codexInstalled: codexSkillInstalled,
             codexAgentsPath,
+            collab: {
+              claudeInstalled: claudeCollabSkillInstalled,
+              claudeSkillPath: claudeUserCollabSkillPath,
+              codexInstalled: codexCollabSkillInstalled,
+              codexAgentsPath,
+            },
           },
           vaultCollab: {
             claudeDesktop: { configured: vaultCollabDesktopConfigured, configPath: claudeDesktopConfigPath },
@@ -3767,6 +3784,224 @@ app.whenReady().then(() => {
     }
   }
 
+  // Claude Code: install the Vault Collab skill at ~/.claude/skills/vault-collab/SKILL.md.
+  // Mirrors installClaudeSkill but for the separate coordination-layer skill.
+  async function installClaudeCollabSkill(): Promise<{ success: boolean; steps: ConnectStep[] }> {
+    const steps: ConnectStep[] = [];
+
+    if (!(await fileExists(claudeCollabSkillPath))) {
+      steps.push({ id: 'locate-skill', label: 'Locate bundled skill', status: 'fail', detail: `Not found: ${claudeCollabSkillPath}` });
+      steps.push({ id: 'prepare-dir', label: 'Prepare skill directory', status: 'skipped' });
+      steps.push({ id: 'write-skill', label: 'Write SKILL.md', status: 'skipped' });
+      steps.push({ id: 'verify', label: 'Verify installation', status: 'skipped' });
+      return { success: false, steps };
+    }
+    steps.push({ id: 'locate-skill', label: 'Locate bundled skill', status: 'success', detail: claudeCollabSkillPath });
+
+    let skillContent: string;
+    try {
+      skillContent = await readFile(claudeCollabSkillPath, 'utf8');
+    } catch (err: any) {
+      steps.push({ id: 'prepare-dir', label: 'Prepare skill directory', status: 'fail', detail: err.message });
+      steps.push({ id: 'write-skill', label: 'Write SKILL.md', status: 'skipped' });
+      steps.push({ id: 'verify', label: 'Verify installation', status: 'skipped' });
+      return { success: false, steps };
+    }
+
+    try {
+      await mkdir(claudeUserCollabSkillDir, { recursive: true });
+      steps.push({ id: 'prepare-dir', label: 'Prepare skill directory', status: 'success', detail: claudeUserCollabSkillDir });
+    } catch (err: any) {
+      steps.push({ id: 'prepare-dir', label: 'Prepare skill directory', status: 'fail', detail: err.message });
+      steps.push({ id: 'write-skill', label: 'Write SKILL.md', status: 'skipped' });
+      steps.push({ id: 'verify', label: 'Verify installation', status: 'skipped' });
+      return { success: false, steps };
+    }
+
+    // Back up an existing SKILL.md before overwriting so we don't blow away a customised skill.
+    if (await fileExists(claudeUserCollabSkillPath)) {
+      try {
+        const existing = await readFile(claudeUserCollabSkillPath, 'utf8');
+        if (existing.trim() === skillContent.trim()) {
+          steps.push({ id: 'write-skill', label: 'Write SKILL.md', status: 'skipped', detail: 'Already up-to-date' });
+          steps.push({ id: 'verify', label: 'Verify installation', status: 'success', detail: claudeUserCollabSkillPath });
+          return { success: true, steps };
+        }
+        await copyFile(claudeUserCollabSkillPath, `${claudeUserCollabSkillPath}.vault-backup-${Date.now()}`);
+      } catch {
+        // Best-effort backup; don't fail the install if the backup write fails.
+      }
+    }
+
+    try {
+      await writeFile(claudeUserCollabSkillPath, skillContent, 'utf8');
+      steps.push({ id: 'write-skill', label: 'Write SKILL.md', status: 'success', detail: claudeUserCollabSkillPath });
+    } catch (err: any) {
+      steps.push({ id: 'write-skill', label: 'Write SKILL.md', status: 'fail', detail: err.message });
+      steps.push({ id: 'verify', label: 'Verify installation', status: 'skipped' });
+      return { success: false, steps };
+    }
+
+    try {
+      const written = await readFile(claudeUserCollabSkillPath, 'utf8');
+      if (written.trim() === skillContent.trim()) {
+        steps.push({ id: 'verify', label: 'Verify installation', status: 'success', detail: 'SKILL.md confirmed on disk' });
+        return { success: true, steps };
+      }
+      steps.push({ id: 'verify', label: 'Verify installation', status: 'fail', detail: 'Content mismatch after write' });
+      return { success: false, steps };
+    } catch (err: any) {
+      steps.push({ id: 'verify', label: 'Verify installation', status: 'fail', detail: err.message });
+      return { success: false, steps };
+    }
+  }
+
+  // Codex: append a "## Vault Collab Skill" reference into ~/.codex/AGENTS.md.
+  async function installCodexCollabSkillReference(): Promise<{ success: boolean; steps: ConnectStep[] }> {
+    const steps: ConnectStep[] = [];
+    const skillPath = codexCollabSkillPath;
+    const instructionPath = codexAgentsPath;
+    const instructionLabel = 'AGENTS.md';
+    const referenceToken = 'codex-vault-collab-skill';
+    const skillSection = [
+      '',
+      '',
+      '## Vault Collab Skill',
+      '',
+      `Codex should use the Vault Collab skill at \`${codexCollabSkillPath}\` when joining the Vault Collab coordination layer.`,
+      'Use Vault Collab MCP tools only when the `vault-collab` server is attached, and read vault_collab_get_agent_guide as the authoritative live loop.',
+      'Keep the skill path stable so Codex setup prompts and future sessions can reference it directly.',
+      '',
+    ].join('\n');
+
+    if (!(await fileExists(skillPath))) {
+      steps.push({ id: 'locate-skill', label: 'Locate skill file', status: 'fail', detail: `Not found: ${skillPath}` });
+      steps.push({ id: 'read-instructions', label: `Read ${instructionLabel}`, status: 'skipped' });
+      steps.push({ id: 'check-existing', label: 'Check existing reference', status: 'skipped' });
+      steps.push({ id: 'append-reference', label: 'Add skill reference', status: 'skipped' });
+      steps.push({ id: 'verify', label: 'Verify installation', status: 'skipped' });
+      return { success: false, steps };
+    }
+    steps.push({ id: 'locate-skill', label: 'Locate skill file', status: 'success', detail: skillPath });
+
+    let instructionContent = '';
+    try {
+      instructionContent = await readFile(instructionPath, 'utf8');
+      steps.push({ id: 'read-instructions', label: `Read ${instructionLabel}`, status: 'success', detail: instructionPath });
+    } catch (err: any) {
+      if (err.code === 'ENOENT') {
+        steps.push({ id: 'read-instructions', label: `Read ${instructionLabel}`, status: 'success', detail: `Will create: ${instructionPath}` });
+      } else {
+        steps.push({ id: 'read-instructions', label: `Read ${instructionLabel}`, status: 'fail', detail: err.message });
+        steps.push({ id: 'check-existing', label: 'Check existing reference', status: 'skipped' });
+        steps.push({ id: 'append-reference', label: 'Add skill reference', status: 'skipped' });
+        steps.push({ id: 'verify', label: 'Verify installation', status: 'skipped' });
+        return { success: false, steps };
+      }
+    }
+
+    if (instructionContent.includes(referenceToken) || instructionContent.includes('## Vault Collab Skill')) {
+      steps.push({ id: 'check-existing', label: 'Check existing reference', status: 'success', detail: 'Skill reference already present' });
+      steps.push({ id: 'append-reference', label: 'Add skill reference', status: 'skipped', detail: 'No changes needed' });
+      steps.push({ id: 'verify', label: 'Verify installation', status: 'success', detail: `Already installed in ${instructionLabel}` });
+      return { success: true, steps };
+    }
+    steps.push({ id: 'check-existing', label: 'Check existing reference', status: 'success', detail: 'No existing reference found' });
+
+    try {
+      await mkdir(dirname(instructionPath), { recursive: true });
+      await writeFile(instructionPath, instructionContent + skillSection, 'utf8');
+      steps.push({ id: 'append-reference', label: 'Add skill reference', status: 'success', detail: `Appended Vault Collab Skill section to ${instructionLabel}` });
+    } catch (err: any) {
+      steps.push({ id: 'append-reference', label: 'Add skill reference', status: 'fail', detail: err.message });
+      steps.push({ id: 'verify', label: 'Verify installation', status: 'skipped' });
+      return { success: false, steps };
+    }
+
+    try {
+      const verifyContent = await readFile(instructionPath, 'utf8');
+      if (verifyContent.includes(referenceToken) || verifyContent.includes('## Vault Collab Skill')) {
+        steps.push({ id: 'verify', label: 'Verify installation', status: 'success', detail: `Skill reference confirmed in ${instructionLabel}` });
+        return { success: true, steps };
+      }
+
+      steps.push({ id: 'verify', label: 'Verify installation', status: 'fail', detail: 'Reference not found after write' });
+      return { success: false, steps };
+    } catch (err: any) {
+      steps.push({ id: 'verify', label: 'Verify installation', status: 'fail', detail: err.message });
+      return { success: false, steps };
+    }
+  }
+
+  // Remove the Vault Collab skill: delete Claude's SKILL.md or strip the Codex AGENTS.md section.
+  async function uninstallCollabSkill(
+    target: 'claude' | 'codex',
+  ): Promise<{ success: boolean; steps: ConnectStep[] }> {
+    const steps: ConnectStep[] = [];
+
+    if (target === 'claude') {
+      if (await fileExists(claudeUserCollabSkillPath)) {
+        try {
+          const { unlink } = await import('node:fs/promises');
+          await unlink(claudeUserCollabSkillPath);
+          steps.push({ id: 'remove-skill-file', label: 'Remove SKILL.md', status: 'success', detail: claudeUserCollabSkillPath });
+        } catch (err: any) {
+          steps.push({ id: 'remove-skill-file', label: 'Remove SKILL.md', status: 'fail', detail: err.message });
+          return { success: false, steps };
+        }
+      } else {
+        steps.push({ id: 'remove-skill-file', label: 'Remove SKILL.md', status: 'skipped', detail: 'No SKILL.md found' });
+      }
+      steps.push({ id: 'verify', label: 'Verify removal', status: 'success', detail: 'Vault Collab skill removed' });
+      return { success: true, steps };
+    }
+
+    const instructionPath = codexAgentsPath;
+    const instructionLabel = 'AGENTS.md';
+    let instructionContent = '';
+    try {
+      instructionContent = await readFile(instructionPath, 'utf8');
+      steps.push({ id: 'read-instructions', label: `Read ${instructionLabel}`, status: 'success', detail: instructionPath });
+    } catch (err: any) {
+      if (err.code === 'ENOENT') {
+        steps.push({ id: 'read-instructions', label: `Read ${instructionLabel}`, status: 'success', detail: 'File does not exist — nothing to remove' });
+        steps.push({ id: 'remove-reference', label: 'Remove skill section', status: 'skipped' });
+        steps.push({ id: 'verify', label: 'Verify removal', status: 'success', detail: 'Already uninstalled' });
+        return { success: true, steps };
+      }
+      steps.push({ id: 'read-instructions', label: `Read ${instructionLabel}`, status: 'fail', detail: err.message });
+      return { success: false, steps };
+    }
+
+    if (!instructionContent.includes('Vault Collab Skill')) {
+      steps.push({ id: 'remove-reference', label: 'Remove skill section', status: 'skipped', detail: 'No skill reference found — already uninstalled' });
+      steps.push({ id: 'verify', label: 'Verify removal', status: 'success', detail: 'Already uninstalled' });
+      return { success: true, steps };
+    }
+
+    try {
+      const cleaned = instructionContent.replace(/\n*## Vault Collab Skill\n[\s\S]*?(?=\n## |\s*$)/, '');
+      await writeFile(instructionPath, cleaned.trimEnd() + '\n', 'utf8');
+      steps.push({ id: 'remove-reference', label: 'Remove skill section', status: 'success', detail: `Vault Collab Skill section removed from ${instructionLabel}` });
+    } catch (err: any) {
+      steps.push({ id: 'remove-reference', label: 'Remove skill section', status: 'fail', detail: err.message });
+      return { success: false, steps };
+    }
+
+    try {
+      const verifyContent = await readFile(instructionPath, 'utf8');
+      if (!verifyContent.includes('Vault Collab Skill')) {
+        steps.push({ id: 'verify', label: 'Verify removal', status: 'success', detail: 'Skill reference confirmed removed' });
+        return { success: true, steps };
+      }
+      steps.push({ id: 'verify', label: 'Verify removal', status: 'fail', detail: 'Reference still present after write' });
+      return { success: false, steps };
+    } catch (err: any) {
+      steps.push({ id: 'verify', label: 'Verify removal', status: 'fail', detail: err.message });
+      return { success: false, steps };
+    }
+  }
+
   async function installVaultCollabCommandFiles(): Promise<ConnectStep[]> {
     const steps: ConnectStep[] = [];
     const content = buildVaultCollabCommandContent();
@@ -3931,10 +4166,22 @@ app.whenReady().then(() => {
 
   ipcMain.handle('vault:installSkillFile', async (_, target) => {
     try {
-      const normalizedTarget = target === 'codex' ? 'codex' : 'claude';
-      const data = normalizedTarget === 'codex'
-        ? await installCodexSkillReference()
-        : await installClaudeSkill();
+      let data;
+      switch (target) {
+        case 'codex':
+          data = await installCodexSkillReference();
+          break;
+        case 'claude-collab':
+          data = await installClaudeCollabSkill();
+          break;
+        case 'codex-collab':
+          data = await installCodexCollabSkillReference();
+          break;
+        case 'claude':
+        default:
+          data = await installClaudeSkill();
+          break;
+      }
       return { success: true, data };
     } catch (e: any) {
       return { success: false, error: e.message };
@@ -4310,8 +4557,23 @@ app.whenReady().then(() => {
 
   ipcMain.handle('vault:uninstallSkillFile', async (_, target) => {
     try {
-      const normalizedTarget = target === 'codex' ? 'codex' : 'claude';
-      return { success: true, data: await uninstallSkillReference(normalizedTarget) };
+      let data;
+      switch (target) {
+        case 'codex':
+          data = await uninstallSkillReference('codex');
+          break;
+        case 'claude-collab':
+          data = await uninstallCollabSkill('claude');
+          break;
+        case 'codex-collab':
+          data = await uninstallCollabSkill('codex');
+          break;
+        case 'claude':
+        default:
+          data = await uninstallSkillReference('claude');
+          break;
+      }
+      return { success: true, data };
     } catch (e: any) {
       return { success: false, error: e.message };
     }

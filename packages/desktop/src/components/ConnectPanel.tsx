@@ -118,6 +118,8 @@ export function ConnectPanel({ copyText, copiedToken }: ConnectPanelProps) {
   const [collabResult, setCollabResult] = useState<ConnectResult | null>(null);
   const [claudeSkillResult, setClaudeSkillResult] = useState<ConnectResult | null>(null);
   const [codexSkillResult, setCodexSkillResult] = useState<ConnectResult | null>(null);
+  const [claudeCollabSkillResult, setClaudeCollabSkillResult] = useState<ConnectResult | null>(null);
+  const [codexCollabSkillResult, setCodexCollabSkillResult] = useState<ConnectResult | null>(null);
   const [connectingDesktop, setConnectingDesktop] = useState(false);
   const [connectingCode, setConnectingCode] = useState(false);
   const [connectingCodex, setConnectingCodex] = useState(false);
@@ -125,6 +127,8 @@ export function ConnectPanel({ copyText, copiedToken }: ConnectPanelProps) {
   const [connectingCollab, setConnectingCollab] = useState(false);
   const [installingClaudeSkill, setInstallingClaudeSkill] = useState(false);
   const [installingCodexSkill, setInstallingCodexSkill] = useState(false);
+  const [installingClaudeCollabSkill, setInstallingClaudeCollabSkill] = useState(false);
+  const [installingCodexCollabSkill, setInstallingCodexCollabSkill] = useState(false);
   const [manualOpen, setManualOpen] = useState(false);
   const [troubleshootingOpen, setTroubleshootingOpen] = useState(false);
 
@@ -133,6 +137,8 @@ export function ConnectPanel({ copyText, copiedToken }: ConnectPanelProps) {
   const codexConnected = connectionStatus?.codex.configured ?? false;
   const claudeSkillInstalled = connectionStatus?.skill.claudeInstalled ?? false;
   const codexSkillInstalled = connectionStatus?.skill.codexInstalled ?? false;
+  const claudeCollabSkillInstalled = connectionStatus?.skill.collab?.claudeInstalled ?? false;
+  const codexCollabSkillInstalled = connectionStatus?.skill.collab?.codexInstalled ?? false;
   const collabDesktopConnected = connectionStatus?.vaultCollab?.claudeDesktop.configured ?? false;
   const collabCodeConnected = connectionStatus?.vaultCollab?.claudeCode.configured ?? false;
   const collabCodexConnected = connectionStatus?.vaultCollab?.codex.configured ?? false;
@@ -161,11 +167,13 @@ export function ConnectPanel({ copyText, copiedToken }: ConnectPanelProps) {
       (codexResult && !codexResult.success) ||
       (collabResult && !collabResult.success) ||
       (claudeSkillResult && !claudeSkillResult.success) ||
-      (codexSkillResult && !codexSkillResult.success);
+      (codexSkillResult && !codexSkillResult.success) ||
+      (claudeCollabSkillResult && !claudeCollabSkillResult.success) ||
+      (codexCollabSkillResult && !codexCollabSkillResult.success);
     if (anyFailed) {
       setManualOpen(true);
     }
-  }, [desktopResult, codeResult, codexResult, collabResult, claudeSkillResult, codexSkillResult]);
+  }, [desktopResult, codeResult, codexResult, collabResult, claudeSkillResult, codexSkillResult, claudeCollabSkillResult, codexCollabSkillResult]);
 
   async function refreshStatus() {
     setLoadingStatus(true);
@@ -344,6 +352,46 @@ export function ConnectPanel({ copyText, copiedToken }: ConnectPanelProps) {
     }
   }
 
+  async function handleToggleClaudeCollabSkill() {
+    setInstallingClaudeCollabSkill(true);
+    setClaudeCollabSkillResult(null);
+    try {
+      const response = claudeCollabSkillInstalled
+        ? await window.vaultAPI.uninstallSkillFile('claude-collab')
+        : await window.vaultAPI.installSkillFile('claude-collab');
+      if (response.success && response.data) {
+        setClaudeCollabSkillResult(response.data);
+      } else {
+        setClaudeCollabSkillResult({ success: false, steps: [{ id: 'error', label: 'Operation failed', status: 'fail', detail: response.error }] });
+      }
+      await refreshStatus();
+    } catch (err) {
+      setClaudeCollabSkillResult({ success: false, steps: [{ id: 'error', label: 'Operation failed', status: 'fail', detail: err instanceof Error ? err.message : 'Unknown error' }] });
+    } finally {
+      setInstallingClaudeCollabSkill(false);
+    }
+  }
+
+  async function handleToggleCodexCollabSkill() {
+    setInstallingCodexCollabSkill(true);
+    setCodexCollabSkillResult(null);
+    try {
+      const response = codexCollabSkillInstalled
+        ? await window.vaultAPI.uninstallSkillFile('codex-collab')
+        : await window.vaultAPI.installSkillFile('codex-collab');
+      if (response.success && response.data) {
+        setCodexCollabSkillResult(response.data);
+      } else {
+        setCodexCollabSkillResult({ success: false, steps: [{ id: 'error', label: 'Operation failed', status: 'fail', detail: response.error }] });
+      }
+      await refreshStatus();
+    } catch (err) {
+      setCodexCollabSkillResult({ success: false, steps: [{ id: 'error', label: 'Operation failed', status: 'fail', detail: err instanceof Error ? err.message : 'Unknown error' }] });
+    } finally {
+      setInstallingCodexCollabSkill(false);
+    }
+  }
+
   function badgeClass(configured: boolean | undefined): string {
     if (configured === undefined) return 'connect-badge connect-badge-unknown';
     return configured ? 'connect-badge connect-badge-ok' : 'connect-badge connect-badge-fail';
@@ -480,6 +528,14 @@ export function ConnectPanel({ copyText, copiedToken }: ConnectPanelProps) {
             <span className={badgeClass(connectionStatus?.skill.codexInstalled)}>
               <span className="connect-badge-dot" />
               {badgeLabel(connectionStatus?.skill.codexInstalled, 'Codex skill')}
+            </span>
+            <span className={badgeClass(connectionStatus?.skill.collab?.claudeInstalled)}>
+              <span className="connect-badge-dot" />
+              {badgeLabel(connectionStatus?.skill.collab?.claudeInstalled, 'Claude Collab skill')}
+            </span>
+            <span className={badgeClass(connectionStatus?.skill.collab?.codexInstalled)}>
+              <span className="connect-badge-dot" />
+              {badgeLabel(connectionStatus?.skill.collab?.codexInstalled, 'Codex Collab skill')}
             </span>
             <span className={badgeClass(connectionStatus ? allCollabClientsConnected : undefined)}>
               <span className="connect-badge-dot" />
@@ -886,6 +942,80 @@ export function ConnectPanel({ copyText, copiedToken }: ConnectPanelProps) {
             ) : null}
             {codexSkillResult?.success && !codexSkillInstalled ? (
               <p className="success-text" style={{ marginTop: 8 }}>Skill reference removed from AGENTS.md.</p>
+            ) : null}
+          </div>
+
+          {/* Claude Collab Skill Installation — optional, only needed when Vault Collab MCP is attached */}
+          <div className="snippet-card connect-action-card">
+            <div className="snippet-head">
+              <div>
+                <div className="field-label">{claudeCollabSkillInstalled ? 'Claude Collab skill installed' : 'Install Claude Collab skill'}</div>
+                <div className="field-help">
+                  <span>{claudeCollabSkillInstalled ? 'Vault Collab skill is installed at' : 'Writes Vault Collab SKILL.md to'}</span>
+                  <code className="connect-config-path">{connectionStatus?.skill.collab?.claudeSkillPath || '~/.claude/skills/vault-collab/SKILL.md'}</code>
+                </div>
+              </div>
+              <button
+                type="button"
+                className={claudeCollabSkillInstalled ? 'header-button danger-button' : 'primary-button'}
+                onClick={() => void handleToggleClaudeCollabSkill()}
+                disabled={installingClaudeCollabSkill}
+              >
+                {claudeCollabSkillInstalled ? <Trash2 size={16} /> : <BookCopy size={16} />}
+                <span>
+                  {installingClaudeCollabSkill
+                    ? (claudeCollabSkillInstalled ? 'Removing...' : 'Installing...')
+                    : (claudeCollabSkillInstalled ? 'Remove guide' : 'Install guide')}
+                </span>
+              </button>
+            </div>
+            <p className="field-help" style={{ marginTop: 4 }}>Optional — install only when the Vault Collab MCP server is attached.</p>
+            {claudeCollabSkillResult ? <StepList steps={claudeCollabSkillResult.steps} /> : null}
+            {claudeCollabSkillResult && !claudeCollabSkillResult.success ? (
+              <p className="error-text" style={{ marginTop: 8 }}>Operation failed. See steps above.</p>
+            ) : null}
+            {claudeCollabSkillResult?.success && claudeCollabSkillInstalled ? (
+              <p className="success-text" style={{ marginTop: 8 }}>Collab SKILL.md installed for Claude Code.</p>
+            ) : null}
+            {claudeCollabSkillResult?.success && !claudeCollabSkillInstalled ? (
+              <p className="success-text" style={{ marginTop: 8 }}>Claude Code Collab skill removed.</p>
+            ) : null}
+          </div>
+
+          {/* Codex Collab Skill Installation */}
+          <div className="snippet-card connect-action-card">
+            <div className="snippet-head">
+              <div>
+                <div className="field-label">{codexCollabSkillInstalled ? 'Codex Collab skill installed' : 'Install Codex Collab skill'}</div>
+                <div className="field-help">
+                  <span>{codexCollabSkillInstalled ? 'Vault Collab skill reference is in' : 'Appends a Vault Collab skill reference to'}</span>
+                  <code className="connect-config-path">{connectionStatus?.skill.collab?.codexAgentsPath || 'AGENTS.md'}</code>
+                </div>
+              </div>
+              <button
+                type="button"
+                className={codexCollabSkillInstalled ? 'header-button danger-button' : 'primary-button'}
+                onClick={() => void handleToggleCodexCollabSkill()}
+                disabled={installingCodexCollabSkill}
+              >
+                {codexCollabSkillInstalled ? <Trash2 size={16} /> : <BookCopy size={16} />}
+                <span>
+                  {installingCodexCollabSkill
+                    ? (codexCollabSkillInstalled ? 'Removing...' : 'Installing...')
+                    : (codexCollabSkillInstalled ? 'Remove guide' : 'Install guide')}
+                </span>
+              </button>
+            </div>
+            <p className="field-help" style={{ marginTop: 4 }}>Optional — install only when the Vault Collab MCP server is attached.</p>
+            {codexCollabSkillResult ? <StepList steps={codexCollabSkillResult.steps} /> : null}
+            {codexCollabSkillResult && !codexCollabSkillResult.success ? (
+              <p className="error-text" style={{ marginTop: 8 }}>Operation failed. See steps above.</p>
+            ) : null}
+            {codexCollabSkillResult?.success && codexCollabSkillInstalled ? (
+              <p className="success-text" style={{ marginTop: 8 }}>Collab skill reference added to AGENTS.md.</p>
+            ) : null}
+            {codexCollabSkillResult?.success && !codexCollabSkillInstalled ? (
+              <p className="success-text" style={{ marginTop: 8 }}>Collab skill reference removed from AGENTS.md.</p>
             ) : null}
           </div>
         </div>

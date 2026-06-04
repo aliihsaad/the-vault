@@ -568,6 +568,12 @@ declare global {
       claudeSkillPath: string;
       codexInstalled: boolean;
       codexAgentsPath: string;
+      collab: {
+        claudeInstalled: boolean;
+        claudeSkillPath: string;
+        codexInstalled: boolean;
+        codexAgentsPath: string;
+      };
     };
     vaultCollab: {
       claudeDesktop: { configured: boolean; configPath: string };
