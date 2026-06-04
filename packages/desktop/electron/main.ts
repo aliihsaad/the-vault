@@ -2575,6 +2575,13 @@ app.whenReady().then(() => {
         status: 'SessionStatus',
         detail: 'string | null',
       }),
+      createVaultCollabEventTypeSnapshot('session.cleanup', 'session', 'Inactive session records were removed from the roster.', {
+        actorSessionUid: 'vc_sess_*',
+        statuses: 'SessionStatus[]',
+        deletedSessionCount: 'number',
+        deletedCursorCount: 'number',
+        deletedDeliveryAttemptCount: 'number',
+      }),
       createVaultCollabEventTypeSnapshot('session.pinged', 'session', 'A passive soft ping targets a session.', {
         actorSessionUid: 'vc_sess_* | null',
         message: 'string | null',

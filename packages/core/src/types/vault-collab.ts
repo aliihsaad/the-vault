@@ -419,7 +419,7 @@ export type VaultCollabDashboardLaunchAction =
   | 'stop'
   | 'fail';
 
-export type VaultCollabDashboardSessionAction = 'rename' | 'close' | 'ping';
+export type VaultCollabDashboardSessionAction = 'rename' | 'close' | 'cleanup' | 'ping';
 
 export interface VaultCollabPolicyPackActionInput {
   uid?: string;
@@ -480,6 +480,10 @@ export type VaultCollabDashboardActionInput =
       action: 'close';
       targetSessionUid: string;
       reason?: string;
+    }
+  | {
+      kind: 'session';
+      action: 'cleanup';
     }
   | {
       kind: 'session';

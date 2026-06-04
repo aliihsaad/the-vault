@@ -233,16 +233,19 @@ describe('SessionHudCard', () => {
   it('shows the inactive session toggle in the roster zone header', () => {
     const html = render(React.createElement(Roster, {
       groups: [],
+      actionBusy: null,
       selectedRoleProfile: null,
       selectedRoleProfileId: null,
       showInactiveSessions: false,
       onShowInactiveSessionsChange: () => undefined,
       onSelectRoleProfile: () => undefined,
       onCloseRoleProfile: () => undefined,
+      onCleanupSessions: () => undefined,
       onSelectHandoff: () => undefined,
     }));
 
     expect(html).toContain('Show inactive');
+    expect(html).toContain('Clear inactive');
     expect(html).toContain('type="checkbox"');
   });
 

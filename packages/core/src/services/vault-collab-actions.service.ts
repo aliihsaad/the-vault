@@ -507,6 +507,16 @@ function buildSessionActionArgs(
         actor.sessionToken,
         ...(input.reason ? ['--reason', input.reason] : []),
       ];
+    case 'cleanup':
+      return [
+        'session-cleanup',
+        '--db',
+        databasePath,
+        '--actor-session-uid',
+        actor.sessionUid,
+        ACTOR_TOKEN_OPTION,
+        actor.sessionToken,
+      ];
     case 'ping':
       return [
         'ping-session',

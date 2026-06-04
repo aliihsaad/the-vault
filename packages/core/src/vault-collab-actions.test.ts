@@ -397,6 +397,25 @@ describe('Vault Collab dashboard action invocation', () => {
     expect(JSON.stringify(redactedClose)).not.toContain('dashboard-secret-token');
     expect(redactedClose.args).toContain('[redacted]');
 
+    const cleanupInvocation = buildVaultCollabActionInvocation(config, actor, {
+      kind: 'session',
+      action: 'cleanup',
+    });
+
+    expect(cleanupInvocation.args).toEqual(expect.arrayContaining([
+      'session-cleanup',
+      '--db',
+      config.databasePath,
+      '--actor-session-uid',
+      'vc_sess_dashboard',
+      '--actor-session-token',
+      'dashboard-secret-token',
+    ]));
+
+    const redactedCleanup = redactVaultCollabActionInvocation(cleanupInvocation);
+    expect(JSON.stringify(redactedCleanup)).not.toContain('dashboard-secret-token');
+    expect(redactedCleanup.args).toContain('[redacted]');
+
     const renameInvocation = buildVaultCollabActionInvocation(config, actor, {
       kind: 'session',
       action: 'rename',

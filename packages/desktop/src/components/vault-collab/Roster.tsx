@@ -1,4 +1,4 @@
-import { Eye, Route, Users } from 'lucide-react';
+import { Eye, Route, Trash2, Users } from 'lucide-react';
 
 import type {
   VaultCollabRosterAgent,
@@ -13,22 +13,26 @@ import { SessionHudCard } from './SessionHudCard.js';
 
 interface RosterProps {
   groups: VaultCollabRoleGroup[];
+  actionBusy: string | null;
   selectedRoleProfile: VaultCollabSelectedRoleProfile | null;
   selectedRoleProfileId: string | null;
   showInactiveSessions: boolean;
   onSelectRoleProfile: (roleProfileId: string) => void;
   onCloseRoleProfile: () => void;
+  onCleanupSessions: () => void;
   onShowInactiveSessionsChange: (showInactiveSessions: boolean) => void;
   onSelectHandoff: (handoffUid: string) => void;
 }
 
 export function Roster({
   groups,
+  actionBusy,
   selectedRoleProfile,
   selectedRoleProfileId,
   showInactiveSessions,
   onSelectRoleProfile,
   onCloseRoleProfile,
+  onCleanupSessions,
   onShowInactiveSessionsChange,
   onSelectHandoff,
 }: RosterProps) {
@@ -53,6 +57,17 @@ export function Roster({
             />
             <span>Show inactive</span>
           </label>
+          <button
+            type="button"
+            className="header-button vault-collab-cleanup-button"
+            onClick={onCleanupSessions}
+            disabled={Boolean(actionBusy)}
+            title="Clear inactive session history"
+            aria-label="Clear inactive session history"
+          >
+            <Trash2 size={15} />
+            <span>{actionBusy === 'session-cleanup' ? 'Clearing' : 'Clear inactive'}</span>
+          </button>
           <Users size={18} />
         </div>
       </div>

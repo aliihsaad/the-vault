@@ -202,6 +202,31 @@ export function useVaultCollabActions({
     }
   }
 
+  async function runSessionCleanup() {
+    const confirmed = window.confirm(
+      'Clear inactive session history from the roster? Complete and disconnected sessions will be removed.'
+    );
+    if (!confirmed) {
+      return;
+    }
+
+    const result = await performDashboardAction({
+      kind: 'session',
+      action: 'cleanup',
+    }, 'session-cleanup');
+    if (!result) {
+      return;
+    }
+
+    const deletedSessionCount = result && typeof result === 'object'
+      ? (result as { deletedSessionCount?: unknown }).deletedSessionCount
+      : null;
+    const count = typeof deletedSessionCount === 'number' ? deletedSessionCount : 0;
+    setActionNotice(count === 0
+      ? 'No inactive sessions to clear.'
+      : `Cleared ${count} inactive session${count === 1 ? '' : 's'}.`);
+  }
+
   async function runDiscussionAction() {
     const body = discussionDraft.trim();
     if (!selectedHandoff || !body) {
@@ -277,5 +302,6 @@ export function useVaultCollabActions({
     runDiscussionAction,
     runHandoffAction,
     runLaunchAction,
+    runSessionCleanup,
   };
 }

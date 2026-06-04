@@ -2842,6 +2842,14 @@ select.text-input optgroup {
   gap: 10px;
 }
 
+.vault-collab-zone-header-actions .header-button {
+  min-height: 30px;
+  padding: 6px 9px;
+  border-radius: 8px;
+  font-size: 0.72rem;
+  white-space: nowrap;
+}
+
 .vault-collab-show-inactive-toggle {
   display: inline-flex;
   align-items: center;

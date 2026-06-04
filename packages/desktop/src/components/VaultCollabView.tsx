@@ -372,11 +372,13 @@ export function VaultCollabView({ vaultStatus }: VaultCollabViewProps) {
               {activeCockpitTab === 'agents' ? (
                 <Roster
                   groups={model.cockpit.officeGroups}
+                  actionBusy={actions.actionBusy}
                   selectedRoleProfile={roleProfileDetailOpen ? model.cockpit.selectedRoleProfile : null}
                   selectedRoleProfileId={activeRoleProfileId}
                   showInactiveSessions={showInactiveSessions}
                   onSelectRoleProfile={openRoleProfileDetail}
                   onCloseRoleProfile={closeRoleProfileDetail}
+                  onCleanupSessions={() => void actions.runSessionCleanup()}
                   onShowInactiveSessionsChange={setShowInactiveSessions}
                   onSelectHandoff={openHandoffDetail}
                 />
