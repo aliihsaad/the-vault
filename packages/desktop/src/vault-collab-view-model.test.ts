@@ -1510,41 +1510,34 @@ describe('Vault Collab dashboard view model', () => {
     ]);
   });
 
-  it('excludes dashboard-admin sessions from the cockpit roster', () => {
+  it('shows coordinator admin sessions while excluding dashboard action brokers from the cockpit roster', () => {
     const model = buildVaultCollabDashboardViewModel(snapshot({
+      roleProfiles: [
+        roleProfile({ roleProfileId: 'coordinator', displayName: 'Coordinator' }),
+      ],
       sessions: [
         session({
-          sessionUid: 'vc_sess_worker_1234567890',
-          displayName: 'Implementation worker',
-          agentRole: 'implementer',
-          effectiveStatus: 'working',
-        }),
-        session({
-          sessionUid: 'vc_sess_admin_1234567890',
-          displayName: 'The Vault dashboard',
+          sessionUid: 'vc_sess_coordinator_1234567890',
+          displayName: 'Codex Coordinator',
           capabilities: { sessionAdmin: true },
-          agentRole: 'admin',
+          role: 'coordinator',
+          roleProfileId: 'coordinator',
         }),
         session({
           sessionUid: 'vc_sess_actions_1234567890',
-          displayName: 'Dashboard action broker',
-          capabilities: { dashboardActions: true },
+          displayName: 'The Vault dashboard',
+          capabilities: { dashboardActions: true, sessionAdmin: true },
           agentRole: 'broker',
         }),
       ],
     }), now);
 
-    expect(model.cockpit.roster).toEqual([
+    expect(model.cockpit.roster.flatMap((office) => office.agents)).toEqual([
       expect.objectContaining({
-        role: 'implementer',
-        roleDisplayName: 'Implementer',
-        agents: [
-          expect.objectContaining({
-            sessionUid: 'vc_sess_worker_1234567890',
-            displayName: 'Implementation worker',
-            status: 'working',
-          }),
-        ],
+        sessionUid: 'vc_sess_coordinator_1234567890',
+        displayName: 'Codex Coordinator',
+        roleProfileId: 'coordinator',
+        roleDisplayName: 'Coordinator',
       }),
     ]);
   });

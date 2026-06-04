@@ -1476,8 +1476,7 @@ function isLiveRosterSession(session: VaultCollabSessionSnapshot): boolean {
 }
 
 function isRosterVisibleSession(session: VaultCollabSessionSnapshot, showInactiveSessions = false): boolean {
-  if (hasEnabledCapability(session.capabilities.sessionAdmin)
-    || hasEnabledCapability(session.capabilities.dashboardActions)) {
+  if (hasEnabledCapability(session.capabilities.dashboardActions)) {
     return false;
   }
 
