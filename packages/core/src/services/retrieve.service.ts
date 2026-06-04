@@ -3,10 +3,17 @@
 // Find, filter, recall, and get memory items.
 // ============================================================================
 
-import { eq, and, like, desc, gte, lte, sql, or, inArray } from 'drizzle-orm';
+import { eq, and, like, desc, asc, gte, lte, sql, or, inArray } from 'drizzle-orm';
 import { existsSync, unlinkSync } from 'node:fs';
 import { memoryItems } from '../database/schema.js';
-import { FindMemoryQuerySchema, RecallQuerySchema, ResolveLoopInputSchema } from '../rules/validation.js';
+import {
+  CountOpenLoopsInputSchema,
+  FindMemoryQuerySchema,
+  ListOpenLoopsInputSchema,
+  RecallQuerySchema,
+  ResolveLoopBatchInputSchema,
+  ResolveLoopInputSchema,
+} from '../rules/validation.js';
 import { rankCandidates } from './ranking.service.js';
 import {
   readMemoryFile,
@@ -32,6 +39,13 @@ import type {
   OpenLoop,
   OpenLoopBucket,
   ResolveLoopInput,
+  ListOpenLoopsInput,
+  ListOpenLoopsResult,
+  OpenLoopListItem,
+  CountOpenLoopsInput,
+  CountOpenLoopsResult,
+  ResolveLoopBatchResult,
+  ResolveLoopBatchInput,
 } from '../types/index.js';
 import {
   OPEN_LOOP_PRIORITY_WEIGHT,
@@ -768,6 +782,163 @@ export function confirmMemoryDelete(
 // ---------------------------------------------------------------------------
 const DAY_MS = 24 * 60 * 60 * 1000;
 
+export function parseNextStepsForOpenLoop(raw: string | null): string[] {
+  const value = raw?.trim();
+  if (!value || value === '[]') return [];
+
+  try {
+    const parsed = JSON.parse(value);
+    if (Array.isArray(parsed)) {
+      return parsed
+        .filter((step): step is string => typeof step === 'string')
+        .map((step) => step.trim())
+        .filter(Boolean);
+    }
+    if (typeof parsed === 'string' && parsed.trim()) return [parsed.trim()];
+    return [];
+  } catch {
+    return [value].filter(Boolean);
+  }
+}
+
+function parseStringArray(raw: string | null): string[] {
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed
+      .filter((value): value is string => typeof value === 'string')
+      .map((value) => value.trim())
+      .filter(Boolean);
+  } catch {
+    return [];
+  }
+}
+
+function getExplicitOpenLoopRows(
+  db: DB,
+  filters: {
+    project?: string;
+    priority?: string;
+    createdFrom?: string;
+    createdTo?: string;
+  },
+): Array<typeof memoryItems.$inferSelect> {
+  const conditions = [
+    eq(memoryItems.status, 'active'),
+    sql`${memoryItems.nextStepsJson} IS NOT NULL`,
+    sql`TRIM(${memoryItems.nextStepsJson}) NOT IN ('', '[]')`,
+  ];
+
+  if (filters.project) {
+    conditions.push(eq(memoryItems.project, filters.project));
+  }
+  if (filters.priority) {
+    conditions.push(eq(memoryItems.priority, filters.priority));
+  }
+  if (filters.createdFrom) {
+    conditions.push(gte(memoryItems.createdAt, filters.createdFrom));
+  }
+  if (filters.createdTo) {
+    conditions.push(lte(memoryItems.createdAt, filters.createdTo));
+  }
+
+  return db
+    .select()
+    .from(memoryItems)
+    .where(and(...conditions))
+    .orderBy(asc(memoryItems.updatedAt), asc(memoryItems.id))
+    .all();
+}
+
+function toOpenLoopListItem(row: typeof memoryItems.$inferSelect): OpenLoopListItem | null {
+  const nextSteps = parseNextStepsForOpenLoop(row.nextStepsJson);
+  if (nextSteps.length === 0) {
+    return null;
+  }
+
+  return {
+    itemUid: row.itemUid,
+    title: row.title,
+    project: row.project,
+    memoryType: row.memoryType as OpenLoopListItem['memoryType'],
+    subject: row.subject,
+    priority: row.priority as OpenLoopListItem['priority'],
+    tags: parseStringArray(row.tagsJson),
+    nextSteps,
+    lastAccessedAt: row.lastAccessedAt,
+    createdAt: row.createdAt,
+    updatedAt: row.updatedAt,
+  };
+}
+
+function hasAllTags(item: OpenLoopListItem, requestedTags: string[]): boolean {
+  if (requestedTags.length === 0) {
+    return true;
+  }
+
+  const itemTags = new Set(item.tags.map((tag) => tag.toLowerCase()));
+  return requestedTags.every((tag) => itemTags.has(tag.toLowerCase()));
+}
+
+function getExplicitOpenLoopItems(
+  db: DB,
+  filters: {
+    project?: string;
+    tags?: string[];
+    priority?: string;
+    createdFrom?: string;
+    createdTo?: string;
+  },
+): OpenLoopListItem[] {
+  const requestedTags = filters.tags ?? [];
+  return getExplicitOpenLoopRows(db, filters)
+    .map(toOpenLoopListItem)
+    .filter((item): item is OpenLoopListItem => Boolean(item))
+    .filter((item) => hasAllTags(item, requestedTags));
+}
+
+export function listOpenLoops(
+  db: DB,
+  input: ListOpenLoopsInput = {},
+): ListOpenLoopsResult {
+  const validated = ListOpenLoopsInputSchema.parse(input);
+  const items = getExplicitOpenLoopItems(db, validated);
+  const page = items.slice(validated.offset, validated.offset + validated.limit);
+
+  return {
+    total: items.length,
+    limit: validated.limit,
+    offset: validated.offset,
+    hasMore: validated.offset + validated.limit < items.length,
+    generatedAt: now(),
+    items: page,
+  };
+}
+
+export function countOpenLoops(
+  db: DB,
+  input: CountOpenLoopsInput = {},
+): CountOpenLoopsResult {
+  const validated = CountOpenLoopsInputSchema.parse(input);
+  const items = getExplicitOpenLoopItems(db, validated);
+  const result: CountOpenLoopsResult = {
+    total: items.length,
+    generatedAt: now(),
+  };
+
+  if (validated.byProject) {
+    result.byProject = {};
+    const projects = [...new Set(items.map((item) => item.project))]
+      .sort((left, right) => left.toLowerCase().localeCompare(right.toLowerCase()));
+    for (const project of projects) {
+      result.byProject[project] = items.filter((item) => item.project === project).length;
+    }
+  }
+
+  return result;
+}
+
 function bucketForScore(score: number): OpenLoopBucket {
   if (score >= OPEN_LOOP_BUCKET_HIGH_THRESHOLD) return 'high';
   if (score >= OPEN_LOOP_BUCKET_MEDIUM_THRESHOLD) return 'medium';
@@ -908,6 +1079,88 @@ export function resolveLoop(
   const updatedItem = mapRow(updated);
   persistMemoryFile(updatedItem);
   return updatedItem;
+}
+
+export function resolveLoopBatch(
+  db: DB,
+  logsPath: string,
+  input: ResolveLoopBatchInput,
+): ResolveLoopBatchResult & { resolvedItems: MemoryItem[] } {
+  const validated = ResolveLoopBatchInputSchema.parse(input);
+  const seen = new Set<string>();
+  const resolved: string[] = [];
+  const resolvedItems: MemoryItem[] = [];
+  const failed: ResolveLoopBatchResult['failed'] = [];
+
+  for (const item of validated.items) {
+    if (seen.has(item.itemUid)) {
+      failed.push({
+        itemUid: item.itemUid,
+        reason: 'duplicate_item_uid',
+        message: 'Duplicate item_uid in batch request.',
+      });
+      continue;
+    }
+    seen.add(item.itemUid);
+
+    const row = db
+      .select()
+      .from(memoryItems)
+      .where(eq(memoryItems.itemUid, item.itemUid))
+      .get();
+
+    if (!row) {
+      failed.push({
+        itemUid: item.itemUid,
+        reason: 'not_found',
+        message: 'Memory item not found.',
+      });
+      continue;
+    }
+
+    if (row.status !== 'active' || parseNextStepsForOpenLoop(row.nextStepsJson).length === 0) {
+      failed.push({
+        itemUid: item.itemUid,
+        reason: 'not_open_loop',
+        message: 'Memory item is not an active explicit open loop.',
+      });
+      continue;
+    }
+
+    try {
+      const updated = resolveLoop(db, logsPath, {
+        itemUid: item.itemUid,
+        outcome: item.outcome,
+        resolutionNote: item.resolutionNote,
+      });
+
+      if (!updated) {
+        failed.push({
+          itemUid: item.itemUid,
+          reason: 'internal_error',
+          message: 'Memory item could not be resolved after preflight.',
+        });
+        continue;
+      }
+
+      resolved.push(item.itemUid);
+      resolvedItems.push(updated);
+    } catch (error) {
+      failed.push({
+        itemUid: item.itemUid,
+        reason: 'internal_error',
+        message: error instanceof Error ? error.message : 'Unexpected error while resolving loop.',
+      });
+    }
+  }
+
+  return {
+    requested: validated.items.length,
+    resolved,
+    failed,
+    generatedAt: now(),
+    resolvedItems,
+  };
 }
 
 function appendResolutionNote(

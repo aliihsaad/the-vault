@@ -168,6 +168,87 @@ export interface ResolveLoopInput {
 }
 
 // ---------------------------------------------------------------------------
+// Exhaustive Open Loop tools
+// ---------------------------------------------------------------------------
+export interface ListOpenLoopsInput {
+  project?: string;
+  tags?: string[];
+  priority?: PriorityValue;
+  createdFrom?: string;
+  createdTo?: string;
+  limit?: number;
+  offset?: number;
+}
+
+export interface OpenLoopListItem {
+  itemUid: string;
+  title: string;
+  project: string;
+  memoryType: MemoryType;
+  subject: string;
+  priority: PriorityValue;
+  tags: string[];
+  nextSteps: string[];
+  lastAccessedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ListOpenLoopsResult {
+  total: number;
+  limit: number;
+  offset: number;
+  hasMore: boolean;
+  generatedAt: string;
+  items: OpenLoopListItem[];
+}
+
+export interface CountOpenLoopsInput {
+  project?: string;
+  tags?: string[];
+  priority?: PriorityValue;
+  createdFrom?: string;
+  createdTo?: string;
+  byProject?: boolean;
+}
+
+export interface CountOpenLoopsResult {
+  total: number;
+  byProject?: Record<string, number>;
+  generatedAt: string;
+}
+
+export interface ResolveLoopBatchItemInput {
+  itemUid: string;
+  outcome: OutcomeValue;
+  resolutionNote?: string;
+}
+
+export interface ResolveLoopBatchInput {
+  items: ResolveLoopBatchItemInput[];
+}
+
+export type ResolveLoopBatchFailureReason =
+  | 'not_found'
+  | 'not_open_loop'
+  | 'duplicate_item_uid'
+  | 'validation_error'
+  | 'internal_error';
+
+export interface ResolveLoopBatchFailure {
+  itemUid: string;
+  reason: ResolveLoopBatchFailureReason;
+  message: string;
+}
+
+export interface ResolveLoopBatchResult {
+  requested: number;
+  resolved: string[];
+  failed: ResolveLoopBatchFailure[];
+  generatedAt: string;
+}
+
+// ---------------------------------------------------------------------------
 // Memory Item Detail (includes file content)
 // ---------------------------------------------------------------------------
 export interface MemoryItemDetail extends MemoryItem {

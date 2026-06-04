@@ -239,6 +239,7 @@ server.tool(
             total_candidates: pack.totalCandidates,
             top_score: pack.topScore,
             context_summary: pack.contextSummary ?? null,
+            open_loops_note: 'Ranked/non-exhaustive: vault_recall_context.open_loops is capped and pressure-ranked. Use vault_list_open_loops or vault_count_open_loops for exhaustive loop audits.',
             top_matches: pack.topMatches.map((match) => ({
               ...briefItem(match.item),
               score: match.score,
@@ -447,6 +448,158 @@ server.tool(
         content: [{
           type: 'text' as const,
           text: JSON.stringify({ success: true, item_uid: archived.itemUid, message: `Archived: ${archived.title}` }, null, 2),
+        }],
+      };
+    } catch (error) {
+      return {
+        content: [{ type: 'text' as const, text: `Error: ${error instanceof Error ? error.message : String(error)}` }],
+        isError: true,
+      };
+    }
+  },
+);
+
+// ============================================================================
+// Tool: vault_list_open_loops
+// ============================================================================
+server.tool(
+  'vault_list_open_loops',
+  'Exhaustively list active memory items with explicit non-empty next steps. Paginated and unranked; use this for bulk open-loop audits instead of vault_recall_context.open_loops.',
+  {
+    project: z.string().optional().describe('Filter by project'),
+    tags: z.array(z.string()).optional().describe('Require all listed tags, case-insensitive'),
+    priority: z.enum(PRIORITY_VALUES).optional().describe('Filter by priority'),
+    created_from: z.string().optional().describe('Only include items created at or after this ISO timestamp'),
+    created_to: z.string().optional().describe('Only include items created at or before this ISO timestamp'),
+    limit: z.number().int().min(1).max(1000).optional().describe('Max results (default: 50, max: 1000)'),
+    offset: z.number().int().min(0).optional().describe('Pagination offset (default: 0)'),
+  },
+  async (args) => {
+    try {
+      const result = vault.listOpenLoops({
+        project: args.project,
+        tags: args.tags,
+        priority: args.priority,
+        createdFrom: args.created_from,
+        createdTo: args.created_to,
+        limit: args.limit,
+        offset: args.offset,
+      });
+
+      return {
+        content: [{
+          type: 'text' as const,
+          text: JSON.stringify({
+            total: result.total,
+            limit: result.limit,
+            offset: result.offset,
+            has_more: result.hasMore,
+            generated_at: result.generatedAt,
+            items: result.items.map((item) => ({
+              item_uid: item.itemUid,
+              title: item.title,
+              project: item.project,
+              memory_type: item.memoryType,
+              subject: item.subject,
+              priority: item.priority,
+              tags: item.tags,
+              next_steps: item.nextSteps,
+              last_accessed_at: item.lastAccessedAt,
+              created_at: item.createdAt,
+              updated_at: item.updatedAt,
+            })),
+          }, null, 2),
+        }],
+      };
+    } catch (error) {
+      return {
+        content: [{ type: 'text' as const, text: `Error: ${error instanceof Error ? error.message : String(error)}` }],
+        isError: true,
+      };
+    }
+  },
+);
+
+// ============================================================================
+// Tool: vault_count_open_loops
+// ============================================================================
+server.tool(
+  'vault_count_open_loops',
+  'Count active memory items with explicit non-empty next steps using the same predicate as vault_list_open_loops. Optionally group by project.',
+  {
+    project: z.string().optional().describe('Filter by project'),
+    tags: z.array(z.string()).optional().describe('Require all listed tags, case-insensitive'),
+    priority: z.enum(PRIORITY_VALUES).optional().describe('Filter by priority'),
+    created_from: z.string().optional().describe('Only include items created at or after this ISO timestamp'),
+    created_to: z.string().optional().describe('Only include items created at or before this ISO timestamp'),
+    by_project: z.boolean().optional().describe('Include counts grouped by project'),
+  },
+  async (args) => {
+    try {
+      const result = vault.countOpenLoops({
+        project: args.project,
+        tags: args.tags,
+        priority: args.priority,
+        createdFrom: args.created_from,
+        createdTo: args.created_to,
+        byProject: args.by_project,
+      });
+
+      return {
+        content: [{
+          type: 'text' as const,
+          text: JSON.stringify({
+            total: result.total,
+            by_project: result.byProject,
+            generated_at: result.generatedAt,
+          }, null, 2),
+        }],
+      };
+    } catch (error) {
+      return {
+        content: [{ type: 'text' as const, text: `Error: ${error instanceof Error ? error.message : String(error)}` }],
+        isError: true,
+      };
+    }
+  },
+);
+
+// ============================================================================
+// Tool: vault_resolve_loop_batch
+// ============================================================================
+server.tool(
+  'vault_resolve_loop_batch',
+  'Resolve up to 100 active explicit open loops in one call. Partial success is allowed; each successful item uses the same path as vault_resolve_loop.',
+  {
+    items: z.array(z.object({
+      item_uid: z.string().min(1).max(200).describe('Memory item UID to resolve'),
+      outcome: z.enum(OUTCOME_VALUES).describe('Resolution outcome: fixed, wont_fix, obsolete, or duplicate'),
+      resolution_note: z.string().max(2000).optional().describe('Optional note appended to the memory describing how it was closed'),
+    })).min(1).max(100).describe('Batch items to resolve (max 100)'),
+  },
+  async (args) => {
+    try {
+      const result = vault.resolveLoopBatch({
+        items: args.items.map((item) => ({
+          itemUid: item.item_uid,
+          outcome: item.outcome,
+          resolutionNote: item.resolution_note,
+        })),
+      });
+
+      return {
+        content: [{
+          type: 'text' as const,
+          text: JSON.stringify({
+            requested: result.requested,
+            resolved: result.resolved,
+            failed: result.failed.map((failure) => ({
+              item_uid: failure.itemUid,
+              reason: failure.reason,
+              message: failure.message,
+            })),
+            generated_at: result.generatedAt,
+          }, null, 2),
         }],
       };
     } catch (error) {

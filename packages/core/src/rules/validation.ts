@@ -107,6 +107,42 @@ export const ResolveLoopInputSchema = z.object({
 export type ValidatedResolveLoopInput = z.infer<typeof ResolveLoopInputSchema>;
 
 // ---------------------------------------------------------------------------
+// Exhaustive Open Loop Inputs
+// ---------------------------------------------------------------------------
+export const ListOpenLoopsInputSchema = z.object({
+  project: z.string().min(1).max(100).optional(),
+  tags: z.array(z.string().min(1).max(50)).max(20).optional().default([]),
+  priority: PrioritySchema.optional(),
+  createdFrom: z.string().optional(),
+  createdTo: z.string().optional(),
+  limit: z.number().int().min(1).max(1000).optional().default(50),
+  offset: z.number().int().min(0).optional().default(0),
+});
+
+export type ValidatedListOpenLoopsInput = z.infer<typeof ListOpenLoopsInputSchema>;
+
+export const CountOpenLoopsInputSchema = z.object({
+  project: z.string().min(1).max(100).optional(),
+  tags: z.array(z.string().min(1).max(50)).max(20).optional().default([]),
+  priority: PrioritySchema.optional(),
+  createdFrom: z.string().optional(),
+  createdTo: z.string().optional(),
+  byProject: z.boolean().optional().default(false),
+});
+
+export type ValidatedCountOpenLoopsInput = z.infer<typeof CountOpenLoopsInputSchema>;
+
+export const ResolveLoopBatchInputSchema = z.object({
+  items: z.array(z.object({
+    itemUid: z.string().min(1).max(200),
+    outcome: OutcomeSchema,
+    resolutionNote: z.string().max(2000).optional(),
+  })).min(1).max(100),
+});
+
+export type ValidatedResolveLoopBatchInput = z.infer<typeof ResolveLoopBatchInputSchema>;
+
+// ---------------------------------------------------------------------------
 // Create Task Input
 // ---------------------------------------------------------------------------
 export const CreateTaskInputSchema = z.object({

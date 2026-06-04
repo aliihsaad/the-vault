@@ -48,6 +48,16 @@ export type {
   OpenLoop,
   OpenLoopBucket,
   ResolveLoopInput,
+  ListOpenLoopsInput,
+  OpenLoopListItem,
+  ListOpenLoopsResult,
+  CountOpenLoopsInput,
+  CountOpenLoopsResult,
+  ResolveLoopBatchItemInput,
+  ResolveLoopBatchInput,
+  ResolveLoopBatchFailure,
+  ResolveLoopBatchFailureReason,
+  ResolveLoopBatchResult,
 } from './types/index.js';
 
 // Controlled values

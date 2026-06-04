@@ -29,7 +29,10 @@ import {
   markMemoryPendingDelete,
   confirmMemoryDelete,
   getOpenLoops,
+  listOpenLoops,
+  countOpenLoops,
   resolveLoop,
+  resolveLoopBatch,
 } from './services/retrieve.service.js';
 import { getRecentLogs, logActivity } from './services/log.service.js';
 import {
@@ -183,6 +186,12 @@ import type {
   ModelRoutingTable,
   ModelRouteConfig,
   ResolveLoopInput,
+  ListOpenLoopsInput,
+  ListOpenLoopsResult,
+  CountOpenLoopsInput,
+  CountOpenLoopsResult,
+  ResolveLoopBatchInput,
+  ResolveLoopBatchResult,
 } from './types/index.js';
 import type {
   GraphifyArtifactDiscoveryResult,
@@ -441,6 +450,24 @@ export class Vault {
   }
 
   /**
+   * Exhaustive, paginated list of active memories with explicit non-empty
+   * next steps. Unlike getOpenLoops(), this is not pressure-ranked and does
+   * not include debugging rows without next steps.
+   */
+  listOpenLoops(input?: ListOpenLoopsInput): ListOpenLoopsResult {
+    this.ensureInitialized();
+    return listOpenLoops(this.db, input);
+  }
+
+  /**
+   * Count active explicit open loops using the same predicate as listOpenLoops.
+   */
+  countOpenLoops(input?: CountOpenLoopsInput): CountOpenLoopsResult {
+    this.ensureInitialized();
+    return countOpenLoops(this.db, input);
+  }
+
+  /**
    * Close an open loop with an outcome. Atomic — sets status='resolved',
    * stores the outcome enum, optionally appends a resolution note, and
    * logs a `resolve_loop` activity row so close-rate is observable.
@@ -456,6 +483,24 @@ export class Vault {
       });
     }
     return resolved;
+  }
+
+  /**
+   * Resolve multiple explicit open loops with partial success. Each successful
+   * item uses the same resolveLoop service path as the single-item API.
+   */
+  resolveLoopBatch(input: ResolveLoopBatchInput): ResolveLoopBatchResult {
+    this.ensureInitialized();
+    const result = resolveLoopBatch(this.db, this.logsPath, input);
+    for (const item of result.resolvedItems) {
+      this.markGraphifyStaleAfterMemoryChange(item, {
+        status: item.status,
+        outcome: item.outcome,
+      });
+    }
+
+    const { resolvedItems: _resolvedItems, ...publicResult } = result;
+    return publicResult;
   }
 
   /**
