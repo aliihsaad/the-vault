@@ -5,26 +5,37 @@ import type {
   VaultCollabRoleGroup,
   VaultCollabSelectedRoleProfile,
 } from '../../vault-collab-view-model.js';
+import { getVaultCollabAgentsTabCount } from '../../vault-collab-view-model.js';
 import claudeIconUrl from '../../../../../assets/claude-color.svg';
 import codexIconUrl from '../../../../../assets/codex-color.svg';
 import { RoleProfileModal } from './RoleProfileModal.js';
+import { SessionHudCard } from './SessionHudCard.js';
 
 interface RosterProps {
   groups: VaultCollabRoleGroup[];
   selectedRoleProfile: VaultCollabSelectedRoleProfile | null;
   selectedRoleProfileId: string | null;
+  showInactiveSessions: boolean;
   onSelectRoleProfile: (roleProfileId: string) => void;
   onCloseRoleProfile: () => void;
+  onShowInactiveSessionsChange: (showInactiveSessions: boolean) => void;
+  onSelectHandoff: (handoffUid: string) => void;
 }
 
 export function Roster({
   groups,
   selectedRoleProfile,
   selectedRoleProfileId,
+  showInactiveSessions,
   onSelectRoleProfile,
   onCloseRoleProfile,
+  onShowInactiveSessionsChange,
+  onSelectHandoff,
 }: RosterProps) {
-  const count = groups.reduce((total, group) => total + group.agents.length, 0);
+  const count = getVaultCollabAgentsTabCount(groups);
+  const selectedOfficeAgents = selectedRoleProfile
+    ? groups.find((group) => group.roleProfileId === selectedRoleProfile.roleProfileId)?.agents ?? []
+    : [];
 
   return (
     <section className="vault-collab-zone vault-collab-roster-zone" aria-label="Agent offices">
@@ -33,7 +44,17 @@ export function Roster({
           <strong>Agents</strong>
           <span>{count} live / {groups.length} offices</span>
         </div>
-        <Users size={18} />
+        <div className="vault-collab-zone-header-actions">
+          <label className="vault-collab-show-inactive-toggle">
+            <input
+              type="checkbox"
+              checked={showInactiveSessions}
+              onChange={(event) => onShowInactiveSessionsChange(event.currentTarget.checked)}
+            />
+            <span>Show inactive</span>
+          </label>
+          <Users size={18} />
+        </div>
       </div>
 
       {groups.length === 0 ? (
@@ -86,24 +107,11 @@ export function Roster({
                   <span>{group.agents.length}</span>
                 </div>
                 {group.agents.map((agent) => (
-                  <div key={agent.sessionUid} className="vault-collab-agent-row">
-                    <span className="vault-collab-client-dot">
-                      <AgentClientIcon agent={agent} />
-                    </span>
-                    <div className="vault-collab-roster-main">
-                      <div className="vault-collab-row-title">
-                        <strong>{agent.displayName}</strong>
-                        <span className={`badge ${agent.status === 'working' ? 'badge-task-running' : agent.status === 'blocked' ? 'badge-task-fail' : 'badge-task-pending'}`}>
-                          {agent.status.replace(/_/g, ' ')}
-                        </span>
-                      </div>
-                      <div className="vault-collab-row-meta">
-                        <span>{agent.roleLabel}</span>
-                        {agent.currentHandoffUid ? <span className="text-mono">{shortId(agent.currentHandoffUid)}</span> : <span>unassigned</span>}
-                        <span className="vault-collab-connection-pill vault-collab-connection-fresh">{agent.freshness}</span>
-                      </div>
-                    </div>
-                  </div>
+                  <SessionHudCard
+                    key={agent.sessionUid}
+                    agent={agent}
+                    onSelectHandoff={onSelectHandoff}
+                  />
                 ))}
               </div>
             ))}
@@ -130,6 +138,7 @@ export function Roster({
 
           <RoleProfileModal
             roleProfile={selectedRoleProfile}
+            agents={selectedOfficeAgents}
             onClose={onCloseRoleProfile}
           />
         </div>
@@ -164,8 +173,4 @@ function getAgentIconUrl(agent: VaultCollabRosterAgent): string | null {
   }
 
   return null;
-}
-
-function shortId(value: string): string {
-  return value.length > 14 ? `${value.slice(0, 14)}...` : value;
 }

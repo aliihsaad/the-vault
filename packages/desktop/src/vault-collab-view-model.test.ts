@@ -2,7 +2,10 @@ import { describe, expect, it } from 'vitest';
 
 import {
   buildVaultCollabDashboardViewModel,
+  buildSessionHudModel,
   formatVaultCollabShortUid,
+  getVaultCollabAgentsTabCount,
+  getVaultCollabOfficeSessionStatuses,
 } from './vault-collab-view-model.js';
 import type { VaultCollabDashboardSnapshot } from '@the-vault/core';
 
@@ -133,8 +136,11 @@ function session(overrides: Partial<SessionSnapshot> & { sessionUid: string }): 
     createdAt: now.toISOString(),
     updatedAt: now.toISOString(),
     disconnectedAt: null,
+    adapterType: 'native',
+    lastSnapshot: null,
+    snapshotReportedAt: null,
     ...rest,
-  };
+  } as SessionSnapshot;
 }
 
 function handoff(overrides: Partial<HandoffSnapshot> & { handoffUid: string }): HandoffSnapshot {
@@ -261,6 +267,80 @@ function roleProfile(overrides: Partial<RoleProfileSnapshot> & { roleProfileId: 
   };
 }
 
+function phaseSevenSessionFields(
+  overrides: Partial<Record<string, unknown>> = {},
+): Partial<SessionSnapshot> {
+  const sessionUid = typeof overrides.sessionUid === 'string'
+    ? overrides.sessionUid
+    : 'vc_sess_hud_1234567890';
+
+  return {
+    adapterType: 'adapter_backed',
+    snapshotReportedAt: '2026-05-30T00:18:00.000Z',
+    lastSnapshot: {
+      schemaVersion: 'vault_collab.session.v1',
+      adapterId: 'adapter-main',
+      sessionUid,
+      project: 'the-vault',
+      workspace: {
+        path: 'C:/workspace/the-vault',
+        projectKey: 'the-vault',
+      },
+      state: 'idle',
+      context: {
+        provider: 'openai',
+        model: 'gpt-5-codex',
+        tokensUsed: 86000,
+        tokensRemaining: 14000,
+        compactionRisk: 'high',
+      },
+      active_handoffs: [
+        {
+          handoffUid: 'vc_handoff_known_1234567890',
+          status: 'claimed',
+          progressNote: 'Snapshot progress',
+          claimedAt: '2026-05-30T00:10:00.000Z',
+        },
+        {
+          handoffUid: 'vc_handoff_unknown_1234567890',
+          status: 'blocked',
+          progressNote: null,
+          claimedAt: null,
+        },
+      ],
+      progress: {
+        currentTask: 'Implement HUD cards',
+        percentComplete: 42,
+        blockers: ['Awaiting QA'],
+      },
+      cost: {
+        estimatedUSD: 1.25,
+        tokensTotal: 100000,
+      },
+      risk: {
+        level: 'critical',
+        reasons: ['Context nearly full'],
+      },
+      tool_grants: [
+        { toolName: 'shell_command', scope: 'workspace_write', grantedAt: '2026-05-30T00:09:00.000Z' },
+        { toolName: 'vault_collab_update_handoff', scope: 'coordination_write', grantedAt: null },
+      ],
+      capabilities: {
+        canMutateHandoffs: false,
+        canPublishHandoffs: true,
+        canSendMessages: true,
+        adapterType: 'adapter_backed',
+      },
+      sync_cursor: {
+        lastEventId: 42,
+        lastHeartbeatAt: '2026-05-30T00:17:00.000Z',
+      },
+      ...(overrides.lastSnapshot as Record<string, unknown> | undefined),
+    },
+    ...overrides,
+  } as unknown as Partial<SessionSnapshot>;
+}
+
 describe('Vault Collab dashboard view model', () => {
   it('summarizes readiness and attention into a single operations bar', () => {
     const model = buildVaultCollabDashboardViewModel(snapshot({
@@ -290,7 +370,7 @@ describe('Vault Collab dashboard view model', () => {
   it('groups sessions by operational attention before ordinary activity', () => {
     const model = buildVaultCollabDashboardViewModel(snapshot({
       sessions: [
-        {
+        session({
           sessionUid: 'vc_sess_idle_1234567890',
           displayName: 'Idle Codex',
           clientType: 'codex',
@@ -312,8 +392,8 @@ describe('Vault Collab dashboard view model', () => {
           createdAt: now.toISOString(),
           updatedAt: now.toISOString(),
           disconnectedAt: null,
-        },
-        {
+        }),
+        session({
           sessionUid: 'vc_sess_attention_1234567890',
           displayName: 'Claude reviewer',
           clientType: 'claude-code',
@@ -335,7 +415,7 @@ describe('Vault Collab dashboard view model', () => {
           createdAt: now.toISOString(),
           updatedAt: now.toISOString(),
           disconnectedAt: null,
-        },
+        }),
       ],
     }), now);
 
@@ -352,7 +432,7 @@ describe('Vault Collab dashboard view model', () => {
   it('describes session delivery state and exposes roster actions conservatively', () => {
     const model = buildVaultCollabDashboardViewModel(snapshot({
       sessions: [
-        {
+        session({
           sessionUid: 'vc_sess_dashboard',
           displayName: 'The Vault dashboard',
           clientType: 'other',
@@ -379,8 +459,8 @@ describe('Vault Collab dashboard view model', () => {
           createdAt: now.toISOString(),
           updatedAt: now.toISOString(),
           disconnectedAt: null,
-        },
-        {
+        }),
+        session({
           sessionUid: 'vc_sess_stale_1234567890',
           displayName: 'Old Codex dashboard',
           clientType: 'codex',
@@ -407,8 +487,8 @@ describe('Vault Collab dashboard view model', () => {
           createdAt: now.toISOString(),
           updatedAt: now.toISOString(),
           disconnectedAt: null,
-        },
-        {
+        }),
+        session({
           sessionUid: 'vc_sess_managed_1234567890',
           displayName: 'Managed receiver',
           clientType: 'codex',
@@ -435,7 +515,7 @@ describe('Vault Collab dashboard view model', () => {
           createdAt: now.toISOString(),
           updatedAt: now.toISOString(),
           disconnectedAt: null,
-        },
+        }),
       ],
     }), now, null, { dashboardSessionUid: 'vc_sess_dashboard' });
 
@@ -1467,6 +1547,233 @@ describe('Vault Collab dashboard view model', () => {
         ],
       }),
     ]);
+  });
+
+  it('derives a normalized HUD model for snapshot-backed roster agents', () => {
+    const model = buildVaultCollabDashboardViewModel(snapshot({
+      sessions: [
+        session({
+          sessionUid: 'vc_sess_hud_1234567890',
+          displayName: 'Snapshot Codex',
+          effectiveStatus: 'working',
+          currentHandoffUid: 'vc_handoff_known_1234567890',
+          ...phaseSevenSessionFields({ sessionUid: 'vc_sess_hud_1234567890' }),
+        }),
+      ],
+      handoffs: [
+        handoff({
+          handoffUid: 'vc_handoff_known_1234567890',
+          status: 'in_progress',
+          progressNote: 'Canonical progress',
+        }),
+      ],
+    }), now);
+
+    const agent = model.cockpit.officeGroups[0].agents[0];
+
+    expect(agent.hud).toEqual(expect.objectContaining({
+      hasSnapshot: true,
+      adapter: expect.objectContaining({
+        label: 'ADAPTER',
+        tone: 'adapter',
+      }),
+      lifecycleStatus: expect.objectContaining({
+        label: 'working',
+      }),
+      reportedState: expect.objectContaining({
+        label: 'idle',
+        available: true,
+      }),
+      context: expect.objectContaining({
+        providerLabel: 'openai',
+        modelLabel: 'gpt-5-codex',
+        tokenGauge: expect.objectContaining({
+          available: true,
+          used: 86000,
+          remaining: 14000,
+          total: 100000,
+          percentUsed: 86,
+        }),
+        compactionRisk: expect.objectContaining({
+          level: 'high',
+          className: 'vault-collab-risk-high',
+        }),
+      }),
+      progress: expect.objectContaining({
+        taskLabel: 'Implement HUD cards',
+        percent: 42,
+        percentLabel: '42%',
+        blockers: ['Awaiting QA'],
+      }),
+      cost: expect.objectContaining({
+        label: '$1.25 est.',
+        available: true,
+      }),
+      risk: expect.objectContaining({
+        level: 'critical',
+        className: 'vault-collab-risk-critical',
+        reasons: ['Context nearly full'],
+      }),
+      activeHandoffs: [
+        expect.objectContaining({
+          uid: 'vc_handoff_known_1234567890',
+          statusLabel: 'in progress',
+          progressNote: 'Canonical progress',
+          canOpen: true,
+        }),
+        expect.objectContaining({
+          uid: 'vc_handoff_unknown_1234567890',
+          statusLabel: 'blocked',
+          canOpen: false,
+        }),
+      ],
+      toolGrants: [
+        { toolName: 'shell_command', scope: 'workspace_write', grantedLabel: '2026-05-30T00:09:00.000Z' },
+        { toolName: 'vault_collab_update_handoff', scope: 'coordination_write', grantedLabel: null },
+      ],
+      sync: expect.objectContaining({
+        label: 'snapshot 2m ago',
+        stale: false,
+        source: 'snapshot',
+      }),
+    }));
+  });
+
+  it('builds null-safe HUD defaults without breaking legacy session fields', () => {
+    const hud = buildSessionHudModel(
+      session({
+        sessionUid: 'vc_sess_legacy_hud_1234567890',
+        displayName: 'Legacy HUD row',
+        clientType: 'codex',
+        effectiveStatus: 'idle',
+        lastHeartbeatAt: '2026-05-30T00:10:00.000Z',
+        heartbeatAgeMs: 10 * 60_000,
+        ...phaseSevenSessionFields({
+          adapterType: 'instruction_backed',
+          snapshotReportedAt: null,
+          lastSnapshot: {
+            context: {
+              provider: null,
+              model: null,
+              tokensUsed: null,
+              tokensRemaining: null,
+              compactionRisk: 'unknown',
+            },
+            progress: {
+              currentTask: null,
+              percentComplete: null,
+              blockers: [],
+            },
+            cost: {
+              estimatedUSD: null,
+              tokensTotal: null,
+            },
+            risk: {
+              level: 'unknown',
+              reasons: [],
+            },
+            active_handoffs: [],
+            tool_grants: [],
+            sync_cursor: {
+              lastEventId: null,
+              lastHeartbeatAt: null,
+            },
+          },
+        }),
+      }),
+      new Map(),
+      now,
+    );
+
+    expect(hud).toEqual(expect.objectContaining({
+      hasSnapshot: true,
+      adapter: expect.objectContaining({ label: 'INSTRUCTION' }),
+      context: expect.objectContaining({
+        providerLabel: 'Codex',
+        modelLabel: 'model unknown',
+        tokenGauge: expect.objectContaining({
+          available: false,
+          percentUsed: null,
+          label: 'tokens unavailable',
+        }),
+        compactionRisk: expect.objectContaining({
+          level: 'unknown',
+          className: 'vault-collab-risk-unknown',
+        }),
+      }),
+      progress: expect.objectContaining({
+        taskLabel: 'No task reported',
+        percent: null,
+        percentLabel: 'progress unknown',
+      }),
+      cost: expect.objectContaining({
+        label: 'cost unknown',
+        available: false,
+      }),
+      risk: expect.objectContaining({
+        level: 'unknown',
+        reasons: [],
+      }),
+      activeHandoffs: [],
+      toolGrants: [],
+      sync: expect.objectContaining({
+        label: 'heartbeat 10m ago',
+        source: 'heartbeat',
+      }),
+    }));
+  });
+
+  it('uses active-only Offices status options and counts only visible active agents by default', () => {
+    expect(getVaultCollabOfficeSessionStatuses(false)).toEqual([
+      'idle',
+      'working',
+      'blocked',
+      'awaiting_user',
+      'awaiting_verification',
+    ]);
+    expect(getVaultCollabOfficeSessionStatuses(true)).toEqual([
+      'idle',
+      'working',
+      'blocked',
+      'awaiting_user',
+      'awaiting_verification',
+      'complete',
+      'disconnected',
+    ]);
+
+    const model = buildVaultCollabDashboardViewModel(snapshot({
+      roleProfiles: [
+        roleProfile({ roleProfileId: 'implementer', displayName: 'Implementer' }),
+      ],
+      sessions: [
+        session({
+          sessionUid: 'vc_sess_active_office_1234567890',
+          displayName: 'Active worker',
+          effectiveStatus: 'working',
+          status: 'working',
+        }),
+        session({
+          sessionUid: 'vc_sess_complete_office_1234567890',
+          displayName: 'Complete worker',
+          effectiveStatus: 'complete',
+          status: 'complete',
+          connectionState: 'fresh',
+        }),
+        session({
+          sessionUid: 'vc_sess_disconnected_office_1234567890',
+          displayName: 'Disconnected worker',
+          effectiveStatus: 'disconnected',
+          status: 'disconnected',
+          connectionState: 'disconnected',
+          disconnectedAt: '2026-05-30T00:10:00.000Z',
+        }),
+      ],
+    }), now);
+
+    expect(model.cockpit.officeGroups.flatMap((group) => group.agents).map((agent) => agent.sessionUid)).toEqual([
+      'vc_sess_active_office_1234567890',
+    ]);
+    expect(getVaultCollabAgentsTabCount(model.cockpit.officeGroups)).toBe(1);
   });
 
   it('groups handoffs into fixed work columns', () => {

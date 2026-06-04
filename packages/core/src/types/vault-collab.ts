@@ -42,6 +42,12 @@ export type VaultCollabSessionDeliveryMode =
   | 'mcp_notification'
   | 'managed_process';
 
+export type VaultCollabSessionAdapterType = 'native' | 'adapter_backed' | 'instruction_backed';
+
+export type VaultCollabSnapshotRiskLevel = 'low' | 'medium' | 'high' | 'critical' | 'unknown';
+
+export type VaultCollabSnapshotState = VaultCollabSessionStatus | 'unknown';
+
 export interface VaultCollabSessionDeliveryState {
   mode: VaultCollabSessionDeliveryMode;
   wakeable: boolean;
@@ -123,6 +129,59 @@ export interface VaultCollabRoleProfileAliasSnapshot {
   roleProfileId: string;
 }
 
+export interface VaultCollabSessionSnapshotV1 {
+  schemaVersion: 'vault_collab.session.v1';
+  adapterId: string;
+  sessionUid: string;
+  project: string;
+  workspace: {
+    path: string;
+    projectKey?: string | null;
+  };
+  state: VaultCollabSnapshotState;
+  context: {
+    model: string | null;
+    provider: string | null;
+    tokensUsed: number | null;
+    tokensRemaining: number | null;
+    compactionRisk: VaultCollabSnapshotRiskLevel;
+  };
+  active_handoffs: Array<{
+    handoffUid: string;
+    status: VaultCollabHandoffStatus | 'unknown';
+    progressNote: string | null;
+    claimedAt: string | null;
+  }>;
+  progress: {
+    currentTask: string | null;
+    percentComplete: number | null;
+    blockers: string[];
+  };
+  cost: {
+    estimatedUSD: number | null;
+    tokensTotal: number | null;
+  };
+  risk: {
+    level: VaultCollabSnapshotRiskLevel;
+    reasons: string[];
+  };
+  tool_grants: Array<{
+    toolName: string;
+    scope: string;
+    grantedAt: string | null;
+  }>;
+  capabilities: {
+    canMutateHandoffs: boolean;
+    canPublishHandoffs: boolean;
+    canSendMessages: boolean;
+    adapterType: VaultCollabSessionAdapterType;
+  };
+  sync_cursor: {
+    lastEventId: number | null;
+    lastHeartbeatAt: string | null;
+  };
+}
+
 export interface VaultCollabSessionSnapshot {
   sessionUid: string;
   displayName: string;
@@ -142,6 +201,9 @@ export interface VaultCollabSessionSnapshot {
   agentRole: string | null;
   currentHandoffUid: string | null;
   delivery: VaultCollabSessionDeliveryState;
+  adapterType: VaultCollabSessionAdapterType;
+  lastSnapshot: VaultCollabSessionSnapshotV1 | null;
+  snapshotReportedAt: string | null;
   lastHeartbeatAt: string;
   heartbeatAgeMs: number | null;
   createdAt: string;
@@ -303,6 +365,8 @@ export interface VaultCollabDashboardCounts {
 
 export interface VaultCollabDashboardOptions {
   sessionLimit?: number;
+  sessionStatuses?: VaultCollabSessionStatus[];
+  includeInactiveSessions?: boolean;
   handoffLimit?: number;
   launchRequestLimit?: number;
   eventLimit?: number;

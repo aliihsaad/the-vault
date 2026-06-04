@@ -2836,6 +2836,265 @@ select.text-input optgroup {
   padding: 10px;
 }
 
+.vault-collab-zone-header-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.vault-collab-show-inactive-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-secondary);
+  font-size: 0.72rem;
+  white-space: nowrap;
+}
+
+.vault-collab-show-inactive-toggle input {
+  width: 14px;
+  height: 14px;
+  accent-color: #5ce0e6;
+}
+
+.vault-collab-session-hud {
+  border-color: rgba(141, 174, 214, 0.14);
+  background: rgba(255, 255, 255, 0.032);
+}
+
+.vault-collab-session-hud-inactive {
+  opacity: 0.72;
+}
+
+.vault-collab-session-hud-main {
+  gap: 8px;
+}
+
+.vault-collab-session-hud-header,
+.vault-collab-status-pair,
+.vault-collab-context-bar,
+.vault-collab-session-hud-secondary,
+.vault-collab-session-progress-head,
+.vault-collab-session-hud-badges,
+.vault-collab-snapshot-handoff-list,
+.vault-collab-tool-grant-list,
+.vault-collab-office-modal-agent-head,
+.vault-collab-office-modal-agent-meta,
+.vault-collab-office-modal-agent-hud {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.vault-collab-session-hud-header {
+  justify-content: space-between;
+}
+
+.vault-collab-adapter-chip,
+.vault-collab-reported-status,
+.vault-collab-sync-indicator,
+.vault-collab-risk-badge,
+.vault-collab-cost-badge {
+  display: inline-flex;
+  align-items: center;
+  width: fit-content;
+  max-width: 100%;
+  border-radius: 8px;
+  border: 1px solid rgba(148, 166, 198, 0.18);
+  padding: 3px 8px;
+  font-family: var(--font-mono);
+  font-size: 0.67rem;
+  white-space: nowrap;
+}
+
+.vault-collab-adapter-chip-native {
+  border-color: rgba(148, 166, 198, 0.2);
+  background: rgba(148, 166, 198, 0.1);
+  color: #cbd5e1;
+}
+
+.vault-collab-adapter-chip-adapter {
+  border-color: rgba(92, 224, 230, 0.24);
+  background: rgba(92, 224, 230, 0.1);
+  color: #8ef2ff;
+}
+
+.vault-collab-adapter-chip-instruction {
+  border-color: rgba(196, 132, 252, 0.26);
+  background: rgba(196, 132, 252, 0.12);
+  color: #d8b4fe;
+}
+
+.vault-collab-status-pair {
+  align-items: stretch;
+}
+
+.vault-collab-reported-status {
+  border-style: dashed;
+  color: var(--text-secondary);
+}
+
+.vault-collab-context-bar {
+  padding: 8px;
+  border-radius: 8px;
+  border: 1px solid rgba(141, 174, 214, 0.1);
+  background: rgba(255, 255, 255, 0.024);
+  color: var(--text-secondary);
+  font-size: 0.74rem;
+}
+
+.vault-collab-token-gauge {
+  display: inline-flex;
+  min-width: 168px;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-muted);
+  font-size: 0.7rem;
+}
+
+.vault-collab-token-gauge-rail {
+  position: relative;
+  display: inline-flex;
+  width: 64px;
+  height: 6px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: rgba(148, 166, 198, 0.16);
+}
+
+.vault-collab-token-gauge-unavailable {
+  border: 1px dashed rgba(148, 166, 198, 0.32);
+  background: transparent;
+}
+
+.vault-collab-token-gauge-fill,
+.vault-collab-session-progress-fill {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+}
+
+.vault-collab-token-gauge-low .vault-collab-token-gauge-fill,
+.vault-collab-risk-low {
+  background: rgba(51, 214, 145, 0.12);
+  color: #33d691;
+  border-color: rgba(51, 214, 145, 0.28);
+}
+
+.vault-collab-token-gauge-medium .vault-collab-token-gauge-fill,
+.vault-collab-risk-medium {
+  background: rgba(250, 204, 21, 0.12);
+  color: #facc15;
+  border-color: rgba(250, 204, 21, 0.28);
+}
+
+.vault-collab-token-gauge-high .vault-collab-token-gauge-fill,
+.vault-collab-risk-high {
+  background: rgba(251, 146, 60, 0.14);
+  color: #fb923c;
+  border-color: rgba(251, 146, 60, 0.3);
+}
+
+.vault-collab-token-gauge-critical .vault-collab-token-gauge-fill,
+.vault-collab-risk-critical {
+  background: rgba(248, 113, 113, 0.16);
+  color: #f87171;
+  border-color: rgba(248, 113, 113, 0.32);
+}
+
+.vault-collab-token-gauge-unknown .vault-collab-token-gauge-fill,
+.vault-collab-risk-unknown {
+  background: rgba(148, 166, 198, 0.18);
+  color: #b6c2d6;
+  border-color: rgba(148, 166, 198, 0.24);
+}
+
+.vault-collab-session-progress {
+  display: flex;
+  min-width: 190px;
+  flex: 1 1 190px;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.vault-collab-session-progress-head {
+  justify-content: space-between;
+  color: var(--text-secondary);
+  font-size: 0.72rem;
+}
+
+.vault-collab-session-progress-rail {
+  height: 6px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: rgba(148, 166, 198, 0.16);
+}
+
+.vault-collab-session-progress-fill {
+  background: linear-gradient(90deg, #5ce0e6, #7dd87d);
+}
+
+.vault-collab-session-progress-unknown {
+  border: 1px dashed rgba(148, 166, 198, 0.28);
+  background: rgba(148, 166, 198, 0.08);
+}
+
+.vault-collab-session-blockers {
+  width: fit-content;
+  color: #facc15;
+  font-size: 0.7rem;
+}
+
+.vault-collab-cost-badge {
+  border-color: rgba(125, 216, 125, 0.24);
+  background: rgba(125, 216, 125, 0.1);
+  color: #a7f3d0;
+}
+
+.vault-collab-snapshot-handoff-list button,
+.vault-collab-tool-grant-list > span {
+  display: inline-flex;
+  min-width: 0;
+  max-width: 100%;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid rgba(141, 174, 214, 0.12);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.024);
+  color: var(--text-secondary);
+  font-size: 0.7rem;
+}
+
+.vault-collab-snapshot-handoff-list button {
+  padding: 5px 8px;
+  cursor: pointer;
+}
+
+.vault-collab-snapshot-handoff-list button:disabled {
+  cursor: default;
+  opacity: 0.62;
+}
+
+.vault-collab-tool-grant-list > span {
+  padding: 4px 7px;
+}
+
+.vault-collab-tool-grant-list strong {
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.vault-collab-sync-indicator {
+  color: var(--text-muted);
+}
+
+.vault-collab-sync-indicator-stale {
+  border-color: rgba(250, 204, 21, 0.26);
+  color: #facc15;
+}
+
 .vault-collab-office-layout {
   display: flex;
   min-width: 0;
@@ -3249,6 +3508,56 @@ select.text-input optgroup {
   font-size: 0.8rem;
   line-height: 1.5;
   overflow-wrap: anywhere;
+}
+
+.vault-collab-office-modal-agents {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.vault-collab-office-modal-agents > span {
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+}
+
+.vault-collab-office-modal-agent-list {
+  display: grid;
+  gap: 8px;
+}
+
+.vault-collab-office-modal-agent {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid rgba(141, 174, 214, 0.12);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.026);
+}
+
+.vault-collab-office-modal-agent-head {
+  justify-content: space-between;
+}
+
+.vault-collab-office-modal-agent-head strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.vault-collab-office-modal-agent-meta,
+.vault-collab-office-modal-agent-hud {
+  color: var(--text-secondary);
+  font-size: 0.72rem;
+}
+
+.vault-collab-office-modal-agent-hud {
+  padding-top: 2px;
+  border-top: 1px solid rgba(141, 174, 214, 0.1);
 }
 
 .vault-collab-handoff-modal-backdrop {

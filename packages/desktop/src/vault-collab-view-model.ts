@@ -7,7 +7,10 @@ import type {
   VaultCollabLaunchRequestSnapshot,
   VaultCollabPolicyPackSnapshot,
   VaultCollabRoleProfileSnapshot,
+  VaultCollabSessionAdapterType,
   VaultCollabSessionSnapshot,
+  VaultCollabSessionStatus,
+  VaultCollabSnapshotRiskLevel,
 } from '@the-vault/core';
 
 const SESSION_PERMISSION_REQUESTED_EVENT = 'session.permission_requested';
@@ -181,6 +184,77 @@ export interface VaultCollabRosterAgent {
   status: string;
   currentHandoffUid: string | null;
   freshness: 'fresh' | 'stale';
+  hud: VaultCollabSessionHudModel;
+}
+
+export interface VaultCollabSessionHudModel {
+  hasSnapshot: boolean;
+  adapter: {
+    raw: VaultCollabSessionAdapterType;
+    label: 'NATIVE' | 'ADAPTER' | 'INSTRUCTION';
+    tone: 'native' | 'adapter' | 'instruction';
+    title: string | null;
+  };
+  lifecycleStatus: {
+    label: string;
+    badgeClass: string;
+  };
+  reportedState: {
+    label: string;
+    badgeClass: string;
+    available: boolean;
+  };
+  context: {
+    providerLabel: string;
+    modelLabel: string;
+    tokenGauge: {
+      available: boolean;
+      used: number | null;
+      remaining: number | null;
+      total: number | null;
+      percentUsed: number | null;
+      label: string;
+    };
+    compactionRisk: {
+      level: VaultCollabSnapshotRiskLevel;
+      label: string;
+      className: string;
+    };
+  };
+  progress: {
+    taskLabel: string;
+    percent: number | null;
+    percentLabel: string;
+    blockers: string[];
+    available: boolean;
+  };
+  cost: {
+    label: string;
+    available: boolean;
+  };
+  risk: {
+    level: VaultCollabSnapshotRiskLevel;
+    label: string;
+    className: string;
+    reasons: string[];
+  };
+  activeHandoffs: Array<{
+    uid: string;
+    shortUid: string;
+    statusLabel: string;
+    progressNote: string | null;
+    canOpen: boolean;
+  }>;
+  toolGrants: Array<{
+    toolName: string;
+    scope: string;
+    grantedLabel: string | null;
+  }>;
+  sync: {
+    label: string;
+    stale: boolean;
+    source: 'snapshot' | 'snapshot_cursor' | 'heartbeat' | 'unknown';
+  };
 }
 
 export interface VaultCollabRoleGroup {
@@ -305,6 +379,7 @@ export interface VaultCollabDashboardViewModelOptions {
   selectedRoleProfileId?: string | null;
   eventTypePrefix?: string | null;
   eventTypes?: VaultCollabEventTypeSnapshot[];
+  showInactiveSessions?: boolean;
 }
 
 export interface VaultCollabDashboardViewModel {
@@ -444,7 +519,14 @@ function buildCockpitViewModel(
   selectedRoleProfileId: string | null,
   options: VaultCollabDashboardViewModelOptions = {},
 ): VaultCollabCockpitViewModel {
-  const officeGroups = buildRoleGroups(snapshot.sessions, snapshot.handoffs, handoffRows, roleLookup);
+  const officeGroups = buildRoleGroups(
+    snapshot.sessions,
+    snapshot.handoffs,
+    handoffRows,
+    roleLookup,
+    now,
+    options.showInactiveSessions === true,
+  );
   const selectedHandoffRoleProfileId = selectedHandoffUid
     ? handoffRows.find((row) => row.uid === selectedHandoffUid)?.suggestedRoleProfileId ?? null
     : null;
@@ -540,6 +622,32 @@ const LEGACY_ROLE_ALIASES: Array<[string, string]> = [
 ];
 const OTHER_ROLE_GROUP_KEY = 'other';
 const OTHER_ROLE_DISPLAY_NAME = 'Other';
+const SESSION_HUD_STALE_AFTER_MS = 15 * 60 * 1000;
+
+export const ACTIVE_OFFICE_STATUSES: VaultCollabSessionStatus[] = [
+  'idle',
+  'working',
+  'blocked',
+  'awaiting_user',
+  'awaiting_verification',
+];
+
+export const INACTIVE_OFFICE_STATUSES: VaultCollabSessionStatus[] = [
+  'complete',
+  'disconnected',
+];
+
+export function getVaultCollabOfficeSessionStatuses(showInactiveSessions: boolean): VaultCollabSessionStatus[] {
+  return showInactiveSessions
+    ? [...ACTIVE_OFFICE_STATUSES, ...INACTIVE_OFFICE_STATUSES]
+    : [...ACTIVE_OFFICE_STATUSES];
+}
+
+export function getVaultCollabAgentsTabCount(groups: VaultCollabOfficeGroup[]): number {
+  return groups.reduce((total, group) => (
+    total + group.agents.filter((agent) => isActiveOfficeSessionStatus(agent.status)).length
+  ), 0);
+}
 
 function buildRoleProfileLookup(snapshot: VaultCollabDashboardSnapshot): RoleProfileLookup {
   const profiles = snapshot.roleProfiles ?? [];
@@ -571,10 +679,13 @@ function buildRoleGroups(
   handoffs: VaultCollabHandoffSnapshot[],
   handoffRows: VaultCollabHandoffRow[],
   roleLookup: RoleProfileLookup,
+  now: Date,
+  showInactiveSessions: boolean,
 ): VaultCollabRoleGroup[] {
   const groups = new Map<string, VaultCollabRoleGroup>();
   const seenSessionUids = new Set<string>();
   const handoffRowsByUid = new Map(handoffRows.map((row) => [row.uid, row]));
+  const handoffsByUid = new Map(handoffs.map((handoff) => [handoff.handoffUid, handoff]));
   const hasCanonicalProfiles = roleLookup.profiles.length > 0;
 
   for (const profile of roleLookup.profiles) {
@@ -582,7 +693,7 @@ function buildRoleGroups(
   }
 
   for (const session of sessions) {
-    if (!isRosterVisibleSession(session) || seenSessionUids.has(session.sessionUid)) {
+    if (!isRosterVisibleSession(session, showInactiveSessions) || seenSessionUids.has(session.sessionUid)) {
       continue;
     }
 
@@ -612,6 +723,7 @@ function buildRoleGroups(
       status: session.effectiveStatus,
       currentHandoffUid: session.currentHandoffUid,
       freshness: session.connectionState === 'fresh' ? 'fresh' : 'stale',
+      hud: buildSessionHudModel(session, handoffsByUid, now),
     });
     groups.set(groupKey, group);
   }
@@ -634,6 +746,274 @@ function buildRoleGroups(
   }
 
   return Array.from(groups.values()).map(finalizeOfficeGroup);
+}
+
+export function buildSessionHudModel(
+  session: VaultCollabSessionSnapshot,
+  handoffsByUid: Map<string, VaultCollabHandoffSnapshot>,
+  now: Date,
+): VaultCollabSessionHudModel {
+  const snapshot = session.lastSnapshot;
+  const adapter = buildSessionAdapterModel(session.adapterType, snapshot?.capabilities?.adapterType ?? null);
+  const lifecycleStatus = {
+    label: formatStatusLabel(session.effectiveStatus),
+    badgeClass: getSessionBadgeClass(session.effectiveStatus),
+  };
+
+  if (!snapshot) {
+    return {
+      hasSnapshot: false,
+      adapter,
+      lifecycleStatus,
+      reportedState: {
+        label: 'unknown',
+        badgeClass: 'badge-task-pending',
+        available: false,
+      },
+      context: {
+        providerLabel: getClientLabel(session.clientType),
+        modelLabel: 'model unknown',
+        tokenGauge: buildTokenGauge(null, null),
+        compactionRisk: buildRiskTone('unknown'),
+      },
+      progress: {
+        taskLabel: 'No task reported',
+        percent: null,
+        percentLabel: 'progress unknown',
+        blockers: [],
+        available: false,
+      },
+      cost: {
+        label: 'cost unknown',
+        available: false,
+      },
+      risk: {
+        ...buildRiskTone('unknown'),
+        reasons: [],
+      },
+      activeHandoffs: [],
+      toolGrants: [],
+      sync: buildSyncModel(session, null, now),
+    };
+  }
+
+  const progressPercent = normalizePercent(snapshot.progress.percentComplete);
+  const tokenGauge = buildTokenGauge(snapshot.context.tokensUsed, snapshot.context.tokensRemaining);
+  const risk = buildRiskTone(snapshot.risk.level);
+  const reportedState = normalizeReportedState(snapshot.state);
+
+  return {
+    hasSnapshot: true,
+    adapter,
+    lifecycleStatus,
+    reportedState: {
+      label: formatStatusLabel(reportedState),
+      badgeClass: reportedState === 'unknown' ? 'badge-task-pending' : getSessionBadgeClass(reportedState),
+      available: reportedState !== 'unknown',
+    },
+    context: {
+      providerLabel: snapshot.context.provider ?? getClientLabel(session.clientType),
+      modelLabel: snapshot.context.model ?? 'model unknown',
+      tokenGauge,
+      compactionRisk: buildRiskTone(snapshot.context.compactionRisk),
+    },
+    progress: {
+      taskLabel: snapshot.progress.currentTask ?? 'No task reported',
+      percent: progressPercent,
+      percentLabel: progressPercent === null ? 'progress unknown' : `${progressPercent}%`,
+      blockers: [...snapshot.progress.blockers],
+      available: Boolean(snapshot.progress.currentTask) || progressPercent !== null || snapshot.progress.blockers.length > 0,
+    },
+    cost: buildCostModel(snapshot.cost.estimatedUSD),
+    risk: {
+      ...risk,
+      reasons: [...snapshot.risk.reasons],
+    },
+    activeHandoffs: snapshot.active_handoffs.map((reportedHandoff) => {
+      const canonical = handoffsByUid.get(reportedHandoff.handoffUid) ?? null;
+      const status = canonical?.status ?? reportedHandoff.status;
+      return {
+        uid: reportedHandoff.handoffUid,
+        shortUid: formatVaultCollabShortUid(reportedHandoff.handoffUid),
+        statusLabel: formatStatusLabel(status),
+        progressNote: canonical?.progressNote ?? reportedHandoff.progressNote,
+        canOpen: Boolean(canonical),
+      };
+    }),
+    toolGrants: snapshot.tool_grants.map((grant) => ({
+      toolName: grant.toolName,
+      scope: grant.scope || 'unknown',
+      grantedLabel: grant.grantedAt,
+    })),
+    sync: buildSyncModel(session, snapshot, now),
+  };
+}
+
+function buildSessionAdapterModel(
+  adapterType: VaultCollabSessionAdapterType,
+  snapshotAdapterType: VaultCollabSessionAdapterType | null,
+): VaultCollabSessionHudModel['adapter'] {
+  const normalized = normalizeSessionAdapterType(adapterType);
+  const title = snapshotAdapterType && snapshotAdapterType !== normalized
+    ? `Snapshot reported ${snapshotAdapterType}`
+    : null;
+
+  switch (normalized) {
+    case 'adapter_backed':
+      return { raw: normalized, label: 'ADAPTER', tone: 'adapter', title };
+    case 'instruction_backed':
+      return { raw: normalized, label: 'INSTRUCTION', tone: 'instruction', title };
+    case 'native':
+    default:
+      return { raw: 'native', label: 'NATIVE', tone: 'native', title };
+  }
+}
+
+function normalizeSessionAdapterType(value: VaultCollabSessionAdapterType | string | null | undefined): VaultCollabSessionAdapterType {
+  return value === 'adapter_backed' || value === 'instruction_backed' || value === 'native'
+    ? value
+    : 'native';
+}
+
+function buildTokenGauge(
+  used: number | null,
+  remaining: number | null,
+): VaultCollabSessionHudModel['context']['tokenGauge'] {
+  if (!isFiniteNumber(used) || !isFiniteNumber(remaining)) {
+    return {
+      available: false,
+      used: null,
+      remaining: null,
+      total: null,
+      percentUsed: null,
+      label: 'tokens unavailable',
+    };
+  }
+
+  const total = used + remaining;
+  if (total <= 0) {
+    return {
+      available: false,
+      used,
+      remaining,
+      total,
+      percentUsed: null,
+      label: 'tokens unavailable',
+    };
+  }
+
+  const percentUsed = Math.min(100, Math.max(0, Math.round((used / total) * 100)));
+  return {
+    available: true,
+    used,
+    remaining,
+    total,
+    percentUsed,
+    label: `${formatNumber(used)} used / ${formatNumber(remaining)} left`,
+  };
+}
+
+function buildRiskTone(level: VaultCollabSnapshotRiskLevel): {
+  level: VaultCollabSnapshotRiskLevel;
+  label: string;
+  className: string;
+} {
+  const normalized = normalizeRiskLevel(level);
+  return {
+    level: normalized,
+    label: normalized,
+    className: `vault-collab-risk-${normalized}`,
+  };
+}
+
+function normalizeRiskLevel(value: VaultCollabSnapshotRiskLevel | string | null | undefined): VaultCollabSnapshotRiskLevel {
+  return value === 'low' || value === 'medium' || value === 'high' || value === 'critical' || value === 'unknown'
+    ? value
+    : 'unknown';
+}
+
+function normalizeReportedState(value: string | null | undefined): VaultCollabSessionStatus | 'unknown' {
+  return value === 'idle'
+    || value === 'working'
+    || value === 'blocked'
+    || value === 'awaiting_user'
+    || value === 'awaiting_verification'
+    || value === 'complete'
+    || value === 'disconnected'
+    || value === 'unknown'
+    ? value
+    : 'unknown';
+}
+
+function normalizePercent(value: number | null): number | null {
+  if (!isFiniteNumber(value)) {
+    return null;
+  }
+
+  return Math.min(100, Math.max(0, Math.round(value)));
+}
+
+function buildCostModel(estimatedUSD: number | null): VaultCollabSessionHudModel['cost'] {
+  if (!isFiniteNumber(estimatedUSD)) {
+    return {
+      label: 'cost unknown',
+      available: false,
+    };
+  }
+
+  return {
+    label: `$${estimatedUSD.toFixed(2)} est.`,
+    available: true,
+  };
+}
+
+function buildSyncModel(
+  session: VaultCollabSessionSnapshot,
+  snapshot: VaultCollabSessionSnapshot['lastSnapshot'],
+  now: Date,
+): VaultCollabSessionHudModel['sync'] {
+  if (session.snapshotReportedAt) {
+    return {
+      label: `snapshot ${formatRelativeAge(new Date(session.snapshotReportedAt), now)}`,
+      stale: isTimestampStale(session.snapshotReportedAt, now),
+      source: 'snapshot',
+    };
+  }
+
+  if (snapshot?.sync_cursor.lastHeartbeatAt) {
+    return {
+      label: `heartbeat ${formatRelativeAge(new Date(snapshot.sync_cursor.lastHeartbeatAt), now)}`,
+      stale: isTimestampStale(snapshot.sync_cursor.lastHeartbeatAt, now),
+      source: 'snapshot_cursor',
+    };
+  }
+
+  if (session.lastHeartbeatAt) {
+    return {
+      label: `heartbeat ${formatRelativeAge(new Date(session.lastHeartbeatAt), now)}`,
+      stale: isTimestampStale(session.lastHeartbeatAt, now),
+      source: 'heartbeat',
+    };
+  }
+
+  return {
+    label: 'sync unknown',
+    stale: true,
+    source: 'unknown',
+  };
+}
+
+function isTimestampStale(value: string, now: Date): boolean {
+  const parsed = Date.parse(value);
+  return !Number.isFinite(parsed) || now.getTime() - parsed > SESSION_HUD_STALE_AFTER_MS;
+}
+
+function isFiniteNumber(value: number | null | undefined): value is number {
+  return typeof value === 'number' && Number.isFinite(value);
+}
+
+function formatNumber(value: number): string {
+  return new Intl.NumberFormat('en-US', { maximumFractionDigits: 0 }).format(value);
 }
 
 function buildOtherRoleGroup(): VaultCollabRoleGroup {
@@ -1095,10 +1475,21 @@ function isLiveRosterSession(session: VaultCollabSessionSnapshot): boolean {
   return session.connectionState === 'fresh' && session.effectiveStatus !== 'disconnected';
 }
 
-function isRosterVisibleSession(session: VaultCollabSessionSnapshot): boolean {
-  return isLiveRosterSession(session)
-    && !hasEnabledCapability(session.capabilities.sessionAdmin)
-    && !hasEnabledCapability(session.capabilities.dashboardActions);
+function isRosterVisibleSession(session: VaultCollabSessionSnapshot, showInactiveSessions = false): boolean {
+  if (hasEnabledCapability(session.capabilities.sessionAdmin)
+    || hasEnabledCapability(session.capabilities.dashboardActions)) {
+    return false;
+  }
+
+  if (showInactiveSessions && INACTIVE_OFFICE_STATUSES.includes(session.effectiveStatus)) {
+    return true;
+  }
+
+  return isLiveRosterSession(session) && isActiveOfficeSessionStatus(session.effectiveStatus);
+}
+
+function isActiveOfficeSessionStatus(status: string): boolean {
+  return ACTIVE_OFFICE_STATUSES.includes(status as VaultCollabSessionStatus);
 }
 
 function hasEnabledCapability(value: unknown): boolean {

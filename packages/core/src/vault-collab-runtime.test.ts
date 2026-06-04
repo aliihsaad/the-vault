@@ -1383,6 +1383,189 @@ describe('Vault Collab extension runtime config', () => {
     expect(serializedSnapshot).not.toContain('session-token');
     expect(serializedSnapshot).not.toContain('claim-token');
   });
+
+  describe('Phase 7 dashboard session snapshot fields', () => {
+    it('reads Phase 7 session columns and keeps snapshot output token-safe', () => {
+      const vaultRoot = mkdtempSync(join(tmpdir(), 'vault-collab-dashboard-phase7-'));
+      const config = getDefaultVaultCollabRuntimeConfig(vaultRoot);
+      const db = createVaultCollabFixtureDatabase(config.databasePath);
+      addPhaseSevenSessionColumns(db);
+      insertDashboardSession(db, {
+        sessionUid: 'vc_sess_phase7',
+        displayName: 'Adapter backed Codex',
+        clientType: 'codex',
+        status: 'working',
+        sessionToken: 'owner-session-token-secret',
+        currentHandoffUid: 'vc_handoff_phase7',
+        lastHeartbeatAt: '2026-05-28T11:59:00.000Z',
+        createdAt: '2026-05-28T11:00:00.000Z',
+        updatedAt: '2026-05-28T11:59:00.000Z',
+      });
+      db.prepare(`
+        UPDATE sessions
+        SET adapter_type = ?,
+            last_snapshot_json = ?,
+            snapshot_reported_at = ?
+        WHERE session_uid = ?
+      `).run(
+        'adapter_backed',
+        JSON.stringify({
+          ...phaseSevenSessionSnapshot({
+            sessionUid: 'vc_sess_phase7',
+            state: 'working',
+          }),
+          adapterToken: 'adapter-token-secret',
+        }),
+        '2026-05-28T11:59:30.000Z',
+        'vc_sess_phase7',
+      );
+      db.close();
+
+      const snapshot = getVaultCollabDashboardSnapshot(config, {
+        now: new Date('2026-05-28T12:00:00.000Z'),
+        sessionLimit: 10,
+        sessionStatuses: ['working'],
+      });
+
+      expect(snapshot.sessions).toHaveLength(1);
+      expect(snapshot.sessions[0]).toEqual(expect.objectContaining({
+        sessionUid: 'vc_sess_phase7',
+        adapterType: 'adapter_backed',
+        snapshotReportedAt: '2026-05-28T11:59:30.000Z',
+        lastSnapshot: expect.objectContaining({
+          schemaVersion: 'vault_collab.session.v1',
+          sessionUid: 'vc_sess_phase7',
+          state: 'working',
+          context: expect.objectContaining({
+            provider: 'openai',
+            model: 'gpt-5-codex',
+            tokensUsed: 86000,
+            tokensRemaining: 14000,
+            compactionRisk: 'high',
+          }),
+        }),
+      }));
+      const serializedSnapshot = JSON.stringify(snapshot);
+      expect(serializedSnapshot).not.toContain('owner-session-token-secret');
+      expect(serializedSnapshot).not.toContain('adapter-token-secret');
+      expect(serializedSnapshot).not.toContain('session_token');
+    });
+
+    it('keeps old databases without Phase 7 columns readable with native snapshot defaults', () => {
+      const vaultRoot = mkdtempSync(join(tmpdir(), 'vault-collab-dashboard-old-db-'));
+      const config = getDefaultVaultCollabRuntimeConfig(vaultRoot);
+      const db = createVaultCollabFixtureDatabase(config.databasePath);
+      insertDashboardSession(db, {
+        sessionUid: 'vc_sess_legacy',
+        displayName: 'Legacy Codex',
+        clientType: 'codex',
+        status: 'idle',
+        sessionToken: 'legacy-token-secret',
+        lastHeartbeatAt: '2026-05-28T11:59:00.000Z',
+        createdAt: '2026-05-28T11:00:00.000Z',
+        updatedAt: '2026-05-28T11:59:00.000Z',
+      });
+      db.close();
+
+      const snapshot = getVaultCollabDashboardSnapshot(config, {
+        now: new Date('2026-05-28T12:00:00.000Z'),
+        sessionLimit: 10,
+      });
+
+      expect(snapshot.dataReady).toBe(true);
+      expect(snapshot.sessions[0]).toEqual(expect.objectContaining({
+        sessionUid: 'vc_sess_legacy',
+        adapterType: 'native',
+        lastSnapshot: null,
+        snapshotReportedAt: null,
+      }));
+      expect(JSON.stringify(snapshot)).not.toContain('legacy-token-secret');
+    });
+
+    it('maps malformed or wrong-version snapshot JSON to null instead of failing the dashboard', () => {
+      const vaultRoot = mkdtempSync(join(tmpdir(), 'vault-collab-dashboard-bad-json-'));
+      const config = getDefaultVaultCollabRuntimeConfig(vaultRoot);
+      const db = createVaultCollabFixtureDatabase(config.databasePath);
+      addPhaseSevenSessionColumns(db);
+      insertDashboardSession(db, {
+        sessionUid: 'vc_sess_malformed',
+        displayName: 'Malformed snapshot',
+        clientType: 'codex',
+        status: 'working',
+        sessionToken: 'malformed-secret',
+        lastHeartbeatAt: '2026-05-28T11:59:00.000Z',
+        createdAt: '2026-05-28T11:00:00.000Z',
+        updatedAt: '2026-05-28T11:59:00.000Z',
+      });
+      insertDashboardSession(db, {
+        sessionUid: 'vc_sess_wrong_schema',
+        displayName: 'Wrong schema snapshot',
+        clientType: 'codex',
+        status: 'idle',
+        sessionToken: 'wrong-schema-secret',
+        lastHeartbeatAt: '2026-05-28T11:58:00.000Z',
+        createdAt: '2026-05-28T11:00:00.000Z',
+        updatedAt: '2026-05-28T11:58:00.000Z',
+      });
+      db.prepare('UPDATE sessions SET last_snapshot_json = ? WHERE session_uid = ?').run('{bad json', 'vc_sess_malformed');
+      db.prepare('UPDATE sessions SET last_snapshot_json = ? WHERE session_uid = ?').run(
+        JSON.stringify({ ...phaseSevenSessionSnapshot({ sessionUid: 'vc_sess_wrong_schema' }), schemaVersion: 'older.schema' }),
+        'vc_sess_wrong_schema',
+      );
+      db.close();
+
+      const snapshot = getVaultCollabDashboardSnapshot(config, {
+        now: new Date('2026-05-28T12:00:00.000Z'),
+        sessionLimit: 10,
+      });
+
+      expect(snapshot.dataReady).toBe(true);
+      expect(snapshot.sessions.map((session) => [session.sessionUid, session.lastSnapshot])).toEqual([
+        ['vc_sess_malformed', null],
+        ['vc_sess_wrong_schema', null],
+      ]);
+    });
+
+    it('applies sessionStatuses in SQL before the scan limit so ghost sessions do not hide active rows', () => {
+      const vaultRoot = mkdtempSync(join(tmpdir(), 'vault-collab-dashboard-status-filter-'));
+      const config = getDefaultVaultCollabRuntimeConfig(vaultRoot);
+      const db = createVaultCollabFixtureDatabase(config.databasePath);
+
+      for (let index = 0; index < 12; index += 1) {
+        insertDashboardSession(db, {
+          sessionUid: `vc_sess_closed_${index}`,
+          displayName: `Closed ${index}`,
+          clientType: 'codex',
+          status: 'disconnected',
+          sessionToken: `closed-token-${index}`,
+          lastHeartbeatAt: '2026-05-28T11:50:00.000Z',
+          createdAt: '2026-05-28T11:00:00.000Z',
+          updatedAt: `2026-05-28T11:59:${String(index).padStart(2, '0')}.000Z`,
+          disconnectedAt: `2026-05-28T11:59:${String(index).padStart(2, '0')}.000Z`,
+        });
+      }
+      insertDashboardSession(db, {
+        sessionUid: 'vc_sess_active_after_ghosts',
+        displayName: 'Active after ghosts',
+        clientType: 'codex',
+        status: 'working',
+        sessionToken: 'active-token-secret',
+        lastHeartbeatAt: '2026-05-28T11:59:30.000Z',
+        createdAt: '2026-05-28T10:00:00.000Z',
+        updatedAt: '2026-05-28T10:00:00.000Z',
+      });
+      db.close();
+
+      const snapshot = getVaultCollabDashboardSnapshot(config, {
+        now: new Date('2026-05-28T12:00:00.000Z'),
+        sessionLimit: 1,
+        sessionStatuses: ['working'],
+        closedSessionVisibilityMs: 60 * 60 * 1000,
+      });
+
+      expect(snapshot.sessions.map((session) => session.sessionUid)).toEqual(['vc_sess_active_after_ghosts']);
+    });
+  });
 });
 
 function createVaultCollabFixtureDatabase(databasePath: string): Database.Database {
@@ -1532,6 +1715,133 @@ function createLaunchRequestTable(db: Database.Database): void {
       completed_at TEXT
     );
   `);
+}
+
+function addPhaseSevenSessionColumns(db: Database.Database): void {
+  db.exec(`
+    ALTER TABLE sessions ADD COLUMN adapter_type TEXT NOT NULL DEFAULT 'native';
+    ALTER TABLE sessions ADD COLUMN last_snapshot_json TEXT;
+    ALTER TABLE sessions ADD COLUMN snapshot_reported_at TEXT;
+  `);
+}
+
+function insertDashboardSession(
+  db: Database.Database,
+  input: {
+    sessionUid: string;
+    displayName: string;
+    clientType: string;
+    status: string;
+    sessionToken: string;
+    project?: string;
+    workspacePath?: string;
+    statusDetail?: string | null;
+    capabilities?: Record<string, unknown>;
+    currentHandoffUid?: string | null;
+    lastHeartbeatAt: string;
+    createdAt: string;
+    updatedAt: string;
+    disconnectedAt?: string | null;
+  },
+): void {
+  db.prepare(`
+    INSERT INTO sessions (
+      session_uid,
+      display_name,
+      client_type,
+      project,
+      workspace_path,
+      status,
+      status_detail,
+      capabilities_json,
+      current_handoff_uid,
+      session_token,
+      last_heartbeat_at,
+      created_at,
+      updated_at,
+      disconnected_at
+    )
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    input.sessionUid,
+    input.displayName,
+    input.clientType,
+    input.project ?? 'the-vault',
+    input.workspacePath ?? 'C:\\workspace\\the-vault',
+    input.status,
+    input.statusDetail ?? null,
+    JSON.stringify(input.capabilities ?? {}),
+    input.currentHandoffUid ?? null,
+    input.sessionToken,
+    input.lastHeartbeatAt,
+    input.createdAt,
+    input.updatedAt,
+    input.disconnectedAt ?? null,
+  );
+}
+
+function phaseSevenSessionSnapshot(
+  overrides: Partial<Record<string, unknown>> & { sessionUid: string },
+): Record<string, unknown> {
+  const { sessionUid, ...rest } = overrides;
+
+  return {
+    schemaVersion: 'vault_collab.session.v1',
+    adapterId: 'adapter-main',
+    sessionUid,
+    project: 'the-vault',
+    workspace: {
+      path: 'C:\\workspace\\the-vault',
+      projectKey: 'the-vault',
+    },
+    state: 'idle',
+    context: {
+      model: 'gpt-5-codex',
+      provider: 'openai',
+      tokensUsed: 86000,
+      tokensRemaining: 14000,
+      compactionRisk: 'high',
+    },
+    active_handoffs: [
+      {
+        handoffUid: 'vc_handoff_phase7',
+        status: 'in_progress',
+        progressNote: 'Implementing HUD',
+        claimedAt: '2026-05-28T11:40:00.000Z',
+      },
+    ],
+    progress: {
+      currentTask: 'Implement dashboard HUD',
+      percentComplete: 42,
+      blockers: ['Waiting on QA'],
+    },
+    cost: {
+      estimatedUSD: 1.25,
+      tokensTotal: 100000,
+    },
+    risk: {
+      level: 'critical',
+      reasons: ['Context nearly full'],
+    },
+    tool_grants: [
+      {
+        toolName: 'shell_command',
+        scope: 'workspace_write',
+        grantedAt: '2026-05-28T11:45:00.000Z',
+      },
+    ],
+    capabilities: {
+      canMutateHandoffs: false,
+      canPublishHandoffs: true,
+      canSendMessages: true,
+      adapterType: 'adapter_backed',
+    },
+    sync_cursor: {
+      lastEventId: 123,
+      lastHeartbeatAt: '2026-05-28T11:59:00.000Z',
+    },
+    ...rest,
+  };
 }
 
 function insertLaunchRequest(

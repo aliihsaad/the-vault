@@ -213,9 +213,13 @@ export type {
   VaultCollabRoleProfileSkillsSnapshot,
   VaultCollabRoleProfileSnapshot,
   VaultCollabRuntimeConfig,
+  VaultCollabSessionAdapterType,
   VaultCollabSessionConnectionState,
   VaultCollabSessionSnapshot,
+  VaultCollabSessionSnapshotV1,
   VaultCollabSessionStatus,
+  VaultCollabSnapshotRiskLevel,
+  VaultCollabSnapshotState,
   VaultCollabActionInvocation,
   VaultCollabActionResult,
 } from './types/vault-collab.js';

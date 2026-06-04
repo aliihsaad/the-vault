@@ -2,7 +2,11 @@ import { useEffect, useMemo, useState } from 'react';
 import { AlertTriangle, RefreshCw } from 'lucide-react';
 
 import {
+  ACTIVE_OFFICE_STATUSES as ACTIVE_OFFICE_STATUS_VALUES,
   buildVaultCollabDashboardViewModel,
+  getVaultCollabAgentsTabCount,
+  getVaultCollabOfficeSessionStatuses,
+  INACTIVE_OFFICE_STATUSES as INACTIVE_OFFICE_STATUS_VALUES,
   type VaultCollabPolicyPackRow,
 } from '../vault-collab-view-model.js';
 import { EventFeed } from './vault-collab/EventFeed.js';
@@ -15,6 +19,9 @@ import { WorkBoard } from './vault-collab/WorkBoard.js';
 
 type VaultCollabSnapshot = NonNullable<Awaited<ReturnType<typeof window.vaultAPI.getVaultCollabDashboardSnapshot>>['data']>;
 type VaultCollabEventTypes = NonNullable<Awaited<ReturnType<typeof window.vaultAPI.listVaultCollabEventTypes>>['data']>;
+
+export const ACTIVE_OFFICE_STATUSES = ACTIVE_OFFICE_STATUS_VALUES;
+export const INACTIVE_OFFICE_STATUSES = INACTIVE_OFFICE_STATUS_VALUES;
 
 interface VaultCollabViewProps {
   vaultStatus: VaultStatus | null;
@@ -42,6 +49,7 @@ export function VaultCollabView({ vaultStatus }: VaultCollabViewProps) {
   const [roleProfileDetailOpen, setRoleProfileDetailOpen] = useState(false);
   const [selectedEventTypePrefix, setSelectedEventTypePrefix] = useState('session.');
   const [activeCockpitTab, setActiveCockpitTab] = useState<VaultCollabCockpitTabId>('work');
+  const [showInactiveSessions, setShowInactiveSessions] = useState(false);
   const [policyBusyUid, setPolicyBusyUid] = useState<string | null>(null);
   const [lastLoadedAt, setLastLoadedAt] = useState<Date | null>(null);
   const [loading, setLoading] = useState(true);
@@ -56,7 +64,7 @@ export function VaultCollabView({ vaultStatus }: VaultCollabViewProps) {
     void loadDashboard();
     const refresh = window.setInterval(() => void loadDashboard(true), 15000);
     return () => window.clearInterval(refresh);
-  }, []);
+  }, [showInactiveSessions]);
 
   useEffect(() => {
     if (!activeHandoffUid) {
@@ -97,9 +105,10 @@ export function VaultCollabView({ vaultStatus }: VaultCollabViewProps) {
         eventTypePrefix: selectedEventTypePrefix,
         eventTypes,
         selectedRoleProfileId: activeRoleProfileId,
+        showInactiveSessions,
       })
       : null,
-    [activeHandoffUid, activeRoleProfileId, approvedLaunchCommands, dashboardSessionUid, eventTypes, lastLoadedAt, selectedEventTypePrefix, snapshot],
+    [activeHandoffUid, activeRoleProfileId, approvedLaunchCommands, dashboardSessionUid, eventTypes, lastLoadedAt, selectedEventTypePrefix, showInactiveSessions, snapshot],
   );
 
   const requestAgentProjectOptions = useMemo<RequestAgentProjectOption[]>(() => {
@@ -173,7 +182,8 @@ export function VaultCollabView({ vaultStatus }: VaultCollabViewProps) {
           eventLimit: 48,
           handoffLimit: 40,
           launchRequestLimit: 24,
-          sessionLimit: 32,
+          sessionLimit: showInactiveSessions ? 100 : 32,
+          sessionStatuses: getVaultCollabOfficeSessionStatuses(showInactiveSessions),
         }),
         window.vaultAPI.listProjectWorkspaces(),
         window.vaultAPI.listVaultCollabEventTypes(),
@@ -243,7 +253,7 @@ export function VaultCollabView({ vaultStatus }: VaultCollabViewProps) {
     {
       id: 'agents' as const,
       label: 'Agents',
-      count: model.cockpit.officeGroups.reduce((total, group) => total + group.agents.length, 0),
+      count: getVaultCollabAgentsTabCount(model.cockpit.officeGroups),
     },
     {
       id: 'events' as const,
@@ -364,8 +374,11 @@ export function VaultCollabView({ vaultStatus }: VaultCollabViewProps) {
                   groups={model.cockpit.officeGroups}
                   selectedRoleProfile={roleProfileDetailOpen ? model.cockpit.selectedRoleProfile : null}
                   selectedRoleProfileId={activeRoleProfileId}
+                  showInactiveSessions={showInactiveSessions}
                   onSelectRoleProfile={openRoleProfileDetail}
                   onCloseRoleProfile={closeRoleProfileDetail}
+                  onShowInactiveSessionsChange={setShowInactiveSessions}
+                  onSelectHandoff={openHandoffDetail}
                 />
               ) : null}
               {activeCockpitTab === 'work' ? (

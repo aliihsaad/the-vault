@@ -23,9 +23,13 @@ import type {
   VaultCollabRoleProfileAliasSnapshot,
   VaultCollabRoleProfileSnapshot,
   VaultCollabRuntimeConfig,
+  VaultCollabSessionAdapterType,
   VaultCollabSessionConnectionState,
+  VaultCollabSessionSnapshotV1,
   VaultCollabSessionSnapshot,
   VaultCollabSessionStatus,
+  VaultCollabSnapshotRiskLevel,
+  VaultCollabSnapshotState,
 } from '../types/vault-collab.js';
 
 const DEFAULT_SESSION_LIMIT = 12;
@@ -70,6 +74,9 @@ interface SessionRow {
   delivery_wakeable: 0 | 1;
   delivery_last_ack_event_id: number | null;
   delivery_last_ack_at: string | null;
+  adapter_type: string | null;
+  last_snapshot_json: string | null;
+  snapshot_reported_at: string | null;
   last_heartbeat_at: string;
   created_at: string;
   updated_at: string;
@@ -240,6 +247,7 @@ export function getVaultCollabDashboardSnapshot(
     const staleSessionAfterMs = Math.max(1, options.staleSessionAfterMs ?? DEFAULT_STALE_SESSION_AFTER_MS);
     const staleSessionVisibilityMs = Math.max(staleSessionAfterMs, options.staleSessionVisibilityMs ?? DEFAULT_STALE_SESSION_VISIBILITY_MS);
     const closedSessionVisibilityMs = Math.max(0, options.closedSessionVisibilityMs ?? DEFAULT_CLOSED_SESSION_VISIBILITY_MS);
+    const sessionStatuses = normalizeSessionStatuses(options);
     const sessions = listSessions(
       db,
       clampLimit(options.sessionLimit, DEFAULT_SESSION_LIMIT),
@@ -247,6 +255,7 @@ export function getVaultCollabDashboardSnapshot(
       staleSessionAfterMs,
       staleSessionVisibilityMs,
       closedSessionVisibilityMs,
+      sessionStatuses,
     );
     const handoffs = listOpenHandoffs(db, clampLimit(options.handoffLimit, DEFAULT_HANDOFF_LIMIT));
     const resolvedHandoffs = listRecentResolvedHandoffs(db, 10);
@@ -300,6 +309,7 @@ function listSessions(
   staleSessionAfterMs: number,
   staleSessionVisibilityMs: number,
   closedSessionVisibilityMs: number,
+  sessionStatuses: VaultCollabSessionStatus[] | null,
 ): VaultCollabSessionSnapshot[] {
   const scanLimit = Math.min(MAX_SESSION_SCAN_LIMIT, Math.max(limit, limit * 8));
   const hasSessionRole = columnExists(db, 'sessions', 'role');
@@ -314,6 +324,9 @@ function listSessions(
   const deliveryWakeableSelect = columnExists(db, 'sessions', 'delivery_wakeable') ? 'sessions.delivery_wakeable' : '0';
   const deliveryLastAckEventIdSelect = columnExists(db, 'sessions', 'delivery_last_ack_event_id') ? 'sessions.delivery_last_ack_event_id' : 'NULL';
   const deliveryLastAckAtSelect = columnExists(db, 'sessions', 'delivery_last_ack_at') ? 'sessions.delivery_last_ack_at' : 'NULL';
+  const adapterTypeSelect = columnExists(db, 'sessions', 'adapter_type') ? 'sessions.adapter_type' : "'native'";
+  const lastSnapshotSelect = columnExists(db, 'sessions', 'last_snapshot_json') ? 'sessions.last_snapshot_json' : 'NULL';
+  const snapshotReportedAtSelect = columnExists(db, 'sessions', 'snapshot_reported_at') ? 'sessions.snapshot_reported_at' : 'NULL';
   const agentJoin = hasAgentProfiles
     ? 'LEFT JOIN agent_profiles ON agent_profiles.agent_uid = sessions.agent_uid'
     : '';
@@ -326,9 +339,13 @@ function listSessions(
     ? 'COALESCE(sessions.role_profile_id, agent_profiles.role_profile_id)'
     : hasSessionRoleProfileId
       ? 'sessions.role_profile_id'
-      : hasAgentRoleProfileId
+        : hasAgentRoleProfileId
         ? 'agent_profiles.role_profile_id'
         : 'NULL';
+  const sessionStatusParams = sessionStatuses?.length ? sessionStatuses : [];
+  const statusWhere = sessionStatusParams.length > 0
+    ? `WHERE sessions.status IN (${sessionStatusParams.map(() => '?').join(', ')})`
+    : '';
 
   const rows = db.prepare(`
     SELECT
@@ -351,15 +368,19 @@ function listSessions(
       ${deliveryWakeableSelect} AS delivery_wakeable,
       ${deliveryLastAckEventIdSelect} AS delivery_last_ack_event_id,
       ${deliveryLastAckAtSelect} AS delivery_last_ack_at,
+      ${adapterTypeSelect} AS adapter_type,
+      ${lastSnapshotSelect} AS last_snapshot_json,
+      ${snapshotReportedAtSelect} AS snapshot_reported_at,
       sessions.last_heartbeat_at,
       sessions.created_at,
       sessions.updated_at,
       sessions.disconnected_at
     FROM sessions
     ${agentJoin}
+    ${statusWhere}
     ORDER BY sessions.updated_at DESC, sessions.session_uid ASC
     LIMIT ?
-  `).all(scanLimit) as SessionRow[];
+  `).all(...sessionStatusParams, scanLimit) as SessionRow[];
 
   return rows
     .map((row) => mapSessionRow(row, now, staleSessionAfterMs))
@@ -727,6 +748,9 @@ function mapSessionRow(row: SessionRow, now: Date, staleSessionAfterMs: number):
       lastAckEventId: row.delivery_last_ack_event_id,
       lastAckAt: row.delivery_last_ack_at,
     },
+    adapterType: parseSessionAdapterType(row.adapter_type),
+    lastSnapshot: parseSessionSnapshot(row.last_snapshot_json),
+    snapshotReportedAt: row.snapshot_reported_at,
     lastHeartbeatAt: row.last_heartbeat_at,
     heartbeatAgeMs,
     createdAt: row.created_at,
@@ -1230,6 +1254,140 @@ function parseJsonRecord(value: string): VaultCollabJsonRecord {
   }
 }
 
+function parseSessionSnapshot(value: string | null): VaultCollabSessionSnapshotV1 | null {
+  if (!value) {
+    return null;
+  }
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(value) as unknown;
+  } catch {
+    return null;
+  }
+
+  if (!isJsonRecord(parsed) || parsed.schemaVersion !== 'vault_collab.session.v1') {
+    return null;
+  }
+
+  const workspace = isJsonRecord(parsed.workspace) ? parsed.workspace : {};
+  const context = isJsonRecord(parsed.context) ? parsed.context : {};
+  const progress = isJsonRecord(parsed.progress) ? parsed.progress : {};
+  const cost = isJsonRecord(parsed.cost) ? parsed.cost : {};
+  const risk = isJsonRecord(parsed.risk) ? parsed.risk : {};
+  const capabilities = isJsonRecord(parsed.capabilities) ? parsed.capabilities : {};
+  const syncCursor = isJsonRecord(parsed.sync_cursor) ? parsed.sync_cursor : {};
+
+  return {
+    schemaVersion: 'vault_collab.session.v1',
+    adapterId: getStringValue(parsed.adapterId) ?? '',
+    sessionUid: getStringValue(parsed.sessionUid) ?? '',
+    project: getStringValue(parsed.project) ?? '',
+    workspace: {
+      path: getStringValue(workspace.path) ?? '',
+      projectKey: getNullableStringValue(workspace.projectKey),
+    },
+    state: parseSnapshotState(parsed.state),
+    context: {
+      model: getNullableStringValue(context.model),
+      provider: getNullableStringValue(context.provider),
+      tokensUsed: getNullableFiniteNumber(context.tokensUsed),
+      tokensRemaining: getNullableFiniteNumber(context.tokensRemaining),
+      compactionRisk: parseSnapshotRiskLevel(context.compactionRisk),
+    },
+    active_handoffs: parseSnapshotHandoffs(parsed.active_handoffs),
+    progress: {
+      currentTask: getNullableStringValue(progress.currentTask),
+      percentComplete: getNullableFiniteNumber(progress.percentComplete),
+      blockers: parseStringUnknownArray(progress.blockers),
+    },
+    cost: {
+      estimatedUSD: getNullableFiniteNumber(cost.estimatedUSD),
+      tokensTotal: getNullableFiniteNumber(cost.tokensTotal),
+    },
+    risk: {
+      level: parseSnapshotRiskLevel(risk.level),
+      reasons: parseStringUnknownArray(risk.reasons),
+    },
+    tool_grants: parseSnapshotToolGrants(parsed.tool_grants),
+    capabilities: {
+      canMutateHandoffs: capabilities.canMutateHandoffs === true,
+      canPublishHandoffs: capabilities.canPublishHandoffs === true,
+      canSendMessages: capabilities.canSendMessages === true,
+      adapterType: parseSessionAdapterType(getStringValue(capabilities.adapterType)),
+    },
+    sync_cursor: {
+      lastEventId: getNullableFiniteNumber(syncCursor.lastEventId),
+      lastHeartbeatAt: getNullableStringValue(syncCursor.lastHeartbeatAt),
+    },
+  };
+}
+
+function parseSnapshotHandoffs(value: unknown): VaultCollabSessionSnapshotV1['active_handoffs'] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value.flatMap((entry) => {
+    if (!isJsonRecord(entry)) {
+      return [];
+    }
+
+    const handoffUid = getStringValue(entry.handoffUid);
+    if (!handoffUid) {
+      return [];
+    }
+
+    return [{
+      handoffUid,
+      status: parseSnapshotHandoffStatus(entry.status),
+      progressNote: getNullableStringValue(entry.progressNote),
+      claimedAt: getNullableStringValue(entry.claimedAt),
+    }];
+  });
+}
+
+function parseSnapshotToolGrants(value: unknown): VaultCollabSessionSnapshotV1['tool_grants'] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value.flatMap((entry) => {
+    if (!isJsonRecord(entry)) {
+      return [];
+    }
+
+    const toolName = getStringValue(entry.toolName);
+    if (!toolName) {
+      return [];
+    }
+
+    return [{
+      toolName,
+      scope: getStringValue(entry.scope) ?? 'unknown',
+      grantedAt: getNullableStringValue(entry.grantedAt),
+    }];
+  });
+}
+
+function parseStringUnknownArray(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.filter((entry): entry is string => typeof entry === 'string' && entry.trim().length > 0)
+    : [];
+}
+
+function getStringValue(value: unknown): string | null {
+  return typeof value === 'string' && value.trim().length > 0 ? value.trim() : null;
+}
+
+function getNullableStringValue(value: unknown): string | null {
+  return typeof value === 'string' && value.trim().length > 0 ? value.trim() : null;
+}
+
+function getNullableFiniteNumber(value: unknown): number | null {
+  return typeof value === 'number' && Number.isFinite(value) ? value : null;
+}
+
 function parseStringArray(value: string): string[] {
   try {
     const parsed = JSON.parse(value) as unknown;
@@ -1283,6 +1441,12 @@ function parseSessionDeliveryMode(value: string): VaultCollabSessionSnapshot['de
     : 'manual_poll';
 }
 
+function parseSessionAdapterType(value: string | null): VaultCollabSessionAdapterType {
+  return value && isAllowed(value, ['native', 'adapter_backed', 'instruction_backed'])
+    ? value
+    : 'native';
+}
+
 function parseClientType(value: string): VaultCollabClientType {
   return isAllowed(value, ['codex', 'claude-code', 'claude-desktop', 'octogent', 'gemini', 'opencode', 'other'])
     ? value
@@ -1295,10 +1459,30 @@ function parseSessionStatus(value: string): VaultCollabSessionStatus {
     : 'disconnected';
 }
 
+function parseSnapshotState(value: unknown): VaultCollabSnapshotState {
+  return typeof value === 'string'
+    && isAllowed(value, ['idle', 'working', 'blocked', 'awaiting_user', 'awaiting_verification', 'complete', 'disconnected', 'unknown'])
+    ? value
+    : 'unknown';
+}
+
+function parseSnapshotRiskLevel(value: unknown): VaultCollabSnapshotRiskLevel {
+  return typeof value === 'string' && isAllowed(value, ['low', 'medium', 'high', 'critical', 'unknown'])
+    ? value
+    : 'unknown';
+}
+
 function parseHandoffStatus(value: string): VaultCollabHandoffStatus {
   return isAllowed(value, ['available', 'claimed', 'in_progress', 'blocked', 'awaiting_user', 'verification_needed', 'resolved', 'abandoned', 'stale'])
     ? value
     : 'stale';
+}
+
+function parseSnapshotHandoffStatus(value: unknown): VaultCollabHandoffStatus | 'unknown' {
+  return typeof value === 'string'
+    && isAllowed(value, ['available', 'claimed', 'in_progress', 'blocked', 'awaiting_user', 'verification_needed', 'resolved', 'abandoned', 'stale', 'unknown'])
+    ? value
+    : 'unknown';
 }
 
 function parseHandoffPriority(value: string): VaultCollabHandoffPriority {
@@ -1327,6 +1511,30 @@ function parseLaunchRequestStatus(value: string): VaultCollabLaunchRequestStatus
 
 function isAllowed<T extends string>(value: string, allowed: readonly T[]): value is T {
   return allowed.includes(value as T);
+}
+
+function isJsonRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+}
+
+function normalizeSessionStatuses(options: VaultCollabDashboardOptions): VaultCollabSessionStatus[] | null {
+  const explicitStatuses = options.sessionStatuses?.filter((status): status is VaultCollabSessionStatus => (
+    isAllowed(status, ['idle', 'working', 'blocked', 'awaiting_user', 'awaiting_verification', 'complete', 'disconnected'])
+  ));
+
+  if (explicitStatuses && explicitStatuses.length > 0) {
+    return Array.from(new Set(explicitStatuses));
+  }
+
+  if (options.includeInactiveSessions === true) {
+    return ['idle', 'working', 'blocked', 'awaiting_user', 'awaiting_verification', 'complete', 'disconnected'];
+  }
+
+  if (options.includeInactiveSessions === false) {
+    return ['idle', 'working', 'blocked', 'awaiting_user', 'awaiting_verification'];
+  }
+
+  return null;
 }
 
 function tableExists(db: Database.Database, table: string): boolean {
