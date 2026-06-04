@@ -25,6 +25,9 @@ You have access to these Vault MCP tools:
 | `vault_promote_memory` | When a memory item is clearly important long-term |
 | `vault_archive_memory` | When an item is no longer relevant |
 | `vault_resolve_loop` | When the user confirms a surfaced open loop is done — closes it atomically with an outcome |
+| `vault_list_open_loops` | When you need an exhaustive, paginated audit of every active explicit open loop — not just the ranked few in recall |
+| `vault_count_open_loops` | When you need an exact count of open loops, optionally grouped by project |
+| `vault_resolve_loop_batch` | When closing many confirmed open loops at once (partial success; up to 100 per call) |
 | `vault_suggest_save_path` | When you need to know where a file would be stored |
 
 You may also have Vault task tools available through MCP:
@@ -168,6 +171,8 @@ If a project's graph is missing or stale (check `vault_graphify_status`), fall b
 ## Closing Open Loops on Recall
 
 Every recall response includes an `open_loops` field — active memory items with non-empty next steps or unresolved debugging routines, sorted high → low by derived priority. They represent unfinished work the user has implicitly committed to.
+
+> **`open_loops` here is ranked and non-exhaustive** — it is capped at the most urgent few (recall also returns an `open_loops_note` saying so). It is the right surface for the per-recall close-the-loop prompt below, but **not** for audits or bulk cleanup. When you need every open loop, use `vault_list_open_loops` (exhaustive, paginated) or `vault_count_open_loops`, and close many at once with `vault_resolve_loop_batch`.
 
 **When `open_loops` is non-empty, surface them to the user before answering the actual query.** This is non-negotiable — the loops only close if you bring them back into view.
 

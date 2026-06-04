@@ -22,6 +22,9 @@ Same tools as Claude (via MCP):
 - `vault_promote_memory` — Mark important items
 - `vault_archive_memory` — Archive outdated items
 - `vault_resolve_loop` — Atomically close a surfaced open loop with an outcome (`fixed | wont_fix | obsolete | duplicate`) when the user confirms it's done
+- `vault_list_open_loops` — Exhaustive, paginated audit of every active explicit open loop (use instead of recall's ranked `open_loops` for bulk work)
+- `vault_count_open_loops` — Exact count of open loops, optionally grouped by project
+- `vault_resolve_loop_batch` — Close many confirmed open loops in one call (partial success; up to 100)
 
 You may also have task delegation tools through Vault MCP:
 - `vault_create_task` — Queue delegated work in Vault
@@ -129,6 +132,8 @@ Use **`vault_recall_with_graph_context`** when planning a code change — it ret
 ## Closing Open Loops on Recall
 
 Every recall response includes an `open_loops` field — active items with non-empty next steps or unresolved debugging routines. They represent unfinished work the user implicitly committed to.
+
+> **`open_loops` here is ranked and non-exhaustive** — it is capped at the most urgent few (recall also returns an `open_loops_note` saying so). Use it for the per-recall close-the-loop prompt below, but for audits or bulk cleanup use `vault_list_open_loops` / `vault_count_open_loops` (exhaustive) and `vault_resolve_loop_batch`.
 
 **When `open_loops` is non-empty, surface them to the user before answering.** Don't bury them in the response — they only close if you bring them back into view.
 
