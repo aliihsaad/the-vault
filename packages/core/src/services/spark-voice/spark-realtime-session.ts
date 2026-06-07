@@ -115,7 +115,11 @@ export function createSparkRealtimeSession(deps: SparkRealtimeSessionDeps): Spar
     if (stopped) {
       return;
     }
-    openSocket(connectUrl);
+    try {
+      openSocket(connectUrl);
+    } catch (error) {
+      emitError(error instanceof Error ? error.message : 'Failed to open realtime socket.');
+    }
   }
 
   async function mintSession(): Promise<string> {

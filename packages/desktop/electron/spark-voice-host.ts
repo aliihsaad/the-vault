@@ -13,6 +13,7 @@
  * stays unit-testable and lives in the tested core runtime.
  */
 
+import WebSocket from 'ws';
 import {
   buildSparkHostTools,
   buildSparkVoiceReadiness,
@@ -177,7 +178,10 @@ export function createNodeSparkFetch(): SparkFetch {
   };
 }
 
-/** Adapt Node's global WebSocket to the core `SparkRealtimeSocket` contract. */
+/**
+ * Adapt the Node `ws` WebSocket to the core `SparkRealtimeSocket` contract.
+ * Electron's main process (Node 20) has no global WebSocket, so we use `ws`.
+ */
 export function createNodeRealtimeSocket(url: string): SparkRealtimeSocket {
   const ws = new WebSocket(url);
   const socket: SparkRealtimeSocket = {
@@ -188,9 +192,10 @@ export function createNodeRealtimeSocket(url: string): SparkRealtimeSocket {
     send: (data: string) => ws.send(data),
     close: () => ws.close(),
   };
-  ws.addEventListener('open', () => socket.onopen?.());
-  ws.addEventListener('message', (event: MessageEvent) => socket.onmessage?.(event.data));
-  ws.addEventListener('error', (event) => socket.onerror?.(event));
-  ws.addEventListener('close', () => socket.onclose?.());
+  ws.on('open', () => socket.onopen?.());
+  // `ws` delivers text frames as a Buffer; the core summarizer stringifies it.
+  ws.on('message', (data: unknown) => socket.onmessage?.(data));
+  ws.on('error', (err) => socket.onerror?.(err));
+  ws.on('close', () => socket.onclose?.());
   return socket;
 }

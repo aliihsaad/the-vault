@@ -60,7 +60,7 @@ export default defineConfig({
         vite: {
           build: {
             rollupOptions: {
-              external: ['@the-vault/core', 'better-sqlite3', 'node-pty']
+              external: ['@the-vault/core', 'better-sqlite3', 'node-pty', 'ws']
             }
           }
         }
