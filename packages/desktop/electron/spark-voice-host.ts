@@ -1,20 +1,27 @@
 /**
- * Spark voice host (S3) — main-process glue that owns the live `VoiceSession`
- * lifecycle and bridges its event stream to the renderer.
+ * Spark voice host (S3 + realtime). Main-process glue that owns the live voice
+ * session and bridges its event stream to the renderer.
  *
- * It deliberately takes no Electron imports: the window-sending side effects
- * (event push, audio play/stop) are injected, so this module stays unit-testable
- * and the heavy logic lives in the tested core voice runtime. The Electron
- * `main.ts` wires the real `win.webContents.send`, the global `fetch`, the S2
- * credential store, and Vault recall into these injection points.
+ * Two pipelines:
+ *  - realtime (preferred when FreeLLMAPI / a Realtime-role provider is configured):
+ *    a Gemini-Live WebSocket where the server does VAD/STT/LLM/TTS. The renderer
+ *    streams raw 16kHz PCM up; 24kHz PCM comes back for playback.
+ *  - classic: STT→LLM(+tools)→TTS over HTTP with renderer MediaRecorder utterances.
+ *
+ * It takes no Electron imports: window-sending side effects (event push, audio
+ * play/stop, PCM play) and the socket factory are injected, so the heavy logic
+ * stays unit-testable and lives in the tested core runtime.
  */
 
 import {
   buildSparkHostTools,
   buildSparkVoiceReadiness,
+  createSparkRealtimeRuntimeSession,
   createSparkVoiceRuntimeSession,
   type SparkFetch,
   type SparkProviderCredentialStore,
+  type SparkRealtimeSession,
+  type SparkRealtimeSocket,
   type SparkVoiceEvent,
   type SparkVoiceReadiness,
   type SparkVoiceSession,
@@ -23,12 +30,16 @@ import {
 
 export interface SparkVoiceHostDeps {
   credentials: SparkProviderCredentialStore;
-  /** Node global fetch, adapted to the SparkFetch shape. */
+  /** Node global fetch, adapted to the SparkFetch shape (used for HTTP + realtime mint). */
   fetchImpl: SparkFetch;
+  /** Open a realtime WebSocket to the minted connect URL. */
+  createRealtimeSocket: (url: string) => SparkRealtimeSocket;
   /** Push a voice event to the renderer (win.webContents.send). */
   sendEvent: (event: SparkVoiceEvent) => void;
-  /** Hand synthesized audio to the renderer for playback. */
+  /** Hand synthesized (classic) audio bytes to the renderer for playback. */
   playAudio: (audio: Uint8Array, mimeType: string) => void;
+  /** Hand a base64 PCM chunk (realtime) to the renderer for streamed playback. */
+  playPcm: (base64Pcm: string, mimeType: string) => void;
   /** Tell the renderer to stop any current playback (barge-in / stop). */
   stopAudio: () => void;
   /** Read-only Vault recall used both as fenced context and the recall tool. */
@@ -45,7 +56,10 @@ export interface SparkVoiceHost {
   start: () => SparkVoiceReadiness;
   stop: () => void;
   sendText: (text: string) => Promise<void>;
+  /** Classic pipeline: a complete recorded utterance (webm/opus) for STT. */
   pushAudioUtterance: (audio: SparkVoiceUtteranceInput) => Promise<void>;
+  /** Realtime pipeline: a streamed base64 PCM chunk (16kHz mono). */
+  pushPcmChunk: (base64Pcm: string) => void;
   pushAudioLevel: (level: number, ts?: number) => void;
   notifyPlaybackEnded: () => void;
   getStatus: () => SparkVoiceStatus;
@@ -53,7 +67,8 @@ export interface SparkVoiceHost {
 }
 
 export function createSparkVoiceHost(deps: SparkVoiceHostDeps): SparkVoiceHost {
-  let session: SparkVoiceSession | null = null;
+  let classic: SparkVoiceSession | null = null;
+  let realtime: SparkRealtimeSession | null = null;
 
   function getReadiness(): SparkVoiceReadiness {
     return buildSparkVoiceReadiness(deps.credentials);
@@ -64,12 +79,38 @@ export function createSparkVoiceHost(deps: SparkVoiceHostDeps): SparkVoiceHost {
     if (!readiness.ready) {
       deps.sendEvent({
         kind: 'error',
-        message: `Voice runtime not ready — configure a provider for: ${readiness.missing.join(', ')}.`,
+        message: `Voice runtime not ready — configure a provider for: ${readiness.missing.join(', ') || 'a Realtime or STT/LLM/TTS provider'}.`,
         ts: Date.now(),
       });
       return readiness;
     }
-    session = createSparkVoiceRuntimeSession({
+
+    if (readiness.mode === 'realtime') {
+      realtime = createSparkRealtimeRuntimeSession({
+        credentials: deps.credentials,
+        fetchImpl: deps.fetchImpl,
+        createSocket: deps.createRealtimeSocket,
+        emit: deps.sendEvent,
+        playAudio: (base64, mimeType) => deps.playPcm(base64, mimeType),
+        dispatchTool: async (name, args) => {
+          // Only the read-only recall tool is exposed to realtime for now.
+          if (name === 'recall_memory') {
+            try {
+              const query = typeof args === 'string' ? (JSON.parse(args)?.query ?? '') : '';
+              const value = await deps.recall(String(query));
+              return { ok: true, value: value ?? 'No relevant memories.' };
+            } catch (error) {
+              return { ok: false, error: error instanceof Error ? error.message : 'Recall failed.' };
+            }
+          }
+          return { ok: false, error: `Unknown tool: ${name}` };
+        },
+      });
+      void realtime.start();
+      return readiness;
+    }
+
+    classic = createSparkVoiceRuntimeSession({
       credentials: deps.credentials,
       fetchImpl: deps.fetchImpl,
       audioOutput: {
@@ -80,13 +121,15 @@ export function createSparkVoiceHost(deps: SparkVoiceHostDeps): SparkVoiceHost {
       recallContext: deps.recall,
       tools: buildSparkHostTools({ recallMemory: deps.recall }),
     });
-    session.start();
+    classic.start();
     return readiness;
   }
 
   function stop(): void {
-    session?.stop();
-    session = null;
+    classic?.stop();
+    classic = null;
+    realtime?.stop();
+    realtime = null;
   }
 
   return {
@@ -94,19 +137,22 @@ export function createSparkVoiceHost(deps: SparkVoiceHostDeps): SparkVoiceHost {
     start,
     stop,
     async sendText(text) {
-      await session?.sendText(text);
+      await classic?.sendText(text);
     },
     async pushAudioUtterance(audio) {
-      await session?.pushAudioUtterance({ data: audio.data, mimeType: audio.mimeType });
+      await classic?.pushAudioUtterance({ data: audio.data, mimeType: audio.mimeType });
+    },
+    pushPcmChunk(base64Pcm) {
+      realtime?.sendAudioChunk(base64Pcm);
     },
     pushAudioLevel(level, ts) {
-      session?.pushAudioLevel(level, ts);
+      classic?.pushAudioLevel(level, ts);
     },
     notifyPlaybackEnded() {
-      session?.notifyPlaybackEnded();
+      classic?.notifyPlaybackEnded();
     },
-    getStatus: () => session?.getStatus() ?? 'idle',
-    isActive: () => session !== null,
+    getStatus: () => realtime?.getStatus() ?? classic?.getStatus() ?? 'idle',
+    isActive: () => realtime !== null || classic !== null,
   };
 }
 
@@ -129,4 +175,22 @@ export function createNodeSparkFetch(): SparkFetch {
       body: response.body,
     };
   };
+}
+
+/** Adapt Node's global WebSocket to the core `SparkRealtimeSocket` contract. */
+export function createNodeRealtimeSocket(url: string): SparkRealtimeSocket {
+  const ws = new WebSocket(url);
+  const socket: SparkRealtimeSocket = {
+    onopen: null,
+    onmessage: null,
+    onerror: null,
+    onclose: null,
+    send: (data: string) => ws.send(data),
+    close: () => ws.close(),
+  };
+  ws.addEventListener('open', () => socket.onopen?.());
+  ws.addEventListener('message', (event: MessageEvent) => socket.onmessage?.(event.data));
+  ws.addEventListener('error', (event) => socket.onerror?.(event));
+  ws.addEventListener('close', () => socket.onclose?.());
+  return socket;
 }

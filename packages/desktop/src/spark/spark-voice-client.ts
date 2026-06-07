@@ -16,6 +16,7 @@ import {
   applySparkVoiceEvent,
   createEmptySparkSessionFrame,
 } from './spark-session-frame-renderer.js';
+import { createBrowserSparkPcmPlayer, type SparkPcmPlayer } from './spark-pcm-player.js';
 
 /** Plays synthesized audio bytes; calls `onEnded` when playback finishes. */
 export interface SparkAudioPlayer {
@@ -31,6 +32,8 @@ export interface SparkVoicePlaybackState {
 export interface SparkVoiceClientDeps {
   api: Window['sparkVoiceApi'];
   player?: SparkAudioPlayer;
+  /** Streamed PCM player for the realtime pipeline (24kHz chunks). */
+  pcmPlayer?: SparkPcmPlayer;
 }
 
 export type SparkVoiceFrameListener = (frame: SparkSessionFrame, lastEvent: SparkVoiceEvent) => void;
@@ -52,6 +55,7 @@ export interface SparkVoiceClient {
 export function createSparkVoiceClient(deps: SparkVoiceClientDeps): SparkVoiceClient {
   const { api } = deps;
   const player = deps.player;
+  const pcmPlayer = deps.pcmPlayer ?? createBrowserSparkPcmPlayer();
   let frame = createEmptySparkSessionFrame();
   let playbackState: SparkVoicePlaybackState = { playing: false, mimeType: null };
   const listeners = new Set<SparkVoiceFrameListener>();
@@ -68,6 +72,7 @@ export function createSparkVoiceClient(deps: SparkVoiceClientDeps): SparkVoiceCl
 
   function stopPlayback(): void {
     player?.stop();
+    pcmPlayer?.stop();
     setPlaybackState({ playing: false, mimeType: null });
   }
 
@@ -89,6 +94,14 @@ export function createSparkVoiceClient(deps: SparkVoiceClientDeps): SparkVoiceCl
       });
     }),
   );
+
+  const offPlayPcm = api.onPlayPcm?.(({ data, mimeType }) => {
+    setPlaybackState({ playing: true, mimeType });
+    pcmPlayer.play(data, mimeType);
+  });
+  if (offPlayPcm) {
+    unsubscribers.push(offPlayPcm);
+  }
 
   unsubscribers.push(
     api.onStopAudio(() => {
@@ -122,6 +135,7 @@ export function createSparkVoiceClient(deps: SparkVoiceClientDeps): SparkVoiceCl
       listeners.clear();
       playbackListeners.clear();
       player?.stop();
+      pcmPlayer.stop();
       playbackState = { playing: false, mimeType: null };
     },
   };

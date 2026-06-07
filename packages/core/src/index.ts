@@ -505,14 +505,46 @@ export type {
 export {
   buildSparkVoiceReadiness,
   createSparkVoiceRuntimeSession,
+  createSparkRealtimeRuntimeSession,
+  isSparkRealtimeConfigured,
 } from './services/spark-voice/spark-voice-runtime.js';
 
 export type {
   SparkVoiceCredentialSource,
   SparkVoiceReadiness,
+  SparkVoiceMode,
   SparkVoiceRoleReadiness,
   SparkVoiceRuntimeOptions,
+  SparkRealtimeRuntimeOptions,
 } from './services/spark-voice/spark-voice-runtime.js';
+
+export {
+  createSparkRealtimeSetupMessage,
+  createSparkRealtimeAudioInputMessage,
+  createSparkRealtimeAudioStreamEndMessage,
+  createSparkRealtimeToolResponseMessage,
+  summarizeSparkRealtimeServerMessage,
+} from './services/spark-voice/spark-realtime-messages.js';
+
+export type {
+  SparkRealtimeToolDefinition,
+  SparkRealtimeToolCall,
+  SparkRealtimeToolResponse,
+  SparkRealtimeAudioChunk,
+  SparkRealtimeServerSummary,
+  SparkRealtimeSetupOptions,
+} from './services/spark-voice/spark-realtime-messages.js';
+
+export {
+  createSparkRealtimeSession,
+} from './services/spark-voice/spark-realtime-session.js';
+
+export type {
+  SparkRealtimeSession,
+  SparkRealtimeSessionDeps,
+  SparkRealtimeSocket,
+  SparkRealtimeToolResult,
+} from './services/spark-voice/spark-realtime-session.js';
 
 export {
   getGraphifyBuildHistory,

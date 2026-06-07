@@ -132,6 +132,7 @@ contextBridge.exposeInMainWorld('sparkVoiceApi', {
     ipcRenderer.invoke('spark:voice:audioUtterance', { data, mimeType }),
   sendAudioLevel: (level: number, ts?: number) =>
     ipcRenderer.send('spark:voice:audioLevel', level, ts),
+  sendPcmChunk: (base64Pcm: string) => ipcRenderer.send('spark:voice:pcm', base64Pcm),
   notifyPlaybackEnded: () => ipcRenderer.send('spark:voice:playbackEnded'),
   onVoiceEvent: (callback: (event: unknown) => void) => {
     const listener = (_event: Electron.IpcRendererEvent, payload: unknown) => callback(payload);
@@ -146,6 +147,14 @@ contextBridge.exposeInMainWorld('sparkVoiceApi', {
     ipcRenderer.on('spark:voice:playAudio', listener);
     return () => {
       ipcRenderer.removeListener('spark:voice:playAudio', listener);
+    };
+  },
+  onPlayPcm: (callback: (payload: { data: string; mimeType: string }) => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, payload: { data: string; mimeType: string }) =>
+      callback(payload);
+    ipcRenderer.on('spark:voice:playPcm', listener);
+    return () => {
+      ipcRenderer.removeListener('spark:voice:playPcm', listener);
     };
   },
   onStopAudio: (callback: () => void) => {

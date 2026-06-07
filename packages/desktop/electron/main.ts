@@ -40,7 +40,7 @@ import {
   Vault,
 } from '@the-vault/core';
 import { createSparkBrainRuntimeLoader } from './spark-brain-runtime-loader.js';
-import { createNodeSparkFetch, createSparkVoiceHost } from './spark-voice-host.js';
+import { createNodeRealtimeSocket, createNodeSparkFetch, createSparkVoiceHost } from './spark-voice-host.js';
 import type { MemoryItemDetail, MemoryPack, ModelRoutingTable, RecallQuery } from '@the-vault/core';
 import {
   mcpEntriesMatch,
@@ -143,8 +143,10 @@ async function sparkVoiceRecall(query: string): Promise<string | null> {
 const sparkVoiceHost = createSparkVoiceHost({
   credentials: sparkProviderCredentials,
   fetchImpl: createNodeSparkFetch(),
+  createRealtimeSocket: createNodeRealtimeSocket,
   sendEvent: (event) => win?.webContents.send('spark:voice:event', event),
   playAudio: (audio, mimeType) => win?.webContents.send('spark:voice:playAudio', { audio, mimeType }),
+  playPcm: (data, mimeType) => win?.webContents.send('spark:voice:playPcm', { data, mimeType }),
   stopAudio: () => win?.webContents.send('spark:voice:stopAudio'),
   recall: sparkVoiceRecall,
 });
@@ -2032,6 +2034,13 @@ app.whenReady().then(() => {
       return { success: true, data: { status: sparkVoiceHost.getStatus() } };
     } catch (e: any) {
       return { success: false, error: e.message };
+    }
+  });
+
+  // Realtime mic PCM stream (base64 16kHz mono) — fire-and-forget uplink.
+  ipcMain.on('spark:voice:pcm', (_, base64Pcm: string) => {
+    if (typeof base64Pcm === 'string' && base64Pcm.length > 0) {
+      sparkVoiceHost.pushPcmChunk(base64Pcm);
     }
   });
 

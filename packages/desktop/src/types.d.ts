@@ -495,9 +495,11 @@ declare global {
       mimeType: string,
     ) => Promise<VaultResponse<SparkVoiceStatusResult>>;
     sendAudioLevel: (level: number, ts?: number) => void;
+    sendPcmChunk: (base64Pcm: string) => void;
     notifyPlaybackEnded: () => void;
     onVoiceEvent: (callback: (event: SparkVoiceEvent) => void) => () => void;
     onPlayAudio: (callback: (payload: { audio: Uint8Array; mimeType: string }) => void) => () => void;
+    onPlayPcm: (callback: (payload: { data: string; mimeType: string }) => void) => () => void;
     onStopAudio: (callback: () => void) => () => void;
   }
 

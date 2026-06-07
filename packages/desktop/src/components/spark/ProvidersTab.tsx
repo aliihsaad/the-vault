@@ -129,6 +129,9 @@ function ProviderCatalogCard({ row, pending, onConfigure }: ProviderCatalogCardP
               placeholder="https://your-host.example/v1"
               aria-label={`${row.name} base URL`}
             />
+            <small className="spark-provider-field-hint">
+              The provider API endpoint — a hosted VPS or a local server (e.g. http://localhost:3001/v1 for FreeLLMAPI). Include the /v1 path.
+            </small>
           </label>
         ) : null}
         {row.requiresKey ? (

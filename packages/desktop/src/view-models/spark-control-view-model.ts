@@ -329,6 +329,7 @@ export function useSparkControlViewModel(
   const [voiceCapture, setVoiceCapture] = useState<SparkVoiceCapture | null>(() => (
     providedVoiceCapture === undefined ? null : providedVoiceCapture
   ));
+  const [pcmCapture, setPcmCapture] = useState<SparkVoiceCapture | null>(null);
   const [snapshot, setSnapshot] = useState<SparkExtensionSnapshot | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -467,10 +468,11 @@ export function useSparkControlViewModel(
     if (ownsVoiceCapture) {
       voiceCapture?.stop();
     }
+    pcmCapture?.stop();
     if (ownsVoiceClient) {
       voiceClient?.dispose();
     }
-  }, [ownsVoiceCapture, ownsVoiceClient, voiceCapture, voiceClient]);
+  }, [ownsVoiceCapture, ownsVoiceClient, pcmCapture, voiceCapture, voiceClient]);
 
   const sessionActive = sessionStatus !== 'idle' && sessionStatus !== 'error';
 
@@ -493,6 +495,19 @@ export function useSparkControlViewModel(
     return capture;
   }, [providedVoiceCapture, voiceCapture]);
 
+  const getOrCreatePcmCapture = useCallback(async (): Promise<SparkVoiceCapture | null> => {
+    if (pcmCapture) {
+      return pcmCapture;
+    }
+    if (typeof window === 'undefined' || !window.sparkVoiceApi) {
+      return null;
+    }
+    const module = await import('../spark/spark-pcm-capture.js');
+    const capture = module.createSparkPcmCapture({ api: window.sparkVoiceApi });
+    setPcmCapture(capture);
+    return capture;
+  }, [pcmCapture]);
+
   const startVoiceSession = useCallback(async () => {
     if (!voiceClient) {
       setVoiceError('Spark voice bridge is unavailable.');
@@ -511,17 +526,25 @@ export function useSparkControlViewModel(
       setVoiceReadiness(result.data);
     }
     setSessionStatus('listening');
-    if (sessionMode === 'always-listening') {
-      try {
+
+    // Realtime (FreeLLMAPI) streams mic PCM continuously — the server does VAD —
+    // regardless of the push-to-talk/always-listening UI mode. Classic only
+    // captures in always-listening (or per-press in push-to-talk).
+    const mode = result.data?.mode ?? voiceReadiness?.mode;
+    try {
+      if (mode === 'realtime') {
+        await (await getOrCreatePcmCapture())?.start();
+      } else if (sessionMode === 'always-listening') {
         await (await getOrCreateVoiceCapture())?.start();
-      } catch (captureError) {
-        setVoiceError(captureError instanceof Error ? captureError.message : 'Microphone capture failed.');
       }
+    } catch (captureError) {
+      setVoiceError(captureError instanceof Error ? captureError.message : 'Microphone capture failed.');
     }
-  }, [getOrCreateVoiceCapture, sessionMode, voiceClient]);
+  }, [getOrCreatePcmCapture, getOrCreateVoiceCapture, sessionMode, voiceClient, voiceReadiness]);
 
   const stopVoiceSession = useCallback(async () => {
     voiceCapture?.stop();
+    pcmCapture?.stop();
     if (!voiceClient) {
       setSessionStatus('idle');
       return;
@@ -532,7 +555,7 @@ export function useSparkControlViewModel(
     if (!result.success) {
       setVoiceError(result.error ?? 'Spark voice session failed to stop.');
     }
-  }, [voiceCapture, voiceClient]);
+  }, [pcmCapture, voiceCapture, voiceClient]);
 
   const sendTextMessage = useCallback(async (message = textMessage) => {
     const trimmed = message.trim();

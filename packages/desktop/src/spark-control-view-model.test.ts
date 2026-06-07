@@ -104,7 +104,7 @@ describe('spark control view model', () => {
 
     const missingTts = buildSparkControlReadiness(
       makeSnapshot({ providerHealth: providerHealthWith(['configured', 'configured']) }),
-      { ready: false, roles: [], missing: ['TTS'] },
+      { ready: false, mode: 'none', roles: [], missing: ['TTS'] },
     );
     expect(missingTts[1]).toMatchObject({
       key: 'voice-runtime',
@@ -126,7 +126,7 @@ describe('spark control view model', () => {
       tooltip: 'Stop the active Spark voice session.',
     });
 
-    expect(buildSparkControlStartSession({ readiness: { ready: false, roles: [], missing: ['STT', 'TTS'] }, sessionActive: false })).toEqual({
+    expect(buildSparkControlStartSession({ readiness: { ready: false, mode: 'none', roles: [], missing: ['STT', 'TTS'] }, sessionActive: false })).toEqual({
       disabled: true,
       label: 'Start session',
       tooltip: 'Configure STT and TTS providers before starting.',
@@ -146,6 +146,7 @@ describe('spark control view model', () => {
 function readyVoiceReadiness(): SparkVoiceReadiness {
   return {
     ready: true,
+    mode: 'classic',
     missing: [],
     roles: [
       { role: 'STT', providerId: 'deepgram', configured: true },

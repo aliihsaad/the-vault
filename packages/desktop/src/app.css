@@ -4899,6 +4899,14 @@ select.text-input optgroup {
   word-break: break-word;
 }
 
+.spark-provider-field-hint {
+  display: block;
+  margin-top: 4px;
+  font-size: 11px;
+  line-height: 1.4;
+  opacity: 0.6;
+}
+
 .empty-state {
   display: grid;
   place-items: center;
