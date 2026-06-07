@@ -1192,6 +1192,17 @@ function createWindow() {
     },
   });
 
+  // Grant microphone access for the Spark voice runtime. Without an explicit
+  // handler Electron denies getUserMedia, so mic capture silently produces no
+  // audio (the visualizer stays "Audio inactive" and no utterance ever reaches
+  // STT). We grant only audio/media to the app's own renderer and deny the rest.
+  const isMediaPermission = (permission: string): boolean =>
+    permission === 'media' || permission === 'audioCapture' || permission === 'microphone';
+  win.webContents.session.setPermissionRequestHandler((_wc, permission, callback) => {
+    callback(isMediaPermission(permission));
+  });
+  win.webContents.session.setPermissionCheckHandler((_wc, permission) => isMediaPermission(permission));
+
   // Test active push message to Renderer-process.
   win.webContents.on('did-finish-load', () => {
     win?.webContents.send('main-process-message', (new Date).toLocaleString());

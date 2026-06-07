@@ -5,6 +5,13 @@ import { resolve } from 'node:path';
 
 export default defineConfig({
   base: './',
+  // Don't let electron-builder output (dist/, win-unpacked/) trigger dev-server
+  // reloads — that reload storm tears down any live Spark voice session.
+  server: {
+    watch: {
+      ignored: ['**/dist/**', '**/dist-renderer/**', '**/dist-electron/**'],
+    },
+  },
   build: {
     outDir: 'dist-renderer',
     emptyOutDir: true,
