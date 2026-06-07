@@ -12,6 +12,8 @@ dist-electron/
 # Local client state
 .agent/
 .claude/settings.local.json
+.claude/scheduled_tasks.lock
+.playwright-cli/
 
 # IDE
 .idea/

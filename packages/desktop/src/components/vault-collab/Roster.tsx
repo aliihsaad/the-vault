@@ -8,6 +8,8 @@ import type {
 import { getVaultCollabAgentsTabCount } from '../../vault-collab-view-model.js';
 import claudeIconUrl from '../../../../../assets/claude-color.svg';
 import codexIconUrl from '../../../../../assets/codex-color.svg';
+import geminiIconUrl from '../../../../../assets/gemini-color.svg';
+import opencodeIconUrl from '../../../../../assets/opencode-dark.svg';
 import { RoleProfileModal } from './RoleProfileModal.js';
 import { SessionHudCard } from './SessionHudCard.js';
 
@@ -185,6 +187,14 @@ function getAgentIconUrl(agent: VaultCollabRosterAgent): string | null {
 
   if (agent.clientType === 'claude-code' || agent.clientType === 'claude-desktop') {
     return claudeIconUrl;
+  }
+
+  if (agent.clientType === 'gemini') {
+    return geminiIconUrl;
+  }
+
+  if (agent.clientType === 'opencode') {
+    return opencodeIconUrl;
   }
 
   return null;
