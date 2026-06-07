@@ -225,6 +225,56 @@ export type {
 } from './types/vault-collab.js';
 
 export {
+  SPARK_BRAIN_ARTIFACT_NAMES,
+  SPARK_EXTENSION_ACTION_TYPES,
+} from './types/spark-extension.js';
+
+export type {
+  SparkApprovalRiskLevel,
+  SparkApprovalSummary,
+  SparkApproveSuggestionAction,
+  SparkApproveSkillAction,
+  SparkBrainArtifactFreshness,
+  SparkBrainArtifactFreshnessSummary,
+  SparkBrainArtifactName,
+  SparkBrainArtifactSummary,
+  SparkCapabilityPackRow,
+  SparkCapabilityPackStatusSummary,
+  SparkConfigureProviderAction,
+  SparkEvolutionSuggestionConfidenceLevel,
+  SparkEvolutionSuggestionRow,
+  SparkEvolutionSuggestionType,
+  SparkExtensionAction,
+  SparkExtensionActionResult,
+  SparkExtensionActionResultReason,
+  SparkExtensionActionType,
+  SparkExtensionCounts,
+  SparkExtensionInstallState,
+  SparkExtensionSnapshot,
+  SparkExtensionSource,
+  SparkExtensionStatus,
+  SparkInstallPackAction,
+  SparkPendingApprovalRow,
+  SparkProviderCredentialState,
+  SparkProviderHealthSnapshot,
+  SparkProviderHealthState,
+  SparkProviderHealthSummary,
+  SparkProviderMode,
+  SparkProviderModeHealth,
+  SparkRejectSuggestionAction,
+  SparkSkillCatalogItem,
+  SparkSkillHealthState,
+  SparkSkillRow,
+  SparkSkillSource,
+  SparkSkillStatusSummary,
+  SparkRejectSkillAction,
+  SparkToggleExtensionAction,
+  SparkToggleSkillAction,
+  SparkUninstallPackAction,
+  SparkViewArtifactAction,
+} from './types/spark-extension.js';
+
+export {
   getGraphifyExtensionPaths,
   getGraphifyProjectPaths,
 } from './services/graphify-paths.service.js';
@@ -255,6 +305,214 @@ export {
   resetVaultCollabRuntimeConfig,
   saveVaultCollabRuntimeConfig,
 } from './services/vault-collab-config.service.js';
+
+export {
+  getDefaultSparkExtensionSnapshot,
+  getSparkBrainExtensionPaths,
+  planSparkBrainInstall,
+  sanitizeSparkExtensionSnapshot,
+  SPARK_BRAIN_EXTENSION_FOLDER,
+  SPARK_BRAIN_PACKAGE_PATH,
+  SPARK_BRAIN_REPOSITORY_URL,
+  SparkExtensionSettingsService,
+} from './services/spark-extension-settings.service.js';
+
+export type {
+  SparkBrainExtensionPaths,
+  SparkBrainInstallPlan,
+  SparkExtensionSettingsAdapter,
+  SparkExtensionSettingsServiceOptions,
+} from './services/spark-extension-settings.service.js';
+
+export { createVaultBrainStore } from './services/spark-brain-vault-store.js';
+
+export type {
+  SparkBrainHostFindQuery,
+  SparkBrainHostMemoryItem,
+  SparkBrainHostSaveInput,
+  VaultBrainStoreHost,
+  VaultBrainStoreOptions,
+} from './services/spark-brain-vault-store.js';
+
+export {
+  SPARK_PROVIDER_ROLES,
+} from './types/spark-provider.js';
+
+export type {
+  SparkActiveProviderForRole,
+  SparkProviderAuthStyle,
+  SparkProviderCatalogEntry,
+  SparkProviderCredentialStateView,
+  SparkProviderRole,
+  SparkRoleAssignments,
+} from './types/spark-provider.js';
+
+export {
+  SPARK_DEFAULT_PROVIDER_ID,
+  getDefaultRoleAssignments,
+  getProvidersForRole,
+  getSparkProviderById,
+  getSparkProviderCatalog,
+  isRoleSupportedByProvider,
+} from './services/spark-provider-catalog.js';
+
+export {
+  buildSparkProviderHealthSummary,
+  createSparkProviderCredentialStore,
+} from './services/spark-provider-credentials.js';
+
+export type {
+  BuildSparkProviderHealthSummaryInput,
+  SparkProviderCredentialStore,
+  SparkProviderCredentialStoreDeps,
+} from './services/spark-provider-credentials.js';
+
+export { createSparkBrainSettingsAdapter } from './services/spark-brain-adapter.js';
+
+export type {
+  SparkBrainModuleLike,
+  SparkBrainRuntimeLike,
+  SparkBrainResultLike,
+  SparkBrainInstalledSkillLike,
+  SparkBrainSettingsAdapterOptions,
+} from './services/spark-brain-adapter.js';
+
+export type {
+  BrainVaultStore,
+  BrainVaultArtifact,
+  BrainVaultProject,
+  SparkBrainStoreRecord,
+} from './types/spark-brain-host.js';
+
+export {
+  clampSparkAudioLevel,
+  createEmptySparkSessionFrame,
+} from './types/spark-session-frame.js';
+
+export type {
+  SparkCanvasItem,
+  SparkSessionFrame,
+  SparkToolCallEntry,
+  SparkToolCallStatus,
+  SparkTranscriptEntry,
+  SparkTranscriptRole,
+} from './types/spark-session-frame.js';
+
+// ---------------------------------------------------------------------------
+// Spark voice runtime (S3) — event model, frame reducer, scrubber, VAD,
+// transport adapters, policy-routed tool dispatcher, and host orchestrator.
+// ---------------------------------------------------------------------------
+
+export type {
+  SparkVoiceEvent,
+  SparkVoiceSessionCallbacks,
+  SparkVoiceStatus,
+} from './types/spark-voice.js';
+
+export {
+  applySparkVoiceEvent,
+  reduceSparkVoiceEvents,
+} from './services/spark-voice/spark-voice-frame.js';
+
+export {
+  fenceSparkEvidence,
+  scrubSparkOutput,
+} from './services/spark-voice/spark-voice-scrubber.js';
+
+export type { SparkScrubResult } from './services/spark-voice/spark-voice-scrubber.js';
+
+export {
+  computePcm16Level,
+  computeRmsLevel,
+  createSparkVad,
+} from './services/spark-voice/spark-voice-vad.js';
+
+export type {
+  SparkVad,
+  SparkVadOptions,
+  SparkVadSample,
+  SparkVadSignal,
+} from './services/spark-voice/spark-voice-vad.js';
+
+export {
+  buildLlmRequest,
+  buildRealtimeSessionRequest,
+  buildSparkAuthHeaders,
+  buildSttRequest,
+  buildTtsRequest,
+  ChatStreamAccumulator,
+  createSparkLlmAdapter,
+  createSparkSttAdapter,
+  createSparkTtsAdapter,
+  materializeRequestBody,
+  OpenAiSseDecoder,
+  parseSttResponse,
+  SparkTransportError,
+  ttsMimeType,
+} from './services/spark-voice/spark-voice-transports.js';
+
+export type {
+  BuildLlmRequestInput,
+  SparkChatCompletionResult,
+  SparkChatMessage,
+  SparkChatToolCall,
+  SparkFetch,
+  SparkFetchResponse,
+  SparkHttpRequest,
+  SparkLlmAdapter,
+  SparkLlmResult,
+  SparkLlmStreamHandlers,
+  SparkRequestBody,
+  SparkSttAdapter,
+  SparkSttAudio,
+  SparkSttResult,
+  SparkToolDefinition,
+  SparkTransportErrorReason,
+  SparkTtsAdapter,
+  SparkTtsResult,
+} from './services/spark-voice/spark-voice-transports.js';
+
+export {
+  buildSparkHostTools,
+  buildVoiceToolsFromSkillRows,
+  createSparkToolDispatcher,
+  sanitizeToolName,
+} from './services/spark-voice/spark-voice-tools.js';
+
+export type {
+  SparkHostToolDeps,
+  SparkSkillExecutor,
+  SparkToolActionResult,
+  SparkToolDispatcher,
+  SparkToolDispatchContext,
+  SparkToolExecutionPolicy,
+  SparkToolHandler,
+  SparkToolParallelism,
+  SparkToolRisk,
+  SparkVoiceTool,
+} from './services/spark-voice/spark-voice-tools.js';
+
+export {
+  createSparkVoiceSession,
+} from './services/spark-voice/spark-voice-session.js';
+
+export type {
+  SparkAudioOutput,
+  SparkVoiceSession,
+  SparkVoiceSessionDeps,
+} from './services/spark-voice/spark-voice-session.js';
+
+export {
+  buildSparkVoiceReadiness,
+  createSparkVoiceRuntimeSession,
+} from './services/spark-voice/spark-voice-runtime.js';
+
+export type {
+  SparkVoiceCredentialSource,
+  SparkVoiceReadiness,
+  SparkVoiceRoleReadiness,
+  SparkVoiceRuntimeOptions,
+} from './services/spark-voice/spark-voice-runtime.js';
 
 export {
   getGraphifyBuildHistory,

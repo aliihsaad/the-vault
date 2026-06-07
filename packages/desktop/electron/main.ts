@@ -33,8 +33,14 @@ import {
   resolveGraphifyCommandForRuntimeConfig,
   resolveVaultCollabCliPath,
   resolveVaultCollabMcpServerPath,
+  createSparkBrainSettingsAdapter,
+  createSparkProviderCredentialStore,
+  createVaultBrainStore,
+  SparkExtensionSettingsService,
   Vault,
 } from '@the-vault/core';
+import { createSparkBrainRuntimeLoader } from './spark-brain-runtime-loader.js';
+import { createNodeSparkFetch, createSparkVoiceHost } from './spark-voice-host.js';
 import type { MemoryItemDetail, MemoryPack, ModelRoutingTable, RecallQuery } from '@the-vault/core';
 import {
   mcpEntriesMatch,
@@ -78,6 +84,70 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 // Initialize Vault
 const vault = new Vault();
 vault.initialize();
+// Wire the Spark extension Settings UI to the real @spark/brain runtime that
+// ships in the Vault extensions folder. The runtime is loaded dynamically (it
+// is built externally in vault-spark), bootstrapped through a Vault-backed
+// BrainVaultStore, and surfaced as a live snapshot. When the runtime is not
+// built/loadable the adapter degrades to a clear status instead of crashing.
+const sparkBrainRuntimeLoader = createSparkBrainRuntimeLoader(vault.getVaultRoot());
+// S2 secure provider registry. Credentials are stored in the encrypted secret
+// store (safeStorage/AES-GCM via getSecretSetting/setSecretSetting); base URLs
+// and per-role assignments are plain settings. The store resolves raw keys
+// HOST-SIDE only — never through executeAction and never echoed to the renderer.
+const sparkProviderCredentials = createSparkProviderCredentialStore({
+  getSecret: getSecretSetting,
+  setSecret: setSecretSetting,
+  getSetting: (key) => vault.getSetting(key),
+  setSetting: (key, value) => vault.setSetting(key, value),
+});
+const sparkExtensionSettings = new SparkExtensionSettingsService({
+  vaultRoot: vault.getVaultRoot(),
+  adapter: createSparkBrainSettingsAdapter({
+    loadModule: () => sparkBrainRuntimeLoader.loadModule(),
+    getPackageInfo: () => sparkBrainRuntimeLoader.getPackageInfo(),
+    createStore: () => createVaultBrainStore(vault),
+    // Feed live, renderer-safe provider health (configured state + role
+    // assignments) into the snapshot. No keys cross this boundary.
+    getProviderHealth: () => sparkProviderCredentials.getProviderHealthSummary(),
+  }),
+});
+
+// S3 voice runtime host. Owns the live VoiceSession (STT→LLM→tools→TTS) and
+// bridges its event stream to the renderer over dedicated `spark:voice:*`
+// channels. Providers are resolved per role from the S2 credential store; keys
+// stay host-side. Read-only Vault recall is wired both as fenced background
+// context and as the policy-gated `recall_memory` tool. Audio capture/playback
+// happen in the renderer (Web Audio); main runs the orchestration.
+async function sparkVoiceRecall(query: string): Promise<string | null> {
+  const trimmed = query.trim();
+  if (!trimmed) {
+    return null;
+  }
+  try {
+    const pack = await vault.recallContext({ queryText: trimmed, limit: 5 });
+    if (pack?.contextSummary && pack.contextSummary.trim()) {
+      return pack.contextSummary.trim();
+    }
+    const items = (pack?.topMatches ?? []).slice(0, 5).map((match) => match.item);
+    if (items.length === 0) {
+      return null;
+    }
+    return items
+      .map((item) => `- ${item.title ?? item.subject ?? 'memory'}: ${item.summary ?? ''}`.trim())
+      .join('\n');
+  } catch {
+    return null;
+  }
+}
+
+const sparkVoiceHost = createSparkVoiceHost({
+  credentials: sparkProviderCredentials,
+  fetchImpl: createNodeSparkFetch(),
+  sendEvent: (event) => win?.webContents.send('spark:voice:event', event),
+  playAudio: (audio, mimeType) => win?.webContents.send('spark:voice:playAudio', { audio, mimeType }),
+  stopAudio: () => win?.webContents.send('spark:voice:stopAudio'),
+  recall: sparkVoiceRecall,
+});
 
 // Initialize AI enrichment from saved settings.
 // Enrichment activates automatically when API key + model are configured.
@@ -1853,7 +1923,117 @@ app.whenReady().then(() => {
   createWindow();
 
   // IPC Handlers — Expose Vault methods
-  
+
+  ipcMain.handle('spark:getSnapshot', async () => {
+    try {
+      return { success: true, data: await sparkExtensionSettings.getSnapshot() };
+    } catch (e: any) {
+      return { success: false, error: e.message };
+    }
+  });
+
+  ipcMain.handle('spark:executeAction', async (_, input) => {
+    try {
+      return { success: true, data: await sparkExtensionSettings.executeAction(input) };
+    } catch (e: any) {
+      return { success: false, error: e.message };
+    }
+  });
+
+  // S2 provider credential channels. Dedicated to secret handling — keys are
+  // written into the encrypted store and only credential STATE is returned.
+  // These never flow through executeAction (which strips secrets).
+  ipcMain.handle('spark:setProviderCredential', async (_, providerId, key, baseUrl) => {
+    try {
+      return {
+        success: true,
+        data: sparkProviderCredentials.setProviderCredential(providerId, key, baseUrl ?? undefined),
+      };
+    } catch (e: any) {
+      return { success: false, error: e.message };
+    }
+  });
+
+  ipcMain.handle('spark:getProviderCredentialState', async (_, providerId) => {
+    try {
+      return { success: true, data: sparkProviderCredentials.getProviderCredentialState(providerId) };
+    } catch (e: any) {
+      return { success: false, error: e.message };
+    }
+  });
+
+  ipcMain.handle('spark:setRoleAssignment', async (_, role, providerId) => {
+    try {
+      return { success: true, data: sparkProviderCredentials.setRoleAssignment(role, providerId) };
+    } catch (e: any) {
+      return { success: false, error: e.message };
+    }
+  });
+
+  ipcMain.handle('spark:getRoleAssignments', async () => {
+    try {
+      return { success: true, data: sparkProviderCredentials.getRoleAssignments() };
+    } catch (e: any) {
+      return { success: false, error: e.message };
+    }
+  });
+
+  // S3 voice runtime channels. The host owns the VoiceSession; events flow back
+  // to the renderer via win.webContents.send('spark:voice:event', ...).
+  ipcMain.handle('spark:voice:getReadiness', async () => {
+    try {
+      return { success: true, data: sparkVoiceHost.getReadiness() };
+    } catch (e: any) {
+      return { success: false, error: e.message };
+    }
+  });
+
+  ipcMain.handle('spark:voice:start', async () => {
+    try {
+      return { success: true, data: sparkVoiceHost.start() };
+    } catch (e: any) {
+      return { success: false, error: e.message };
+    }
+  });
+
+  ipcMain.handle('spark:voice:stop', async () => {
+    try {
+      sparkVoiceHost.stop();
+      return { success: true, data: { status: sparkVoiceHost.getStatus() } };
+    } catch (e: any) {
+      return { success: false, error: e.message };
+    }
+  });
+
+  ipcMain.handle('spark:voice:sendText', async (_, text: string) => {
+    try {
+      await sparkVoiceHost.sendText(String(text ?? ''));
+      return { success: true, data: { status: sparkVoiceHost.getStatus() } };
+    } catch (e: any) {
+      return { success: false, error: e.message };
+    }
+  });
+
+  ipcMain.handle('spark:voice:audioUtterance', async (_, payload: { data: ArrayBuffer | Uint8Array; mimeType: string }) => {
+    try {
+      const data = payload.data instanceof Uint8Array ? payload.data : new Uint8Array(payload.data);
+      await sparkVoiceHost.pushAudioUtterance({ data, mimeType: payload.mimeType });
+      return { success: true, data: { status: sparkVoiceHost.getStatus() } };
+    } catch (e: any) {
+      return { success: false, error: e.message };
+    }
+  });
+
+  // Fire-and-forget level/level/playback signals — use `.on` (no response).
+  ipcMain.on('spark:voice:audioLevel', (_, level: number, ts?: number) => {
+    sparkVoiceHost.pushAudioLevel(Number(level) || 0, ts);
+  });
+
+  ipcMain.on('spark:voice:playbackEnded', () => {
+    sparkVoiceHost.notifyPlaybackEnded();
+  });
+
+
   ipcMain.handle('vault:status', async () => {
     const vaultRoot = vault.getVaultRoot();
     let directorySize = null;

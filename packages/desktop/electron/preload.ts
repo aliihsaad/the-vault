@@ -106,3 +106,53 @@ contextBridge.exposeInMainWorld('vaultAPI', {
     };
   },
 });
+
+contextBridge.exposeInMainWorld('sparkApi', {
+  getSnapshot: () => ipcRenderer.invoke('spark:getSnapshot'),
+  executeAction: (input: unknown) => ipcRenderer.invoke('spark:executeAction', input),
+  // S2 secure provider credential channels — state in/out only, never the key.
+  setProviderCredential: (providerId: string, key: string, baseUrl?: string | null) =>
+    ipcRenderer.invoke('spark:setProviderCredential', providerId, key, baseUrl),
+  getProviderCredentialState: (providerId: string) =>
+    ipcRenderer.invoke('spark:getProviderCredentialState', providerId),
+  setRoleAssignment: (role: string, providerId: string) =>
+    ipcRenderer.invoke('spark:setRoleAssignment', role, providerId),
+  getRoleAssignments: () => ipcRenderer.invoke('spark:getRoleAssignments'),
+});
+
+// S3 voice runtime bridge. Renderer drives the session (start/stop/sendText),
+// streams mic levels + captured utterances to the host, and subscribes to the
+// host's event stream + audio playback commands.
+contextBridge.exposeInMainWorld('sparkVoiceApi', {
+  getReadiness: () => ipcRenderer.invoke('spark:voice:getReadiness'),
+  start: () => ipcRenderer.invoke('spark:voice:start'),
+  stop: () => ipcRenderer.invoke('spark:voice:stop'),
+  sendText: (text: string) => ipcRenderer.invoke('spark:voice:sendText', text),
+  sendAudioUtterance: (data: ArrayBuffer, mimeType: string) =>
+    ipcRenderer.invoke('spark:voice:audioUtterance', { data, mimeType }),
+  sendAudioLevel: (level: number, ts?: number) =>
+    ipcRenderer.send('spark:voice:audioLevel', level, ts),
+  notifyPlaybackEnded: () => ipcRenderer.send('spark:voice:playbackEnded'),
+  onVoiceEvent: (callback: (event: unknown) => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, payload: unknown) => callback(payload);
+    ipcRenderer.on('spark:voice:event', listener);
+    return () => {
+      ipcRenderer.removeListener('spark:voice:event', listener);
+    };
+  },
+  onPlayAudio: (callback: (payload: { audio: Uint8Array; mimeType: string }) => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, payload: { audio: Uint8Array; mimeType: string }) =>
+      callback(payload);
+    ipcRenderer.on('spark:voice:playAudio', listener);
+    return () => {
+      ipcRenderer.removeListener('spark:voice:playAudio', listener);
+    };
+  },
+  onStopAudio: (callback: () => void) => {
+    const listener = () => callback();
+    ipcRenderer.on('spark:voice:stopAudio', listener);
+    return () => {
+      ipcRenderer.removeListener('spark:voice:stopAudio', listener);
+    };
+  },
+});

@@ -17,10 +17,12 @@ import {
   Search,
   Settings,
   ShieldCheck,
+  Sparkles,
 } from 'lucide-react';
 import { ActivityLogsView } from './components/ActivityLogsView.js';
 import { AgentReviewPane, type AgentReviewTab } from './components/AgentReviewPane.js';
 import { BrandMark } from './components/BrandMark.js';
+import { ErrorBoundary } from './components/ErrorBoundary.js';
 import {
   AnalyticsOperationsView,
   FilteredMemoryWorkspaceView,
@@ -32,6 +34,7 @@ import {
 import { MemoryView } from './components/MemoryView.js';
 import { OverviewCockpitView } from './components/OverviewCockpitView.js';
 import { SettingsView } from './components/SettingsView.js';
+import { SparkView } from './components/SparkView.js';
 import { VaultAgentView } from './components/VaultAgentView.js';
 import { VaultCollabView } from './components/VaultCollabView.js';
 import { VaultStructureView } from './components/VaultStructureView.js';
@@ -46,6 +49,7 @@ type PrimaryTab =
   | 'decisions'
   | 'loops'
   | 'graph'
+  | 'spark'
   | 'recall'
   | 'analytics'
   | 'agent'
@@ -75,6 +79,7 @@ const OPERATIONS_NAV: Array<NavItem<PrimaryTab>> = [
 const EXTENSION_NAV: Array<NavItem<PrimaryTab>> = [
   { id: 'graph', label: 'Graphify', description: 'Project graph extension', icon: Network },
   { id: 'collab', label: 'Vault Collab', description: 'Agent Inbox and sessions', icon: Inbox },
+  { id: 'spark', label: 'Spark', description: 'Voice runtime and brain', icon: Sparkles },
 ];
 
 const RUNTIME_NAV: Array<NavItem<PrimaryTab>> = [
@@ -126,6 +131,10 @@ const TAB_META: Record<AppTab, { title: string; description: string }> = {
   graph: {
     title: 'Graph',
     description: 'Graphify project artifacts, build status, reports, and Vault relationship fallback.',
+  },
+  spark: {
+    title: 'Spark',
+    description: 'Spark Brain runtime: skills, approvals, capability packs, brain artifacts, providers, and evolution.',
   },
   recall: {
     title: 'Recall',
@@ -363,6 +372,7 @@ function App() {
             {statusError ? <div className="panel empty-state empty-state-error">{statusError}</div> : null}
 
             <div className={`content-surface ${activeTab === 'graph' ? 'content-surface-graph' : ''} ${activeTab === 'collab' ? 'content-surface-collab' : ''}`}>
+              <ErrorBoundary key={activeTab} label={activeMeta.title}>
               {activeTab === 'overview' ? (
                 <OverviewCockpitView
                   vaultStatus={vaultStatus}
@@ -402,6 +412,7 @@ function App() {
               ) : null}
               {activeTab === 'loops' ? <LoopsOperationsView onOpenMemory={openMemoryItem} /> : null}
               {activeTab === 'graph' ? <GraphOperationsView vaultStatus={vaultStatus} onOpenMemory={openMemoryItem} /> : null}
+              {activeTab === 'spark' ? <SparkView /> : null}
               {activeTab === 'recall' ? <RecallOperationsView /> : null}
               {activeTab === 'analytics' ? <AnalyticsOperationsView /> : null}
               {activeTab === 'agent' ? <VaultAgentView /> : null}
@@ -409,6 +420,7 @@ function App() {
               {activeTab === 'activity' ? <ActivityLogsView onPrefillMemoryDraft={openMemoryComposerPrefill} /> : null}
               {activeTab === 'files' ? <VaultStructureView /> : null}
               {activeTab === 'reviews' ? <AgentReviewPane initialTab={reviewInitialTab} /> : null}
+              </ErrorBoundary>
             </div>
           </div>
         </main>
