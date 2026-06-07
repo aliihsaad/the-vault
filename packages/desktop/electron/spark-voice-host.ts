@@ -18,11 +18,13 @@ import {
   buildSparkHostTools,
   buildSparkVoiceReadiness,
   createSparkRealtimeRuntimeSession,
+  createSparkToolDispatcher,
   createSparkVoiceRuntimeSession,
   type SparkFetch,
   type SparkProviderCredentialStore,
   type SparkRealtimeSession,
   type SparkRealtimeSocket,
+  type SparkRealtimeToolDefinition,
   type SparkVoiceEvent,
   type SparkVoiceReadiness,
   type SparkVoiceSession,
@@ -45,6 +47,13 @@ export interface SparkVoiceHostDeps {
   stopAudio: () => void;
   /** Read-only Vault recall used both as fenced context and the recall tool. */
   recall: (query: string) => Promise<string | null>;
+  /**
+   * Compose Spark's system prompt from the vault-spark brain artifacts
+   * (SPARK.md identity, USER.md, MEMORY.md…). Resolved at session start so the
+   * realtime model adopts Spark's designed persona + user knowledge. Returns null
+   * to fall back to the default instructions.
+   */
+  getInstructions?: () => Promise<string | null>;
 }
 
 export interface SparkVoiceUtteranceInput {
@@ -54,7 +63,7 @@ export interface SparkVoiceUtteranceInput {
 
 export interface SparkVoiceHost {
   getReadiness: () => SparkVoiceReadiness;
-  start: () => SparkVoiceReadiness;
+  start: () => Promise<SparkVoiceReadiness>;
   stop: () => void;
   sendText: (text: string) => Promise<void>;
   /** Classic pipeline: a complete recorded utterance (webm/opus) for STT. */
@@ -75,7 +84,7 @@ export function createSparkVoiceHost(deps: SparkVoiceHostDeps): SparkVoiceHost {
     return buildSparkVoiceReadiness(deps.credentials);
   }
 
-  function start(): SparkVoiceReadiness {
+  async function start(): Promise<SparkVoiceReadiness> {
     const readiness = getReadiness();
     if (!readiness.ready) {
       deps.sendEvent({
@@ -87,24 +96,33 @@ export function createSparkVoiceHost(deps: SparkVoiceHostDeps): SparkVoiceHost {
     }
 
     if (readiness.mode === 'realtime') {
+      // Real, policy-gated host tools (Vault recall) — declared to the model so it
+      // actually grounds answers in the user's memory instead of guessing.
+      const hostTools = buildSparkHostTools({ recallMemory: deps.recall });
+      const dispatcher = createSparkToolDispatcher(hostTools);
+      const toolDefs: SparkRealtimeToolDefinition[] = dispatcher.listDefinitions().map((def) => ({
+        name: def.function.name,
+        description: def.function.description,
+        parameters: def.function.parameters,
+      }));
+      // Spark's persona + user knowledge from the vault-spark brain artifacts.
+      const instructions = (await deps.getInstructions?.()) ?? undefined;
+
       realtime = createSparkRealtimeRuntimeSession({
         credentials: deps.credentials,
         fetchImpl: deps.fetchImpl,
         createSocket: deps.createRealtimeSocket,
         emit: deps.sendEvent,
         playAudio: (base64, mimeType) => deps.playPcm(base64, mimeType),
+        instructions,
+        tools: toolDefs,
         dispatchTool: async (name, args) => {
-          // Only the read-only recall tool is exposed to realtime for now.
-          if (name === 'recall_memory') {
-            try {
-              const query = typeof args === 'string' ? (JSON.parse(args)?.query ?? '') : '';
-              const value = await deps.recall(String(query));
-              return { ok: true, value: value ?? 'No relevant memories.' };
-            } catch (error) {
-              return { ok: false, error: error instanceof Error ? error.message : 'Recall failed.' };
-            }
-          }
-          return { ok: false, error: `Unknown tool: ${name}` };
+          const result = await dispatcher.dispatch(name, args, { turnComplete: true });
+          return {
+            ok: result.ok,
+            value: result.value,
+            error: result.error?.message,
+          };
         },
       });
       void realtime.start();

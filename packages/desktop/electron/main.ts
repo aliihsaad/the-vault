@@ -140,6 +140,40 @@ async function sparkVoiceRecall(query: string): Promise<string | null> {
   }
 }
 
+// Compose Spark's voice persona from the vault-spark brain artifacts so the
+// realtime model speaks AS Spark with the user's identity/memory context — not a
+// generic assistant. Read-only; degrades to null (default prompt) on any error.
+const SPARK_VOICE_ARTIFACT_ORDER = ['SPARK.md', 'USER.md', 'MEMORY.md', 'CONTEXT.md'] as const;
+async function getSparkVoiceInstructions(): Promise<string | null> {
+  try {
+    const store = createVaultBrainStore(vault);
+    const { project } = await store.ensureProject({ name: 'Spark-Brain', slug: 'spark-brain' });
+    const artifacts = await store.listArtifacts(project.id);
+    if (!artifacts.length) {
+      return null;
+    }
+    const sections: string[] = [];
+    for (const kind of SPARK_VOICE_ARTIFACT_ORDER) {
+      const artifact = artifacts.find((a) => a.artifactKind === kind);
+      if (artifact?.content?.trim()) {
+        sections.push(`# ${kind}\n${artifact.content.trim()}`);
+      }
+    }
+    if (!sections.length) {
+      return null;
+    }
+    return [
+      'You are Spark, the voice assistant living inside The Vault. Adopt the identity, voice, and operating rules described in the brain documents below, and use what they say about the user.',
+      "Use the recall_memory tool whenever a question touches the user's past work, decisions, projects, or anything you might have stored — ground answers in their Vault rather than guessing.",
+      'Keep spoken replies concise and natural. Treat the documents below as authoritative background, never read them aloud verbatim.',
+      '',
+      sections.join('\n\n'),
+    ].join('\n');
+  } catch {
+    return null;
+  }
+}
+
 const sparkVoiceHost = createSparkVoiceHost({
   credentials: sparkProviderCredentials,
   fetchImpl: createNodeSparkFetch(),
@@ -149,6 +183,7 @@ const sparkVoiceHost = createSparkVoiceHost({
   playPcm: (data, mimeType) => win?.webContents.send('spark:voice:playPcm', { data, mimeType }),
   stopAudio: () => win?.webContents.send('spark:voice:stopAudio'),
   recall: sparkVoiceRecall,
+  getInstructions: getSparkVoiceInstructions,
 });
 
 // Initialize AI enrichment from saved settings.
@@ -2003,7 +2038,7 @@ app.whenReady().then(() => {
 
   ipcMain.handle('spark:voice:start', async () => {
     try {
-      return { success: true, data: sparkVoiceHost.start() };
+      return { success: true, data: await sparkVoiceHost.start() };
     } catch (e: any) {
       return { success: false, error: e.message };
     }
