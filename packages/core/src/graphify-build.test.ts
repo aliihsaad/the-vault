@@ -3,7 +3,7 @@ import { execFileSync } from 'node:child_process';
 import { chmodSync, existsSync, readFileSync, utimesSync } from 'node:fs';
 import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { homedir, tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { basename, dirname, join, resolve } from 'node:path';
 import { Vault } from './index.js';
 import { getGraphifyProjectPaths } from './services/graphify-paths.service.js';
 import type { GraphifyBuildProcessRunner } from './services/graphify-build.service.js';
@@ -22,7 +22,9 @@ describe('Graphify manual build pipeline', () => {
     }
 
     extractedNativeBindingDir = await mkdtemp(join(tmpdir(), 'vault-sqlite-native-'));
-    execFileSync('tar', ['-xf', cachedPrebuild, '-C', extractedNativeBindingDir]);
+    execFileSync('tar', ['-xf', basename(cachedPrebuild), '-C', extractedNativeBindingDir.replace(/\\/g, '/')], {
+      cwd: dirname(cachedPrebuild),
+    });
     process.env.VAULT_BETTER_SQLITE3_NATIVE_BINDING = join(
       extractedNativeBindingDir,
       'build',

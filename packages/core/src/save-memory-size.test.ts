@@ -2,7 +2,7 @@ import { execFileSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { mkdtemp, readdir, rm } from 'node:fs/promises';
 import { homedir, tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { Vault } from './index.js';
 import { MEMORY_CONTENT_MAX_CHARS } from './rules/validation.js';
@@ -20,16 +20,13 @@ describe('save memory content size', () => {
     }
 
     extractedNativeBindingDir = await mkdtemp(join(tmpdir(), 'vault-save-size-sqlite-native-'));
-    // The bundled Windows tar is GNU/MSYS: it reads a drive-letter path (C:\...)
-    // as a remote "host:path" and mangles backslashes. --force-local disables the
-    // remote-host parsing, and forward slashes avoid the backslash escaping.
-    execFileSync('tar', [
-      '--force-local',
-      '-xf',
-      cachedPrebuild.replace(/\\/g, '/'),
-      '-C',
-      extractedNativeBindingDir.replace(/\\/g, '/'),
-    ]);
+    // Extract portably across both `tar` flavors: passing the archive by
+    // basename (with cwd set to its directory) avoids GNU/MSYS tar reading a
+    // leading "C:" as a remote host, while forward-slashing the -C dir avoids
+    // its backslash mangling. No flags, so Windows bsdtar accepts it too.
+    execFileSync('tar', ['-xf', basename(cachedPrebuild), '-C', extractedNativeBindingDir.replace(/\\/g, '/')], {
+      cwd: dirname(cachedPrebuild),
+    });
     process.env.VAULT_BETTER_SQLITE3_NATIVE_BINDING = join(
       extractedNativeBindingDir,
       'build',

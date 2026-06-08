@@ -2,7 +2,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from
 import { mkdtemp, readdir, rm } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
-import { join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import { homedir, tmpdir } from 'node:os';
 import { eq } from 'drizzle-orm';
 import { Vault } from './index.js';
@@ -21,7 +21,9 @@ describe('task delegation system', () => {
     }
 
     extractedNativeBindingDir = await mkdtemp(join(tmpdir(), 'vault-sqlite-native-'));
-    execFileSync('tar', ['-xf', cachedPrebuild, '-C', extractedNativeBindingDir]);
+    execFileSync('tar', ['-xf', basename(cachedPrebuild), '-C', extractedNativeBindingDir.replace(/\\/g, '/')], {
+      cwd: dirname(cachedPrebuild),
+    });
     process.env.VAULT_BETTER_SQLITE3_NATIVE_BINDING = join(
       extractedNativeBindingDir,
       'build',

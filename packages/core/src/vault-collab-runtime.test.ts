@@ -1,7 +1,7 @@
 import { execFileSync } from 'node:child_process';
 import { existsSync, mkdtempSync, mkdirSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import Database from 'better-sqlite3';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
@@ -26,7 +26,9 @@ describe('Vault Collab extension runtime config', () => {
     }
 
     extractedNativeBindingDir = mkdtempSync(join(tmpdir(), 'vault-collab-sqlite-native-'));
-    execFileSync('tar', ['-xf', cachedPrebuild, '-C', extractedNativeBindingDir]);
+    execFileSync('tar', ['-xf', basename(cachedPrebuild), '-C', extractedNativeBindingDir.replace(/\\/g, '/')], {
+      cwd: dirname(cachedPrebuild),
+    });
     process.env.VAULT_BETTER_SQLITE3_NATIVE_BINDING = join(
       extractedNativeBindingDir,
       'build',
