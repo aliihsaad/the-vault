@@ -36,6 +36,8 @@ import {
   createSparkBrainSettingsAdapter,
   createSparkProviderCredentialStore,
   createVaultBrainStore,
+  formatSparkRecall,
+  pickDominantProject,
   SparkExtensionSettingsService,
   Vault,
 } from '@the-vault/core';
@@ -126,22 +128,27 @@ async function sparkVoiceRecall(query: string): Promise<string | null> {
   try {
     // Cross-project recall (no project filter) so Spark can draw on everything.
     const pack = await vault.recallContext({ queryText: trimmed, limit: 8 });
-    const items = (pack?.topMatches ?? []).slice(0, 8).map((match) => match.item);
-    if (items.length > 0) {
-      const lines = items
-        .map((item) => {
-          const project = item.project ? `[${item.project}] ` : '';
-          const title = item.title ?? item.subject ?? 'memory';
-          return `- ${project}${title}: ${item.summary ?? ''}`.trim();
-        })
-        .join('\n');
-      // Prefer the ranked, project-labeled list; fall back to the summary.
-      return lines || (pack?.contextSummary?.trim() ?? null);
+    // Enrich with Graphify graph depth for the most relevant project so Spark
+    // can reason about code structure, not just memory summaries. The graph is
+    // project-scoped; recall stays cross-project. Optional — degrades silently
+    // when Graphify isn't built/available for that project.
+    let graph = null;
+    const dominant = pickDominantProject(pack);
+    if (dominant) {
+      try {
+        const enriched = await vault.recallWithGraphContext({
+          project: dominant,
+          queryText: trimmed,
+          limit: 8,
+        });
+        if (enriched.graph?.used) {
+          graph = enriched.graph;
+        }
+      } catch {
+        /* graph context is best-effort; fall back to memory-only recall */
+      }
     }
-    if (pack?.contextSummary && pack.contextSummary.trim()) {
-      return pack.contextSummary.trim();
-    }
-    return null;
+    return formatSparkRecall(pack, graph);
   } catch {
     return null;
   }

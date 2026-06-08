@@ -480,6 +480,7 @@ export {
 } from './services/spark-voice/spark-voice-tools.js';
 
 export type {
+  SparkCanvasToolItem,
   SparkHostToolDeps,
   SparkSkillExecutor,
   SparkToolActionResult,
@@ -491,6 +492,17 @@ export type {
   SparkToolRisk,
   SparkVoiceTool,
 } from './services/spark-voice/spark-voice-tools.js';
+
+export {
+  formatSparkRecall,
+  pickDominantProject,
+} from './services/spark-voice/spark-recall-format.js';
+
+export type {
+  SparkRecallGraphView,
+  SparkRecallItemView,
+  SparkRecallPackView,
+} from './services/spark-voice/spark-recall-format.js';
 
 export {
   createSparkVoiceSession,
