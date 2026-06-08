@@ -7,7 +7,7 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
-import { Vault, OpenRouterClient, TaskExecutor, portableDecrypt, slugify, MEMORY_TYPES, ROUTINE_TYPES, STATUS_VALUES, PRIORITY_VALUES, SOURCE_APPS, TASK_TYPES, TASK_STATUSES, TASK_PRIORITIES, PROPOSAL_STATUSES, PROPOSAL_TYPES, PROJECT_LINK_TYPES, OUTCOME_VALUES } from '@the-vault/core';
+import { Vault, OpenRouterClient, TaskExecutor, portableDecrypt, slugify, MEMORY_TYPES, ROUTINE_TYPES, STATUS_VALUES, PRIORITY_VALUES, SOURCE_APPS, TASK_TYPES, TASK_STATUSES, TASK_PRIORITIES, PROPOSAL_STATUSES, PROPOSAL_TYPES, PROJECT_LINK_TYPES, OUTCOME_VALUES, MEMORY_CONTENT_MAX_CHARS } from '@the-vault/core';
 import { registerGraphifyMcpTools } from './graphify-tools.js';
 
 // Initialize Vault
@@ -91,7 +91,7 @@ server.tool(
     memory_type: z.enum(MEMORY_TYPES).describe('Category of memory: session, summary, decision, plan, artifact, handoff, reference'),
     subject: z.string().describe('Specific main topic name'),
     summary: z.string().describe('Concise reusable description of what the item contains'),
-    content: z.string().optional().describe('Full content body (optional)'),
+    content: z.string().max(MEMORY_CONTENT_MAX_CHARS).optional().describe('Full content body (optional, max 2 MiB)'),
     keywords: z.array(z.string()).optional().describe('3-8 search-friendly terms'),
     tags: z.array(z.string()).optional().describe('Classification labels'),
     routine_type: z.enum(ROUTINE_TYPES).optional().describe('Type of work: debugging, planning, implementation, etc.'),

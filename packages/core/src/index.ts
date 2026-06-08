@@ -719,6 +719,7 @@ export type {
 
 // Validation schemas (useful for MCP server)
 export {
+  MEMORY_CONTENT_MAX_CHARS,
   SaveMemoryInputSchema,
   FindMemoryQuerySchema,
   RecallQuerySchema,

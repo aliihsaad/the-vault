@@ -16,6 +16,8 @@ import {
   OutcomeSchema,
 } from './controlled-values.js';
 
+export const MEMORY_CONTENT_MAX_CHARS = 2 * 1024 * 1024;
+
 // ---------------------------------------------------------------------------
 // Save Memory Input
 // ---------------------------------------------------------------------------
@@ -25,7 +27,7 @@ export const SaveMemoryInputSchema = z.object({
   memoryType: MemoryTypeSchema,
   subject: z.string().min(1).max(300),
   summary: z.string().min(1).max(5000),
-  content: z.string().optional(),
+  content: z.string().max(MEMORY_CONTENT_MAX_CHARS).optional(),
   keywords: z.array(z.string().max(50)).max(20).optional().default([]),
   tags: z.array(z.string().max(50)).max(20).optional().default([]),
   routineType: RoutineTypeSchema.optional(),
@@ -82,7 +84,7 @@ export const UpdateMemoryInputSchema = z.object({
   title: z.string().min(1).max(200).optional(),
   subject: z.string().min(1).max(300).optional(),
   summary: z.string().min(1).max(5000).optional(),
-  content: z.string().optional(),
+  content: z.string().max(MEMORY_CONTENT_MAX_CHARS).optional(),
   keywords: z.array(z.string().max(50)).max(20).optional(),
   tags: z.array(z.string().max(50)).max(20).optional(),
   routineType: RoutineTypeSchema.optional(),
