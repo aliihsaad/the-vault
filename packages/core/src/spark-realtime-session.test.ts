@@ -62,6 +62,40 @@ describe('createSparkRealtimeSession', () => {
     expect(socket.sent.some((m) => m.includes('"setup"'))).toBe(true);
   });
 
+  it('sends mint-body tools in OpenAI shape and omits tools when none', async () => {
+    const withTools = fakeFetch();
+    const session = createSparkRealtimeSession({
+      fetchImpl: withTools,
+      createSocket: () => fakeSocket(),
+      baseUrl: 'https://vps/v1',
+      apiKey: 'k',
+      emit: () => undefined,
+      playAudio: () => undefined,
+      tools: [{ name: 'recall_memory', description: 'Recall', parameters: { type: 'object', properties: {} } }],
+    });
+    await session.start();
+    const body = JSON.parse((withTools as any).mock.calls[0][1].body);
+    expect(body.tools).toEqual([
+      {
+        type: 'function',
+        function: { name: 'recall_memory', description: 'Recall', parameters: { type: 'object', properties: {} } },
+      },
+    ]);
+
+    const noTools = fakeFetch();
+    const bare = createSparkRealtimeSession({
+      fetchImpl: noTools,
+      createSocket: () => fakeSocket(),
+      baseUrl: 'https://vps/v1',
+      apiKey: 'k',
+      emit: () => undefined,
+      playAudio: () => undefined,
+    });
+    await bare.start();
+    const bareBody = JSON.parse((noTools as any).mock.calls[0][1].body);
+    expect('tools' in bareBody).toBe(false);
+  });
+
   it('streams mic PCM as realtimeInput media chunks once open', async () => {
     const socket = fakeSocket();
     const session = createSparkRealtimeSession({

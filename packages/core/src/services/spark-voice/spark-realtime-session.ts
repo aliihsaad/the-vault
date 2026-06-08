@@ -124,6 +124,22 @@ export function createSparkRealtimeSession(deps: SparkRealtimeSessionDeps): Spar
 
   async function mintSession(): Promise<string> {
     const baseUrl = deps.baseUrl.replace(/\/+$/, '');
+    // The /realtime/sessions endpoint validates tools in OpenAI shape
+    // ({ type: "function", function: { name, description, parameters } }); sending
+    // the bare { name, description, parameters } 400s with
+    // 'Invalid request: expected "function", Required'. Map + omit when empty.
+    const toolsPayload = (deps.tools ?? [])
+      .filter((tool) => tool && typeof tool.name === 'string' && tool.name)
+      .map((tool) => ({
+        type: 'function' as const,
+        function: {
+          name: tool.name,
+          ...(tool.description ? { description: tool.description } : {}),
+          ...(tool.parameters && typeof tool.parameters === 'object'
+            ? { parameters: tool.parameters }
+            : {}),
+        },
+      }));
     const response = await deps.fetchImpl(`${baseUrl}/realtime/sessions`, {
       method: 'POST',
       headers: {
@@ -137,7 +153,7 @@ export function createSparkRealtimeSession(deps: SparkRealtimeSessionDeps): Spar
         input_audio_transcription: true,
         output_audio_transcription: true,
         instructions: deps.instructions || DEFAULT_INSTRUCTIONS,
-        tools: deps.tools,
+        ...(toolsPayload.length > 0 ? { tools: toolsPayload } : {}),
       }),
     });
     const text = await response.text();
