@@ -503,6 +503,13 @@ export {
   pickDominantProject,
 } from './services/spark-voice/spark-recall-format.js';
 
+export { createSparkVoiceBroadcaster } from './services/spark-voice/spark-voice-broadcast.js';
+
+export type {
+  SparkBroadcastTarget,
+  SparkVoiceBroadcaster,
+} from './services/spark-voice/spark-voice-broadcast.js';
+
 export type {
   SparkRecallGraphView,
   SparkRecallItemView,

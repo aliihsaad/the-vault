@@ -35,6 +35,7 @@ import {
   resolveVaultCollabMcpServerPath,
   createSparkBrainSettingsAdapter,
   createSparkProviderCredentialStore,
+  createSparkVoiceBroadcaster,
   createVaultBrainStore,
   formatSparkRecall,
   pickDominantProject,
@@ -190,14 +191,19 @@ async function getSparkVoiceInstructions(): Promise<string | null> {
   }
 }
 
+// Fan-out for spark:voice:* so both the main window and the persistent overlay
+// window (D) receive events/audio. Windows register their webContents on create.
+const sparkVoiceBroadcast = createSparkVoiceBroadcaster();
+
 const sparkVoiceHost = createSparkVoiceHost({
   credentials: sparkProviderCredentials,
   fetchImpl: createNodeSparkFetch(),
   createRealtimeSocket: createNodeRealtimeSocket,
-  sendEvent: (event) => win?.webContents.send('spark:voice:event', event),
-  playAudio: (audio, mimeType) => win?.webContents.send('spark:voice:playAudio', { audio, mimeType }),
-  playPcm: (data, mimeType) => win?.webContents.send('spark:voice:playPcm', { data, mimeType }),
-  stopAudio: () => win?.webContents.send('spark:voice:stopAudio'),
+  // Fan out to every registered Spark renderer (main window + overlay, D).
+  sendEvent: (event) => sparkVoiceBroadcast.send('spark:voice:event', event),
+  playAudio: (audio, mimeType) => sparkVoiceBroadcast.send('spark:voice:playAudio', { audio, mimeType }),
+  playPcm: (data, mimeType) => sparkVoiceBroadcast.send('spark:voice:playPcm', { data, mimeType }),
+  stopAudio: () => sparkVoiceBroadcast.send('spark:voice:stopAudio'),
   recall: sparkVoiceRecall,
   getInstructions: getSparkVoiceInstructions,
   // Expose the brain runtime's executable skills to the realtime model (E).
@@ -1257,6 +1263,9 @@ function createWindow() {
     callback(isMediaPermission(permission));
   });
   win.webContents.session.setPermissionCheckHandler((_wc, permission) => isMediaPermission(permission));
+
+  // Receive spark:voice:* broadcasts (pruned automatically when destroyed).
+  sparkVoiceBroadcast.add(win.webContents);
 
   // Test active push message to Renderer-process.
   win.webContents.on('did-finish-load', () => {
