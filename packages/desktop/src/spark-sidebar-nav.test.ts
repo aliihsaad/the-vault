@@ -35,4 +35,17 @@ describe('Spark sidebar extension entry', () => {
     const appSource = readSource('./App.tsx');
     expect(appSource).toMatch(/spark: \{\s*title: 'Spark'/);
   });
+
+  it('gates the Spark tab on the spark-brain extension being installed', () => {
+    const appSource = readSource('./App.tsx');
+    // Spark is an installable extension — its tab only renders once installed.
+    expect(appSource).toContain('sparkInstalled');
+    expect(appSource).toContain('api.getSnapshot()');
+    expect(appSource).toMatch(/item\.id !== 'spark' \|\| sparkInstalled/);
+    // installState that means "present" excludes missing/installable.
+    expect(appSource).toContain("installState !== 'missing'");
+    expect(appSource).toContain("installState !== 'installable'");
+    // Never strand the user on the hidden tab.
+    expect(appSource).toContain("activeTab === 'spark' && !sparkInstalled");
+  });
 });

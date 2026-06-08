@@ -179,10 +179,54 @@ function App() {
   } | null>(null);
   const [memoryInitialSelection, setMemoryInitialSelection] = useState<{ itemUid: string; nonce: number } | null>(null);
   const [reviewInitialTab, setReviewInitialTab] = useState<AgentReviewTab>('proposals');
+  // Spark is an installable extension, not a built-in: its sidebar tab only
+  // appears once the spark-brain extension is actually installed.
+  const [sparkInstalled, setSparkInstalled] = useState(false);
 
   useEffect(() => {
     void fetchStatus();
   }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    async function checkSparkInstalled() {
+      try {
+        const api = window.sparkApi;
+        if (!api) {
+          return;
+        }
+        const result = await api.getSnapshot();
+        const installState = result?.data?.status?.installState;
+        const installed =
+          installState != null && installState !== 'missing' && installState !== 'installable';
+        if (!cancelled) {
+          setSparkInstalled(installed);
+        }
+      } catch {
+        /* leave the tab hidden if the extension snapshot is unavailable */
+      }
+    }
+    void checkSparkInstalled();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // If Spark isn't installed, never strand the user on its (now hidden) tab.
+  useEffect(() => {
+    if (activeTab === 'spark' && !sparkInstalled) {
+      setActiveTab('overview');
+    }
+  }, [activeTab, sparkInstalled]);
+
+  const primaryNavSections = useMemo(
+    () =>
+      PRIMARY_NAV_SECTIONS.map((section) => ({
+        ...section,
+        items: section.items.filter((item) => item.id !== 'spark' || sparkInstalled),
+      })).filter((section) => section.items.length > 0),
+    [sparkInstalled],
+  );
 
   async function fetchStatus() {
     setLoadingStatus(true);
@@ -272,7 +316,7 @@ function App() {
           </div>
 
           <nav className="nav-stack" aria-label="Primary">
-            {PRIMARY_NAV_SECTIONS.map((section) => (
+            {primaryNavSections.map((section) => (
               <div key={section.label} className="nav-section">
                 <span className="nav-section-label">{section.label}</span>
                 <div className="nav-section-items">
