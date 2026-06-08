@@ -6,7 +6,7 @@ import { resolve } from 'node:path';
 export default defineConfig({
   base: './',
   // Don't let electron-builder output (dist/, win-unpacked/) trigger dev-server
-  // reloads — that reload storm tears down any live Spark voice session.
+  // reloads during development.
   server: {
     watch: {
       ignored: ['**/dist/**', '**/dist-renderer/**', '**/dist-electron/**'],
@@ -60,7 +60,7 @@ export default defineConfig({
         vite: {
           build: {
             rollupOptions: {
-              external: ['@the-vault/core', 'better-sqlite3', 'node-pty', 'ws']
+              external: ['@the-vault/core', 'better-sqlite3', 'node-pty']
             }
           }
         }

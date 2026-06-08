@@ -14,15 +14,6 @@ import type {
   GraphifyRuntimeStatus,
   SaveGraphifyRuntimeConfigInput,
   SaveVaultCollabRuntimeConfigInput,
-  SparkExtensionAction,
-  SparkExtensionActionResult,
-  SparkExtensionSnapshot,
-  SparkProviderCredentialStateView,
-  SparkProviderRole,
-  SparkRoleAssignments,
-  SparkVoiceEvent,
-  SparkVoiceReadiness,
-  SparkVoiceStatus,
   VaultCollabActionResult,
   VaultCollabAgentRequestInput,
   VaultCollabDashboardActionInput,
@@ -458,68 +449,6 @@ declare global {
     };
   }
 
-  interface SparkAPI {
-    getSnapshot: () => Promise<VaultResponse<SparkExtensionSnapshot>>;
-    executeAction: (input: SparkExtensionAction) => Promise<VaultResponse<SparkExtensionActionResult>>;
-    // S2 secure provider credential channels. Keys go in via setProviderCredential
-    // and are never returned — only credential STATE (configured + baseUrl) comes back.
-    setProviderCredential: (
-      providerId: string,
-      key: string,
-      baseUrl?: string | null,
-    ) => Promise<VaultResponse<SparkProviderCredentialStateView>>;
-    getProviderCredentialState: (
-      providerId: string,
-    ) => Promise<VaultResponse<SparkProviderCredentialStateView>>;
-    setRoleAssignment: (
-      role: SparkProviderRole,
-      providerId: string,
-    ) => Promise<VaultResponse<SparkRoleAssignments>>;
-    getRoleAssignments: () => Promise<VaultResponse<SparkRoleAssignments>>;
-  }
-
-  // S3 voice runtime bridge. The renderer drives the session and subscribes to
-  // the host event stream; the SparkSessionFrame is reconstructed renderer-side
-  // by folding SparkVoiceEvents (applySparkVoiceEvent) — matching the S1 props.
-  interface SparkVoiceStatusResult {
-    status: SparkVoiceStatus;
-  }
-
-  interface SparkVoiceSessionStatus {
-    status: SparkVoiceStatus;
-    active: boolean;
-  }
-
-  interface SparkVoiceAPI {
-    getReadiness: () => Promise<VaultResponse<SparkVoiceReadiness>>;
-    getStatus: () => Promise<VaultResponse<SparkVoiceSessionStatus>>;
-    start: () => Promise<VaultResponse<SparkVoiceReadiness>>;
-    stop: () => Promise<VaultResponse<SparkVoiceStatusResult>>;
-    sendText: (text: string) => Promise<VaultResponse<SparkVoiceStatusResult>>;
-    sendAudioUtterance: (
-      data: ArrayBuffer,
-      mimeType: string,
-    ) => Promise<VaultResponse<SparkVoiceStatusResult>>;
-    sendAudioLevel: (level: number, ts?: number) => void;
-    sendPcmChunk: (base64Pcm: string) => void;
-    notifyPlaybackEnded: () => void;
-    onVoiceEvent: (callback: (event: SparkVoiceEvent) => void) => () => void;
-    onPlayAudio: (callback: (payload: { audio: Uint8Array; mimeType: string }) => void) => () => void;
-    onPlayPcm: (callback: (payload: { data: string; mimeType: string }) => void) => () => void;
-    onStopAudio: (callback: () => void) => () => void;
-  }
-
-  interface SparkOverlayState {
-    open: boolean;
-  }
-
-  interface SparkOverlayAPI {
-    open: () => Promise<VaultResponse<SparkOverlayState>>;
-    close: () => Promise<VaultResponse<SparkOverlayState>>;
-    getStatus: () => Promise<VaultResponse<SparkOverlayState>>;
-    onState: (callback: (payload: SparkOverlayState) => void) => () => void;
-  }
-
   interface VaultSaveResult {
     success: boolean;
     item: VaultMemory;
@@ -857,9 +786,6 @@ declare global {
 
   interface Window {
     vaultAPI: VaultAPI;
-    sparkApi: SparkAPI;
-    sparkVoiceApi: SparkVoiceAPI;
-    sparkOverlayApi?: SparkOverlayAPI;
   }
 }
 

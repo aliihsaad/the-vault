@@ -20,7 +20,6 @@ import {
   Gauge,
 } from 'lucide-react';
 import { ConnectPanel } from './ConnectPanel.js';
-import { SparkSettingsPanel } from './SparkSettingsPanel.js';
 import { buildGraphifySettingsViewModel } from '../graphify-view-model.js';
 import type {
   GraphifyInstallPlan,
@@ -1601,7 +1600,7 @@ export function SettingsView({ vaultStatus }: { vaultStatus: VaultStatus | null 
           <div className="section-intro-copy">
             <span className="section-intro-eyebrow">Extensions</span>
             <div className="section-intro-title">Extensions stay optional, local, and explicitly installed</div>
-            <p className="section-intro-text">Detect Graphify, Vault Collab, and Spark settings, inspect install plans, and keep every extension boundary visible before the dashboard uses it.</p>
+            <p className="section-intro-text">Detect Graphify and Vault Collab settings, inspect install plans, and keep every extension boundary visible before the dashboard uses it.</p>
           </div>
           <div className="section-intro-meta">
             <span className="section-intro-chip">optional runtime</span>
@@ -1725,8 +1724,6 @@ export function SettingsView({ vaultStatus }: { vaultStatus: VaultStatus | null 
             </>
           )}
         </section>
-
-        <SparkSettingsPanel copyText={copyText} copiedToken={copiedToken} />
 
         <section className="panel settings-section graphify-settings-panel vault-collab-settings-panel">
           <div className="panel-header">

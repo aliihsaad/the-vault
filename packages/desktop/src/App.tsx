@@ -17,7 +17,6 @@ import {
   Search,
   Settings,
   ShieldCheck,
-  Sparkles,
 } from 'lucide-react';
 import { ActivityLogsView } from './components/ActivityLogsView.js';
 import { AgentReviewPane, type AgentReviewTab } from './components/AgentReviewPane.js';
@@ -34,8 +33,6 @@ import {
 import { MemoryView } from './components/MemoryView.js';
 import { OverviewCockpitView } from './components/OverviewCockpitView.js';
 import { SettingsView } from './components/SettingsView.js';
-import { SparkView } from './components/SparkView.js';
-import { useSparkOverlay } from './spark/use-spark-overlay.js';
 import { VaultAgentView } from './components/VaultAgentView.js';
 import { VaultCollabView } from './components/VaultCollabView.js';
 import { VaultStructureView } from './components/VaultStructureView.js';
@@ -50,7 +47,6 @@ type PrimaryTab =
   | 'decisions'
   | 'loops'
   | 'graph'
-  | 'spark'
   | 'recall'
   | 'analytics'
   | 'agent'
@@ -80,7 +76,6 @@ const OPERATIONS_NAV: Array<NavItem<PrimaryTab>> = [
 const EXTENSION_NAV: Array<NavItem<PrimaryTab>> = [
   { id: 'graph', label: 'Graphify', description: 'Project graph extension', icon: Network },
   { id: 'collab', label: 'Vault Collab', description: 'Agent Inbox and sessions', icon: Inbox },
-  { id: 'spark', label: 'Spark', description: 'Voice runtime and brain', icon: Sparkles },
 ];
 
 const RUNTIME_NAV: Array<NavItem<PrimaryTab>> = [
@@ -133,10 +128,6 @@ const TAB_META: Record<AppTab, { title: string; description: string }> = {
     title: 'Graph',
     description: 'Graphify project artifacts, build status, reports, and Vault relationship fallback.',
   },
-  spark: {
-    title: 'Spark',
-    description: 'Spark Brain runtime: skills, approvals, capability packs, brain artifacts, providers, and evolution.',
-  },
   recall: {
     title: 'Recall',
     description: 'Inspect recall activity, candidate reduction, and prompt-packing efficiency.',
@@ -180,90 +171,14 @@ function App() {
   } | null>(null);
   const [memoryInitialSelection, setMemoryInitialSelection] = useState<{ itemUid: string; nonce: number } | null>(null);
   const [reviewInitialTab, setReviewInitialTab] = useState<AgentReviewTab>('proposals');
-  // Spark is an installable extension, not a built-in: its sidebar tab only
-  // appears once the spark-brain extension is actually installed.
-  const [sparkInstalled, setSparkInstalled] = useState(false);
-  // Spark voice overlay (D): auto-pop the floating window when the user leaves
-  // the Spark page mid-session, and dock it when they return.
-  const sparkOverlay = useSparkOverlay();
-  const [sparkVoiceActive, setSparkVoiceActive] = useState(false);
 
   useEffect(() => {
     void fetchStatus();
   }, []);
 
-  useEffect(() => {
-    let cancelled = false;
-    async function checkSparkInstalled() {
-      try {
-        const api = window.sparkApi;
-        if (!api) {
-          return;
-        }
-        const result = await api.getSnapshot();
-        const installState = result?.data?.status?.installState;
-        const installed =
-          installState != null && installState !== 'missing' && installState !== 'installable';
-        if (!cancelled) {
-          setSparkInstalled(installed);
-        }
-      } catch {
-        /* leave the tab hidden if the extension snapshot is unavailable */
-      }
-    }
-    void checkSparkInstalled();
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  // If Spark isn't installed, never strand the user on its (now hidden) tab.
-  useEffect(() => {
-    if (activeTab === 'spark' && !sparkInstalled) {
-      setActiveTab('overview');
-    }
-  }, [activeTab, sparkInstalled]);
-
-  // Track whether a Spark voice session is live (events broadcast to this window
-  // even when the Spark page is unmounted), so we can auto-manage the overlay.
-  useEffect(() => {
-    const api = typeof window !== 'undefined' ? window.sparkVoiceApi : undefined;
-    if (!api) {
-      return undefined;
-    }
-    void api.getStatus?.().then((result) => {
-      if (result?.success && result.data) {
-        setSparkVoiceActive(result.data.active);
-      }
-    }).catch(() => { /* status is best-effort */ });
-    const off = api.onVoiceEvent((event) => {
-      if (event.kind === 'status') {
-        setSparkVoiceActive(event.status !== 'idle' && event.status !== 'error');
-      }
-    });
-    return off;
-  }, []);
-
-  // Auto-pop the floating overlay when navigating away from the Spark page with a
-  // live session; dock it when back on the Spark page or when the session ends.
-  useEffect(() => {
-    if (!sparkOverlay.available) {
-      return;
-    }
-    if (activeTab !== 'spark' && sparkVoiceActive && !sparkOverlay.open) {
-      void sparkOverlay.openOverlay();
-    } else if (sparkOverlay.open && (activeTab === 'spark' || !sparkVoiceActive)) {
-      void sparkOverlay.closeOverlay();
-    }
-  }, [activeTab, sparkVoiceActive, sparkOverlay]);
-
   const primaryNavSections = useMemo(
-    () =>
-      PRIMARY_NAV_SECTIONS.map((section) => ({
-        ...section,
-        items: section.items.filter((item) => item.id !== 'spark' || sparkInstalled),
-      })).filter((section) => section.items.length > 0),
-    [sparkInstalled],
+    () => PRIMARY_NAV_SECTIONS.filter((section) => section.items.length > 0),
+    [],
   );
 
   async function fetchStatus() {
@@ -494,7 +409,6 @@ function App() {
               ) : null}
               {activeTab === 'loops' ? <LoopsOperationsView onOpenMemory={openMemoryItem} /> : null}
               {activeTab === 'graph' ? <GraphOperationsView vaultStatus={vaultStatus} onOpenMemory={openMemoryItem} /> : null}
-              {activeTab === 'spark' ? <SparkView /> : null}
               {activeTab === 'recall' ? <RecallOperationsView /> : null}
               {activeTab === 'analytics' ? <AnalyticsOperationsView /> : null}
               {activeTab === 'agent' ? <VaultAgentView /> : null}

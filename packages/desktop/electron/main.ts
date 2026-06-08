@@ -33,17 +33,8 @@ import {
   resolveGraphifyCommandForRuntimeConfig,
   resolveVaultCollabCliPath,
   resolveVaultCollabMcpServerPath,
-  createSparkBrainSettingsAdapter,
-  createSparkProviderCredentialStore,
-  createSparkVoiceBroadcaster,
-  createVaultBrainStore,
-  formatSparkRecall,
-  pickDominantProject,
-  SparkExtensionSettingsService,
   Vault,
 } from '@the-vault/core';
-import { createSparkBrainRuntimeLoader } from './spark-brain-runtime-loader.js';
-import { createNodeRealtimeSocket, createNodeSparkFetch, createSparkVoiceHost } from './spark-voice-host.js';
 import type { MemoryItemDetail, MemoryPack, ModelRoutingTable, RecallQuery } from '@the-vault/core';
 import {
   mcpEntriesMatch,
@@ -58,7 +49,6 @@ import {
   type GraphifyArtifactName,
   type GraphifyArtifactUrlRequest,
 } from '../src/graphify-artifact-url.js';
-import { SPARK_OVERLAY_HASH, sparkOverlayWindowOptions } from '../src/spark/spark-overlay-route.js';
 import type {
   GraphifyAvailableTools,
   GraphifyArtifactPaths,
@@ -88,130 +78,6 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 // Initialize Vault
 const vault = new Vault();
 vault.initialize();
-// Wire the Spark extension Settings UI to the real @spark/brain runtime that
-// ships in the Vault extensions folder. The runtime is loaded dynamically (it
-// is built externally in vault-spark), bootstrapped through a Vault-backed
-// BrainVaultStore, and surfaced as a live snapshot. When the runtime is not
-// built/loadable the adapter degrades to a clear status instead of crashing.
-const sparkBrainRuntimeLoader = createSparkBrainRuntimeLoader(vault.getVaultRoot());
-// S2 secure provider registry. Credentials are stored in the encrypted secret
-// store (safeStorage/AES-GCM via getSecretSetting/setSecretSetting); base URLs
-// and per-role assignments are plain settings. The store resolves raw keys
-// HOST-SIDE only — never through executeAction and never echoed to the renderer.
-const sparkProviderCredentials = createSparkProviderCredentialStore({
-  getSecret: getSecretSetting,
-  setSecret: setSecretSetting,
-  getSetting: (key) => vault.getSetting(key),
-  setSetting: (key, value) => vault.setSetting(key, value),
-});
-const sparkBrainAdapter = createSparkBrainSettingsAdapter({
-  loadModule: () => sparkBrainRuntimeLoader.loadModule(),
-  getPackageInfo: () => sparkBrainRuntimeLoader.getPackageInfo(),
-  createStore: () => createVaultBrainStore(vault),
-  // Feed live, renderer-safe provider health (configured state + role
-  // assignments) into the snapshot. No keys cross this boundary.
-  getProviderHealth: () => sparkProviderCredentials.getProviderHealthSummary(),
-});
-const sparkExtensionSettings = new SparkExtensionSettingsService({
-  vaultRoot: vault.getVaultRoot(),
-  adapter: sparkBrainAdapter,
-});
-
-// S3 voice runtime host. Owns the live VoiceSession (STT→LLM→tools→TTS) and
-// bridges its event stream to the renderer over dedicated `spark:voice:*`
-// channels. Providers are resolved per role from the S2 credential store; keys
-// stay host-side. Read-only Vault recall is wired both as fenced background
-// context and as the policy-gated `recall_memory` tool. Audio capture/playback
-// happen in the renderer (Web Audio); main runs the orchestration.
-async function sparkVoiceRecall(query: string): Promise<string | null> {
-  const trimmed = query.trim();
-  if (!trimmed) {
-    return null;
-  }
-  try {
-    // Cross-project recall (no project filter) so Spark can draw on everything.
-    const pack = await vault.recallContext({ queryText: trimmed, limit: 8 });
-    // Enrich with Graphify graph depth for the most relevant project so Spark
-    // can reason about code structure, not just memory summaries. The graph is
-    // project-scoped; recall stays cross-project. Optional — degrades silently
-    // when Graphify isn't built/available for that project.
-    let graph = null;
-    const dominant = pickDominantProject(pack);
-    if (dominant) {
-      try {
-        const enriched = await vault.recallWithGraphContext({
-          project: dominant,
-          queryText: trimmed,
-          limit: 8,
-        });
-        if (enriched.graph?.used) {
-          graph = enriched.graph;
-        }
-      } catch {
-        /* graph context is best-effort; fall back to memory-only recall */
-      }
-    }
-    return formatSparkRecall(pack, graph);
-  } catch {
-    return null;
-  }
-}
-
-// Compose Spark's voice persona from the vault-spark brain artifacts so the
-// realtime model speaks AS Spark with the user's identity/memory context — not a
-// generic assistant. Read-only; degrades to null (default prompt) on any error.
-const SPARK_VOICE_ARTIFACT_ORDER = ['SPARK.md', 'USER.md', 'MEMORY.md', 'CONTEXT.md'] as const;
-async function getSparkVoiceInstructions(): Promise<string | null> {
-  try {
-    const store = createVaultBrainStore(vault);
-    const { project } = await store.ensureProject({ name: 'Spark-Brain', slug: 'spark-brain' });
-    const artifacts = await store.listArtifacts(project.id);
-    if (!artifacts.length) {
-      return null;
-    }
-    const sections: string[] = [];
-    for (const kind of SPARK_VOICE_ARTIFACT_ORDER) {
-      const artifact = artifacts.find((a) => a.artifactKind === kind);
-      if (artifact?.content?.trim()) {
-        sections.push(`# ${kind}\n${artifact.content.trim()}`);
-      }
-    }
-    if (!sections.length) {
-      return null;
-    }
-    return [
-      'You are Spark, the voice assistant living inside The Vault. Adopt the identity, voice, and operating rules described in the brain documents below, and use what they say about the user.',
-      "Use the recall_memory tool whenever a question touches the user's past work, decisions, projects, or anything you might have stored — ground answers in their Vault rather than guessing.",
-      'Use the show_on_canvas tool to display worked solutions, tables, code, lists, or detailed results so the user can read them, instead of speaking long answers aloud.',
-      'Keep spoken replies concise and natural. Treat the documents below as authoritative background, never read them aloud verbatim.',
-      '',
-      sections.join('\n\n'),
-    ].join('\n');
-  } catch {
-    return null;
-  }
-}
-
-// Fan-out for spark:voice:* so both the main window and the persistent overlay
-// window (D) receive events/audio. Windows register their webContents on create.
-const sparkVoiceBroadcast = createSparkVoiceBroadcaster();
-
-const sparkVoiceHost = createSparkVoiceHost({
-  credentials: sparkProviderCredentials,
-  fetchImpl: createNodeSparkFetch(),
-  createRealtimeSocket: createNodeRealtimeSocket,
-  // Session frame (transcript/tools/canvas/status) fans out to BOTH windows so
-  // each can render the live view (D). Audio playback routes only to the current
-  // owner (overlay if open, else the main window) so there is never double audio.
-  sendEvent: (event) => sparkVoiceBroadcast.send('spark:voice:event', event),
-  playAudio: (audio, mimeType) => sparkAudioOwner()?.send('spark:voice:playAudio', { audio, mimeType }),
-  playPcm: (data, mimeType) => sparkAudioOwner()?.send('spark:voice:playPcm', { data, mimeType }),
-  stopAudio: () => sparkAudioOwner()?.send('spark:voice:stopAudio'),
-  recall: sparkVoiceRecall,
-  getInstructions: getSparkVoiceInstructions,
-  // Expose the brain runtime's executable skills to the realtime model (E).
-  getBrainRegistry: () => sparkBrainAdapter.getRuntimeToolRegistry(),
-});
 
 // Initialize AI enrichment from saved settings.
 // Enrichment activates automatically when API key + model are configured.
@@ -1256,20 +1122,6 @@ function createWindow() {
     },
   });
 
-  // Grant microphone access for the Spark voice runtime. Without an explicit
-  // handler Electron denies getUserMedia, so mic capture silently produces no
-  // audio (the visualizer stays "Audio inactive" and no utterance ever reaches
-  // STT). We grant only audio/media to the app's own renderer and deny the rest.
-  const isMediaPermission = (permission: string): boolean =>
-    permission === 'media' || permission === 'audioCapture' || permission === 'microphone';
-  win.webContents.session.setPermissionRequestHandler((_wc, permission, callback) => {
-    callback(isMediaPermission(permission));
-  });
-  win.webContents.session.setPermissionCheckHandler((_wc, permission) => isMediaPermission(permission));
-
-  // Receive spark:voice:* broadcasts (pruned automatically when destroyed).
-  sparkVoiceBroadcast.add(win.webContents);
-
   // Test active push message to Renderer-process.
   win.webContents.on('did-finish-load', () => {
     win?.webContents.send('main-process-message', (new Date).toLocaleString());
@@ -1281,80 +1133,6 @@ function createWindow() {
   } else {
     win.loadFile(join(rendererPath, 'index.html'));
   }
-}
-
-// --- Persistent Spark overlay window (roadmap D) ------------------------------
-// A small, frameless, always-on-top window that loads the same renderer bundle
-// at the #spark-overlay route. It owns mic capture + playback + controls so a
-// voice session keeps running when the user navigates away from the main Spark
-// page (the main window becomes a live viewer). spark:voice:* already fans out
-// to it via sparkVoiceBroadcast; we also broadcast spark:overlay:state so the
-// main window can yield audio ownership.
-let overlayWin: BrowserWindow | null = null;
-
-function isSparkOverlayOpen(): boolean {
-  return overlayWin !== null && !overlayWin.isDestroyed();
-}
-
-/** The window that should own audio playback: the overlay if open, else main. */
-function sparkAudioOwner(): Electron.WebContents | null {
-  if (isSparkOverlayOpen()) {
-    return overlayWin!.webContents;
-  }
-  return win && !win.isDestroyed() ? win.webContents : null;
-}
-
-function broadcastOverlayState(): void {
-  sparkVoiceBroadcast.send('spark:overlay:state', { open: isSparkOverlayOpen() });
-}
-
-function openSparkOverlay(): { open: boolean } {
-  if (isSparkOverlayOpen()) {
-    overlayWin!.show();
-    overlayWin!.focus();
-    return { open: true };
-  }
-
-  overlayWin = new BrowserWindow({
-    title: 'Spark',
-    icon: join(publicPath, 'vault-icon.png'),
-    ...sparkOverlayWindowOptions(),
-    webPreferences: {
-      preload: join(__dirname, 'preload.mjs'),
-      contextIsolation: true,
-      nodeIntegration: false,
-    },
-  });
-
-  // Share the same mic grant as the main window (default session).
-  const isMediaPermission = (permission: string): boolean =>
-    permission === 'media' || permission === 'audioCapture' || permission === 'microphone';
-  overlayWin.webContents.session.setPermissionRequestHandler((_wc, permission, callback) => {
-    callback(isMediaPermission(permission));
-  });
-  overlayWin.webContents.session.setPermissionCheckHandler((_wc, permission) => isMediaPermission(permission));
-
-  sparkVoiceBroadcast.add(overlayWin.webContents);
-  overlayWin.on('closed', () => {
-    overlayWin = null;
-    broadcastOverlayState();
-  });
-  overlayWin.webContents.on('did-finish-load', () => broadcastOverlayState());
-
-  if (VITE_DEV_SERVER_URL) {
-    void overlayWin.loadURL(`${VITE_DEV_SERVER_URL}#${SPARK_OVERLAY_HASH}`);
-  } else {
-    void overlayWin.loadFile(join(rendererPath, 'index.html'), { hash: SPARK_OVERLAY_HASH });
-  }
-  return { open: true };
-}
-
-function closeSparkOverlay(): { open: boolean } {
-  if (isSparkOverlayOpen()) {
-    overlayWin!.close();
-  }
-  overlayWin = null;
-  return { open: false };
 }
 
 function getFallbackSecretKey(): Buffer {
@@ -2075,153 +1853,6 @@ app.whenReady().then(() => {
   createWindow();
 
   // IPC Handlers — Expose Vault methods
-
-  ipcMain.handle('spark:getSnapshot', async () => {
-    try {
-      return { success: true, data: await sparkExtensionSettings.getSnapshot() };
-    } catch (e: any) {
-      return { success: false, error: e.message };
-    }
-  });
-
-  ipcMain.handle('spark:executeAction', async (_, input) => {
-    try {
-      return { success: true, data: await sparkExtensionSettings.executeAction(input) };
-    } catch (e: any) {
-      return { success: false, error: e.message };
-    }
-  });
-
-  // S2 provider credential channels. Dedicated to secret handling — keys are
-  // written into the encrypted store and only credential STATE is returned.
-  // These never flow through executeAction (which strips secrets).
-  ipcMain.handle('spark:setProviderCredential', async (_, providerId, key, baseUrl) => {
-    try {
-      return {
-        success: true,
-        data: sparkProviderCredentials.setProviderCredential(providerId, key, baseUrl ?? undefined),
-      };
-    } catch (e: any) {
-      return { success: false, error: e.message };
-    }
-  });
-
-  ipcMain.handle('spark:getProviderCredentialState', async (_, providerId) => {
-    try {
-      return { success: true, data: sparkProviderCredentials.getProviderCredentialState(providerId) };
-    } catch (e: any) {
-      return { success: false, error: e.message };
-    }
-  });
-
-  ipcMain.handle('spark:setRoleAssignment', async (_, role, providerId) => {
-    try {
-      return { success: true, data: sparkProviderCredentials.setRoleAssignment(role, providerId) };
-    } catch (e: any) {
-      return { success: false, error: e.message };
-    }
-  });
-
-  ipcMain.handle('spark:getRoleAssignments', async () => {
-    try {
-      return { success: true, data: sparkProviderCredentials.getRoleAssignments() };
-    } catch (e: any) {
-      return { success: false, error: e.message };
-    }
-  });
-
-  // S3 voice runtime channels. The host owns the VoiceSession; events flow back
-  // to the renderer via win.webContents.send('spark:voice:event', ...).
-  ipcMain.handle('spark:voice:getReadiness', async () => {
-    try {
-      return { success: true, data: sparkVoiceHost.getReadiness() };
-    } catch (e: any) {
-      return { success: false, error: e.message };
-    }
-  });
-
-  ipcMain.handle('spark:voice:getStatus', async () => {
-    try {
-      return { success: true, data: { status: sparkVoiceHost.getStatus(), active: sparkVoiceHost.isActive() } };
-    } catch (e: any) {
-      return { success: false, error: e.message };
-    }
-  });
-
-  ipcMain.handle('spark:voice:start', async () => {
-    try {
-      return { success: true, data: await sparkVoiceHost.start() };
-    } catch (e: any) {
-      return { success: false, error: e.message };
-    }
-  });
-
-  ipcMain.handle('spark:voice:stop', async () => {
-    try {
-      sparkVoiceHost.stop();
-      return { success: true, data: { status: sparkVoiceHost.getStatus() } };
-    } catch (e: any) {
-      return { success: false, error: e.message };
-    }
-  });
-
-  ipcMain.handle('spark:voice:sendText', async (_, text: string) => {
-    try {
-      await sparkVoiceHost.sendText(String(text ?? ''));
-      return { success: true, data: { status: sparkVoiceHost.getStatus() } };
-    } catch (e: any) {
-      return { success: false, error: e.message };
-    }
-  });
-
-  ipcMain.handle('spark:voice:audioUtterance', async (_, payload: { data: ArrayBuffer | Uint8Array; mimeType: string }) => {
-    try {
-      const data = payload.data instanceof Uint8Array ? payload.data : new Uint8Array(payload.data);
-      await sparkVoiceHost.pushAudioUtterance({ data, mimeType: payload.mimeType });
-      return { success: true, data: { status: sparkVoiceHost.getStatus() } };
-    } catch (e: any) {
-      return { success: false, error: e.message };
-    }
-  });
-
-  // Realtime mic PCM stream (base64 16kHz mono) — fire-and-forget uplink.
-  ipcMain.on('spark:voice:pcm', (_, base64Pcm: string) => {
-    if (typeof base64Pcm === 'string' && base64Pcm.length > 0) {
-      sparkVoiceHost.pushPcmChunk(base64Pcm);
-    }
-  });
-
-  // Fire-and-forget level/level/playback signals — use `.on` (no response).
-  ipcMain.on('spark:voice:audioLevel', (_, level: number, ts?: number) => {
-    sparkVoiceHost.pushAudioLevel(Number(level) || 0, ts);
-  });
-
-  ipcMain.on('spark:voice:playbackEnded', () => {
-    sparkVoiceHost.notifyPlaybackEnded();
-  });
-
-  // Persistent overlay window controls (roadmap D). Open/close the always-on-top
-  // floating Spark window that owns capture + playback while it is up.
-  ipcMain.handle('spark:overlay:open', async () => {
-    try {
-      return { success: true, data: openSparkOverlay() };
-    } catch (e: any) {
-      return { success: false, error: e.message };
-    }
-  });
-
-  ipcMain.handle('spark:overlay:close', async () => {
-    try {
-      return { success: true, data: closeSparkOverlay() };
-    } catch (e: any) {
-      return { success: false, error: e.message };
-    }
-  });
-
-  ipcMain.handle('spark:overlay:status', async () => {
-    return { success: true, data: { open: isSparkOverlayOpen() } };
-  });
-
 
   ipcMain.handle('vault:status', async () => {
     const vaultRoot = vault.getVaultRoot();
