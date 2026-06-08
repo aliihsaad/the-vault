@@ -184,9 +184,17 @@ const APPROVAL_PERMISSIONS = new Set(['memory.write', 'memory.save', 'vault.writ
  * main process) so a real, policy-gated, read-only tool is demoable without the
  * brain runtime exposing skill execution. All are read-only — no memory writes.
  */
+/** A renderable canvas payload Spark can push to the live session canvas. */
+export interface SparkCanvasToolItem {
+  kind: string;
+  payload: unknown;
+}
+
 export interface SparkHostToolDeps {
   /** Read-only Vault memory recall, returns reference material for a query. */
   recallMemory?: (query: string) => Promise<unknown> | unknown;
+  /** Render an item to the session canvas (markdown/table/result/artifact). */
+  showOnCanvas?: (item: SparkCanvasToolItem) => void;
 }
 
 export function buildSparkHostTools(deps: SparkHostToolDeps): SparkVoiceTool[] {
@@ -217,6 +225,46 @@ export function buildSparkHostTools(deps: SparkHostToolDeps): SparkVoiceTool[] {
         const query =
           args && typeof args === 'object' ? String((args as { query?: unknown }).query ?? '') : '';
         return deps.recallMemory!(query);
+      },
+    });
+  }
+  if (deps.showOnCanvas) {
+    tools.push({
+      definition: {
+        type: 'function',
+        function: {
+          name: 'show_on_canvas',
+          description:
+            'Render content to the live canvas so the user can see it: write notes, show a worked solution, a table, or a result. Use this to "show your work" instead of only speaking.',
+          parameters: {
+            type: 'object',
+            properties: {
+              kind: {
+                type: 'string',
+                enum: ['markdown', 'table', 'result', 'artifact'],
+                description: 'markdown text, an array of row objects (table), or an object (result/artifact)',
+              },
+              payload: {
+                description: 'Markdown string for markdown; array of row objects for table; an object for result/artifact',
+              },
+            },
+            required: ['kind', 'payload'],
+          },
+        },
+      },
+      policy: {
+        risk: 'low',
+        permission: 'ui.canvas',
+        parallelism: 'read_only',
+        requiresApproval: false,
+        memoryWriteAllowed: false,
+        streamingSafe: true,
+      },
+      handler: (args) => {
+        const record = args && typeof args === 'object' ? (args as Record<string, unknown>) : {};
+        const kind = typeof record.kind === 'string' ? record.kind : 'markdown';
+        deps.showOnCanvas!({ kind, payload: record.payload });
+        return { ok: true, message: 'Displayed on the canvas.' };
       },
     });
   }

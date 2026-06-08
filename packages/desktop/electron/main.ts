@@ -124,17 +124,24 @@ async function sparkVoiceRecall(query: string): Promise<string | null> {
     return null;
   }
   try {
-    const pack = await vault.recallContext({ queryText: trimmed, limit: 5 });
+    // Cross-project recall (no project filter) so Spark can draw on everything.
+    const pack = await vault.recallContext({ queryText: trimmed, limit: 8 });
+    const items = (pack?.topMatches ?? []).slice(0, 8).map((match) => match.item);
+    if (items.length > 0) {
+      const lines = items
+        .map((item) => {
+          const project = item.project ? `[${item.project}] ` : '';
+          const title = item.title ?? item.subject ?? 'memory';
+          return `- ${project}${title}: ${item.summary ?? ''}`.trim();
+        })
+        .join('\n');
+      // Prefer the ranked, project-labeled list; fall back to the summary.
+      return lines || (pack?.contextSummary?.trim() ?? null);
+    }
     if (pack?.contextSummary && pack.contextSummary.trim()) {
       return pack.contextSummary.trim();
     }
-    const items = (pack?.topMatches ?? []).slice(0, 5).map((match) => match.item);
-    if (items.length === 0) {
-      return null;
-    }
-    return items
-      .map((item) => `- ${item.title ?? item.subject ?? 'memory'}: ${item.summary ?? ''}`.trim())
-      .join('\n');
+    return null;
   } catch {
     return null;
   }
@@ -165,6 +172,7 @@ async function getSparkVoiceInstructions(): Promise<string | null> {
     return [
       'You are Spark, the voice assistant living inside The Vault. Adopt the identity, voice, and operating rules described in the brain documents below, and use what they say about the user.',
       "Use the recall_memory tool whenever a question touches the user's past work, decisions, projects, or anything you might have stored — ground answers in their Vault rather than guessing.",
+      'Use the show_on_canvas tool to display worked solutions, tables, code, lists, or detailed results so the user can read them, instead of speaking long answers aloud.',
       'Keep spoken replies concise and natural. Treat the documents below as authoritative background, never read them aloud verbatim.',
       '',
       sections.join('\n\n'),

@@ -192,6 +192,23 @@ describe('buildSparkHostTools (fixed read-only catalog)', () => {
     expect(recallMemory).toHaveBeenCalledWith('deadline');
   });
 
+  it('exposes a show_on_canvas tool that renders to the canvas via the injected sink', async () => {
+    const showOnCanvas = vi.fn();
+    const tools = buildSparkHostTools({ showOnCanvas });
+    const canvas = tools.find((t) => t.definition.function.name === 'show_on_canvas');
+    expect(canvas).toBeDefined();
+    expect(canvas!.policy.requiresApproval).toBe(false);
+    expect(canvas!.policy.memoryWriteAllowed).toBe(false);
+
+    const dispatcher = createSparkToolDispatcher(tools);
+    const result = await dispatcher.dispatch(
+      'show_on_canvas',
+      JSON.stringify({ kind: 'markdown', payload: '## Plan\n- step 1' }),
+    );
+    expect(result.ok).toBe(true);
+    expect(showOnCanvas).toHaveBeenCalledWith({ kind: 'markdown', payload: '## Plan\n- step 1' });
+  });
+
   it('returns an empty catalog when no capabilities are wired', () => {
     expect(buildSparkHostTools({})).toEqual([]);
   });

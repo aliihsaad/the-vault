@@ -96,9 +96,19 @@ export function createSparkVoiceHost(deps: SparkVoiceHostDeps): SparkVoiceHost {
     }
 
     if (readiness.mode === 'realtime') {
-      // Real, policy-gated host tools (Vault recall) — declared to the model so it
-      // actually grounds answers in the user's memory instead of guessing.
-      const hostTools = buildSparkHostTools({ recallMemory: deps.recall });
+      // Real, policy-gated host tools — declared to the model so it grounds
+      // answers in the user's memory (recall) and can show work on the canvas
+      // instead of only speaking.
+      let canvasSeq = 0;
+      const hostTools = buildSparkHostTools({
+        recallMemory: deps.recall,
+        showOnCanvas: (item) =>
+          deps.sendEvent({
+            kind: 'canvasItem',
+            item: { id: `rt_canvas_${(canvasSeq += 1)}`, kind: item.kind, payload: item.payload },
+            ts: Date.now(),
+          }),
+      });
       const dispatcher = createSparkToolDispatcher(hostTools);
       const toolDefs: SparkRealtimeToolDefinition[] = dispatcher.listDefinitions().map((def) => ({
         name: def.function.name,
