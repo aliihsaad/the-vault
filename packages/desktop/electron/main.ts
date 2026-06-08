@@ -58,6 +58,7 @@ import {
   type GraphifyArtifactName,
   type GraphifyArtifactUrlRequest,
 } from '../src/graphify-artifact-url.js';
+import { SPARK_OVERLAY_HASH, sparkOverlayWindowOptions } from '../src/spark/spark-overlay-route.js';
 import type {
   GraphifyAvailableTools,
   GraphifyArtifactPaths,
@@ -199,11 +200,13 @@ const sparkVoiceHost = createSparkVoiceHost({
   credentials: sparkProviderCredentials,
   fetchImpl: createNodeSparkFetch(),
   createRealtimeSocket: createNodeRealtimeSocket,
-  // Fan out to every registered Spark renderer (main window + overlay, D).
+  // Session frame (transcript/tools/canvas/status) fans out to BOTH windows so
+  // each can render the live view (D). Audio playback routes only to the current
+  // owner (overlay if open, else the main window) so there is never double audio.
   sendEvent: (event) => sparkVoiceBroadcast.send('spark:voice:event', event),
-  playAudio: (audio, mimeType) => sparkVoiceBroadcast.send('spark:voice:playAudio', { audio, mimeType }),
-  playPcm: (data, mimeType) => sparkVoiceBroadcast.send('spark:voice:playPcm', { data, mimeType }),
-  stopAudio: () => sparkVoiceBroadcast.send('spark:voice:stopAudio'),
+  playAudio: (audio, mimeType) => sparkAudioOwner()?.send('spark:voice:playAudio', { audio, mimeType }),
+  playPcm: (data, mimeType) => sparkAudioOwner()?.send('spark:voice:playPcm', { data, mimeType }),
+  stopAudio: () => sparkAudioOwner()?.send('spark:voice:stopAudio'),
   recall: sparkVoiceRecall,
   getInstructions: getSparkVoiceInstructions,
   // Expose the brain runtime's executable skills to the realtime model (E).
@@ -1280,6 +1283,80 @@ function createWindow() {
   }
 }
 
+// --- Persistent Spark overlay window (roadmap D) ------------------------------
+// A small, frameless, always-on-top window that loads the same renderer bundle
+// at the #spark-overlay route. It owns mic capture + playback + controls so a
+// voice session keeps running when the user navigates away from the main Spark
+// page (the main window becomes a live viewer). spark:voice:* already fans out
+// to it via sparkVoiceBroadcast; we also broadcast spark:overlay:state so the
+// main window can yield audio ownership.
+let overlayWin: BrowserWindow | null = null;
+
+function isSparkOverlayOpen(): boolean {
+  return overlayWin !== null && !overlayWin.isDestroyed();
+}
+
+/** The window that should own audio playback: the overlay if open, else main. */
+function sparkAudioOwner(): Electron.WebContents | null {
+  if (isSparkOverlayOpen()) {
+    return overlayWin!.webContents;
+  }
+  return win && !win.isDestroyed() ? win.webContents : null;
+}
+
+function broadcastOverlayState(): void {
+  sparkVoiceBroadcast.send('spark:overlay:state', { open: isSparkOverlayOpen() });
+}
+
+function openSparkOverlay(): { open: boolean } {
+  if (isSparkOverlayOpen()) {
+    overlayWin!.show();
+    overlayWin!.focus();
+    return { open: true };
+  }
+
+  overlayWin = new BrowserWindow({
+    title: 'Spark',
+    icon: join(publicPath, 'vault-icon.png'),
+    ...sparkOverlayWindowOptions(),
+    webPreferences: {
+      preload: join(__dirname, 'preload.mjs'),
+      contextIsolation: true,
+      nodeIntegration: false,
+    },
+  });
+
+  // Share the same mic grant as the main window (default session).
+  const isMediaPermission = (permission: string): boolean =>
+    permission === 'media' || permission === 'audioCapture' || permission === 'microphone';
+  overlayWin.webContents.session.setPermissionRequestHandler((_wc, permission, callback) => {
+    callback(isMediaPermission(permission));
+  });
+  overlayWin.webContents.session.setPermissionCheckHandler((_wc, permission) => isMediaPermission(permission));
+
+  sparkVoiceBroadcast.add(overlayWin.webContents);
+  overlayWin.on('closed', () => {
+    overlayWin = null;
+    broadcastOverlayState();
+  });
+  overlayWin.webContents.on('did-finish-load', () => broadcastOverlayState());
+
+  if (VITE_DEV_SERVER_URL) {
+    void overlayWin.loadURL(`${VITE_DEV_SERVER_URL}#${SPARK_OVERLAY_HASH}`);
+  } else {
+    void overlayWin.loadFile(join(rendererPath, 'index.html'), { hash: SPARK_OVERLAY_HASH });
+  }
+  return { open: true };
+}
+
+function closeSparkOverlay(): { open: boolean } {
+  if (isSparkOverlayOpen()) {
+    overlayWin!.close();
+  }
+  overlayWin = null;
+  return { open: false };
+}
+
 function getFallbackSecretKey(): Buffer {
   const secretSeed = [
     app.getPath('userData'),
@@ -2113,6 +2190,28 @@ app.whenReady().then(() => {
 
   ipcMain.on('spark:voice:playbackEnded', () => {
     sparkVoiceHost.notifyPlaybackEnded();
+  });
+
+  // Persistent overlay window controls (roadmap D). Open/close the always-on-top
+  // floating Spark window that owns capture + playback while it is up.
+  ipcMain.handle('spark:overlay:open', async () => {
+    try {
+      return { success: true, data: openSparkOverlay() };
+    } catch (e: any) {
+      return { success: false, error: e.message };
+    }
+  });
+
+  ipcMain.handle('spark:overlay:close', async () => {
+    try {
+      return { success: true, data: closeSparkOverlay() };
+    } catch (e: any) {
+      return { success: false, error: e.message };
+    }
+  });
+
+  ipcMain.handle('spark:overlay:status', async () => {
+    return { success: true, data: { open: isSparkOverlayOpen() } };
   });
 
 

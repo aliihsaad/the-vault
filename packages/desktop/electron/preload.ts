@@ -165,3 +165,18 @@ contextBridge.exposeInMainWorld('sparkVoiceApi', {
     };
   },
 });
+
+// Persistent overlay window controls (roadmap D). The overlay owns mic capture +
+// playback while open; both windows learn the open/closed state via onState.
+contextBridge.exposeInMainWorld('sparkOverlayApi', {
+  open: () => ipcRenderer.invoke('spark:overlay:open'),
+  close: () => ipcRenderer.invoke('spark:overlay:close'),
+  getStatus: () => ipcRenderer.invoke('spark:overlay:status'),
+  onState: (callback: (payload: { open: boolean }) => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, payload: { open: boolean }) => callback(payload);
+    ipcRenderer.on('spark:overlay:state', listener);
+    return () => {
+      ipcRenderer.removeListener('spark:overlay:state', listener);
+    };
+  },
+});

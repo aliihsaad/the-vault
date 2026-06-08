@@ -503,6 +503,17 @@ declare global {
     onStopAudio: (callback: () => void) => () => void;
   }
 
+  interface SparkOverlayState {
+    open: boolean;
+  }
+
+  interface SparkOverlayAPI {
+    open: () => Promise<VaultResponse<SparkOverlayState>>;
+    close: () => Promise<VaultResponse<SparkOverlayState>>;
+    getStatus: () => Promise<VaultResponse<SparkOverlayState>>;
+    onState: (callback: (payload: SparkOverlayState) => void) => () => void;
+  }
+
   interface VaultSaveResult {
     success: boolean;
     item: VaultMemory;
@@ -842,6 +853,7 @@ declare global {
     vaultAPI: VaultAPI;
     sparkApi: SparkAPI;
     sparkVoiceApi: SparkVoiceAPI;
+    sparkOverlayApi?: SparkOverlayAPI;
   }
 }
 

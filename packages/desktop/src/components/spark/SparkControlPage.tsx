@@ -5,6 +5,7 @@ import {
   Headphones,
   Keyboard,
   Mic,
+  PictureInPicture2,
   Radio,
   Play,
   RefreshCw,
@@ -15,6 +16,7 @@ import {
 import type { KeyboardEvent as ReactKeyboardEvent } from 'react';
 import { useSparkControlViewModel } from '../../view-models/spark-control-view-model.js';
 import type { SparkVoiceSessionMode } from '../../view-models/spark-control-view-model.js';
+import { useSparkOverlay } from '../../spark/use-spark-overlay.js';
 import { SparkSessionFrame } from './SparkSessionFrame.js';
 
 /**
@@ -59,6 +61,11 @@ export function SparkControlPage() {
     viewArtifact,
   } = useSparkControlViewModel();
 
+  // When the floating overlay (D) is open it owns capture + playback + controls;
+  // this page becomes a live viewer (the session frame still streams).
+  const overlay = useSparkOverlay();
+  const controlsLocked = overlay.open;
+
   // Roving-focus arrow-key navigation for the conversation-mode radiogroup so it
   // behaves like a real radio group for keyboard and screen-reader users.
   const MODES: SparkVoiceSessionMode[] = ['push-to-talk', 'always-listening', 'text-only'];
@@ -95,13 +102,24 @@ export function SparkControlPage() {
             <RefreshCw size={16} />
             <span>{loading ? 'Loading...' : 'Refresh'}</span>
           </button>
+          {overlay.available ? (
+            <button
+              type="button"
+              className="header-button"
+              onClick={() => void (overlay.open ? overlay.closeOverlay() : overlay.openOverlay())}
+              title={overlay.open ? 'Dock the floating overlay back into the app' : 'Pop out a floating, always-on-top Spark overlay'}
+            >
+              <PictureInPicture2 size={16} />
+              <span>{overlay.open ? 'Dock' : 'Pop out'}</span>
+            </button>
+          ) : null}
           <button
             type="button"
             className="primary-button spark-control-start"
             onClick={() => void (sessionActive ? stopVoiceSession() : startVoiceSession())}
-            disabled={startSession.disabled}
-            title={startSession.tooltip}
-            aria-disabled={startSession.disabled}
+            disabled={startSession.disabled || controlsLocked}
+            title={controlsLocked ? 'Session controls are in the floating overlay window.' : startSession.tooltip}
+            aria-disabled={startSession.disabled || controlsLocked}
           >
             {sessionActive ? <Square size={16} /> : <Play size={16} />}
             <span>{startSession.label}</span>
@@ -119,6 +137,11 @@ export function SparkControlPage() {
       ) : null}
       {voiceError ? (
         <div className="note-card note-card-warning" role="alert"><p>{voiceError}</p></div>
+      ) : null}
+      {controlsLocked ? (
+        <div className="note-card" role="status">
+          <p>Spark is running in the floating overlay window — controls and audio live there. This page is a live view of the session.</p>
+        </div>
       ) : null}
 
       <div className="spark-control-capabilities" aria-label="Spark capabilities">
@@ -209,7 +232,7 @@ export function SparkControlPage() {
           <button
             type="button"
             className="header-button spark-session-talk"
-            disabled={!sessionActive || sessionMode !== 'push-to-talk'}
+            disabled={!sessionActive || sessionMode !== 'push-to-talk' || controlsLocked}
             onMouseDown={() => void startPushToTalk()}
             onMouseUp={() => stopPushToTalk()}
             onMouseLeave={() => stopPushToTalk()}
@@ -227,13 +250,13 @@ export function SparkControlPage() {
               value={textMessage}
               onChange={(event) => setTextMessage(event.currentTarget.value)}
               placeholder="Type to Spark"
-              disabled={!sessionActive}
+              disabled={!sessionActive || controlsLocked}
               aria-label="Text message to Spark"
             />
             <button
               type="submit"
               className="header-button"
-              disabled={!sessionActive || textMessage.trim().length === 0}
+              disabled={!sessionActive || textMessage.trim().length === 0 || controlsLocked}
             >
               <Send size={14} />
               <span>Send</span>
