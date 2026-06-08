@@ -35,6 +35,7 @@ import { MemoryView } from './components/MemoryView.js';
 import { OverviewCockpitView } from './components/OverviewCockpitView.js';
 import { SettingsView } from './components/SettingsView.js';
 import { SparkView } from './components/SparkView.js';
+import { useSparkOverlay } from './spark/use-spark-overlay.js';
 import { VaultAgentView } from './components/VaultAgentView.js';
 import { VaultCollabView } from './components/VaultCollabView.js';
 import { VaultStructureView } from './components/VaultStructureView.js';
@@ -182,6 +183,10 @@ function App() {
   // Spark is an installable extension, not a built-in: its sidebar tab only
   // appears once the spark-brain extension is actually installed.
   const [sparkInstalled, setSparkInstalled] = useState(false);
+  // Spark voice overlay (D): auto-pop the floating window when the user leaves
+  // the Spark page mid-session, and dock it when they return.
+  const sparkOverlay = useSparkOverlay();
+  const [sparkVoiceActive, setSparkVoiceActive] = useState(false);
 
   useEffect(() => {
     void fetchStatus();
@@ -218,6 +223,39 @@ function App() {
       setActiveTab('overview');
     }
   }, [activeTab, sparkInstalled]);
+
+  // Track whether a Spark voice session is live (events broadcast to this window
+  // even when the Spark page is unmounted), so we can auto-manage the overlay.
+  useEffect(() => {
+    const api = typeof window !== 'undefined' ? window.sparkVoiceApi : undefined;
+    if (!api) {
+      return undefined;
+    }
+    void api.getStatus?.().then((result) => {
+      if (result?.success && result.data) {
+        setSparkVoiceActive(result.data.active);
+      }
+    }).catch(() => { /* status is best-effort */ });
+    const off = api.onVoiceEvent((event) => {
+      if (event.kind === 'status') {
+        setSparkVoiceActive(event.status !== 'idle' && event.status !== 'error');
+      }
+    });
+    return off;
+  }, []);
+
+  // Auto-pop the floating overlay when navigating away from the Spark page with a
+  // live session; dock it when back on the Spark page or when the session ends.
+  useEffect(() => {
+    if (!sparkOverlay.available) {
+      return;
+    }
+    if (activeTab !== 'spark' && sparkVoiceActive && !sparkOverlay.open) {
+      void sparkOverlay.openOverlay();
+    } else if (sparkOverlay.open && (activeTab === 'spark' || !sparkVoiceActive)) {
+      void sparkOverlay.closeOverlay();
+    }
+  }, [activeTab, sparkVoiceActive, sparkOverlay]);
 
   const primaryNavSections = useMemo(
     () =>

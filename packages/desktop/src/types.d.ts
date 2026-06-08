@@ -485,8 +485,14 @@ declare global {
     status: SparkVoiceStatus;
   }
 
+  interface SparkVoiceSessionStatus {
+    status: SparkVoiceStatus;
+    active: boolean;
+  }
+
   interface SparkVoiceAPI {
     getReadiness: () => Promise<VaultResponse<SparkVoiceReadiness>>;
+    getStatus: () => Promise<VaultResponse<SparkVoiceSessionStatus>>;
     start: () => Promise<VaultResponse<SparkVoiceReadiness>>;
     stop: () => Promise<VaultResponse<SparkVoiceStatusResult>>;
     sendText: (text: string) => Promise<VaultResponse<SparkVoiceStatusResult>>;

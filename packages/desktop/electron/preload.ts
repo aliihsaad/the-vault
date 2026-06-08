@@ -125,6 +125,7 @@ contextBridge.exposeInMainWorld('sparkApi', {
 // host's event stream + audio playback commands.
 contextBridge.exposeInMainWorld('sparkVoiceApi', {
   getReadiness: () => ipcRenderer.invoke('spark:voice:getReadiness'),
+  getStatus: () => ipcRenderer.invoke('spark:voice:getStatus'),
   start: () => ipcRenderer.invoke('spark:voice:start'),
   stop: () => ipcRenderer.invoke('spark:voice:stop'),
   sendText: (text: string) => ipcRenderer.invoke('spark:voice:sendText', text),

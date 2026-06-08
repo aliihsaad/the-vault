@@ -2140,6 +2140,14 @@ app.whenReady().then(() => {
     }
   });
 
+  ipcMain.handle('spark:voice:getStatus', async () => {
+    try {
+      return { success: true, data: { status: sparkVoiceHost.getStatus(), active: sparkVoiceHost.isActive() } };
+    } catch (e: any) {
+      return { success: false, error: e.message };
+    }
+  });
+
   ipcMain.handle('spark:voice:start', async () => {
     try {
       return { success: true, data: await sparkVoiceHost.start() };

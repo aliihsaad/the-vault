@@ -557,6 +557,41 @@ export function useSparkControlViewModel(
     }
   }, [pcmCapture, voiceCapture, voiceClient]);
 
+  // Adopt an already-active host session when this surface mounts — e.g. the
+  // overlay opening mid-session, or returning to the Spark page after the overlay
+  // docked. The host owns the session; we only resume renderer-side mic capture
+  // so the uplink continues for whichever window now owns audio.
+  useEffect(() => {
+    let cancelled = false;
+    async function adopt() {
+      if (typeof window === 'undefined' || !window.sparkVoiceApi?.getStatus) {
+        return;
+      }
+      const status = await window.sparkVoiceApi.getStatus();
+      if (cancelled || !status.success || !status.data?.active) {
+        return;
+      }
+      setSessionStatus(status.data.status);
+      const readiness = await window.sparkVoiceApi.getReadiness();
+      const mode = readiness.success ? readiness.data?.mode : undefined;
+      try {
+        if (mode === 'realtime') {
+          await (await getOrCreatePcmCapture())?.start();
+        } else if (sessionMode === 'always-listening') {
+          await (await getOrCreateVoiceCapture())?.start();
+        }
+      } catch (captureError) {
+        setVoiceError(captureError instanceof Error ? captureError.message : 'Microphone capture failed.');
+      }
+    }
+    void adopt();
+    return () => {
+      cancelled = true;
+    };
+    // One-shot adoption on mount; capture factories are stable for this purpose.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   const sendTextMessage = useCallback(async (message = textMessage) => {
     const trimmed = message.trim();
     if (!trimmed || !voiceClient) {
