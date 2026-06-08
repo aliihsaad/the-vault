@@ -102,16 +102,17 @@ const sparkProviderCredentials = createSparkProviderCredentialStore({
   getSetting: (key) => vault.getSetting(key),
   setSetting: (key, value) => vault.setSetting(key, value),
 });
+const sparkBrainAdapter = createSparkBrainSettingsAdapter({
+  loadModule: () => sparkBrainRuntimeLoader.loadModule(),
+  getPackageInfo: () => sparkBrainRuntimeLoader.getPackageInfo(),
+  createStore: () => createVaultBrainStore(vault),
+  // Feed live, renderer-safe provider health (configured state + role
+  // assignments) into the snapshot. No keys cross this boundary.
+  getProviderHealth: () => sparkProviderCredentials.getProviderHealthSummary(),
+});
 const sparkExtensionSettings = new SparkExtensionSettingsService({
   vaultRoot: vault.getVaultRoot(),
-  adapter: createSparkBrainSettingsAdapter({
-    loadModule: () => sparkBrainRuntimeLoader.loadModule(),
-    getPackageInfo: () => sparkBrainRuntimeLoader.getPackageInfo(),
-    createStore: () => createVaultBrainStore(vault),
-    // Feed live, renderer-safe provider health (configured state + role
-    // assignments) into the snapshot. No keys cross this boundary.
-    getProviderHealth: () => sparkProviderCredentials.getProviderHealthSummary(),
-  }),
+  adapter: sparkBrainAdapter,
 });
 
 // S3 voice runtime host. Owns the live VoiceSession (STT→LLM→tools→TTS) and
@@ -199,6 +200,8 @@ const sparkVoiceHost = createSparkVoiceHost({
   stopAudio: () => win?.webContents.send('spark:voice:stopAudio'),
   recall: sparkVoiceRecall,
   getInstructions: getSparkVoiceInstructions,
+  // Expose the brain runtime's executable skills to the realtime model (E).
+  getBrainRegistry: () => sparkBrainAdapter.getRuntimeToolRegistry(),
 });
 
 // Initialize AI enrichment from saved settings.

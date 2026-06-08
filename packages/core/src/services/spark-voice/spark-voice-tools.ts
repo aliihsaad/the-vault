@@ -271,6 +271,140 @@ export function buildSparkHostTools(deps: SparkHostToolDeps): SparkVoiceTool[] {
   return tools;
 }
 
+// ---------------------------------------------------------------------------
+// Brain runtime tool-registry → voice-tool bridge (roadmap E)
+// ---------------------------------------------------------------------------
+
+/**
+ * Minimal structural view of the `@spark/core` `ToolRegistry` that the Wave 8
+ * brain runtime exposes as `runtime.runtimeToolRegistry`. The Vault host loads
+ * the brain as built ESM, so we mirror only the fields we read; the real
+ * registry structurally satisfies this.
+ */
+export interface BrainToolPolicyLike {
+  risk?: string;
+  permission?: string;
+  requiresApproval?: boolean;
+  memoryWriteAllowed?: boolean;
+  streamingSafe?: boolean;
+}
+
+export interface BrainToolDefinitionLike {
+  name: string;
+  description?: string;
+  schema?: Record<string, unknown>;
+  policy?: BrainToolPolicyLike;
+}
+
+export interface BrainToolActionResultLike {
+  ok: boolean;
+  value?: unknown;
+  userMessage?: string;
+  blocked?: boolean;
+  error?: { code?: string; message?: string };
+}
+
+export interface BrainToolDispatchResultLike {
+  ok: boolean;
+  value?: BrainToolActionResultLike;
+  error?: { code?: string; message?: string };
+}
+
+export interface BrainToolRegistryLike {
+  listExecutable(): BrainToolDefinitionLike[];
+  dispatch(call: {
+    callId: string;
+    turnId?: string;
+    name: string;
+    args: unknown;
+  }): Promise<BrainToolDispatchResultLike> | BrainToolDispatchResultLike;
+}
+
+export interface BuildVoiceToolsFromBrainRegistryOptions {
+  /** Prefix for generated dispatch call ids. */
+  idPrefix?: string;
+  /** Tool names already taken by host tools — skip them to avoid collisions. */
+  reservedNames?: Iterable<string>;
+}
+
+/** Map an `@spark/core` ToolRisk onto the MVP SparkToolRisk (critical → high). */
+function mapBrainRisk(risk: string | undefined): SparkToolRisk {
+  return risk === 'high' || risk === 'critical' ? 'high' : risk === 'medium' ? 'medium' : 'low';
+}
+
+function normalizeBrainSchema(schema: Record<string, unknown> | undefined): Record<string, unknown> {
+  return schema && typeof schema === 'object' ? schema : { type: 'object', properties: {} };
+}
+
+/**
+ * Bridge the brain runtime's executable tools into dispatchable voice tools, so
+ * the realtime model can actually run the brain's policy-gated skills (not just
+ * recall + canvas). Each tool's handler delegates to `registry.dispatch`; the
+ * SparkResult/ToolActionResult is unwrapped to the action value, and failures
+ * throw so the outer dispatcher reports `ok:false`. Approval-required tools keep
+ * `requiresApproval`, so they stay hidden from the model schema and blocked
+ * unless approved — the "policy-visible tools only" rule.
+ */
+export function buildVoiceToolsFromBrainRegistry(
+  registry: BrainToolRegistryLike,
+  options: BuildVoiceToolsFromBrainRegistryOptions = {},
+): SparkVoiceTool[] {
+  const reserved = new Set(options.reservedNames ?? []);
+  let defs: BrainToolDefinitionLike[];
+  try {
+    defs = registry.listExecutable() ?? [];
+  } catch {
+    return [];
+  }
+
+  const seen = new Set<string>();
+  const tools: SparkVoiceTool[] = [];
+  let seq = 0;
+  for (const def of defs) {
+    if (!def || typeof def.name !== 'string' || !def.name) {
+      continue;
+    }
+    if (reserved.has(def.name) || seen.has(def.name)) {
+      continue;
+    }
+    seen.add(def.name);
+    const toolPolicy = def.policy ?? {};
+    const definition: SparkToolDefinition = {
+      type: 'function',
+      function: {
+        name: def.name,
+        description: def.description ?? def.name,
+        parameters: normalizeBrainSchema(def.schema),
+      },
+    };
+    const policy: SparkToolExecutionPolicy = {
+      risk: mapBrainRisk(toolPolicy.risk),
+      permission: toolPolicy.permission ?? 'brain.skill',
+      parallelism: 'read_only',
+      requiresApproval: toolPolicy.requiresApproval ?? false,
+      memoryWriteAllowed: toolPolicy.memoryWriteAllowed ?? false,
+      streamingSafe: toolPolicy.streamingSafe ?? true,
+    };
+    tools.push({
+      definition,
+      policy,
+      handler: async (args) => {
+        const callId = `${options.idPrefix ?? 'spark_rt'}_${(seq += 1)}`;
+        const result = await registry.dispatch({ callId, name: def.name, args });
+        if (!result || result.ok !== true) {
+          throw new Error(result?.error?.message ?? `Tool ${def.name} failed.`);
+        }
+        const action = result.value;
+        if (action && action.ok === false) {
+          throw new Error(action.error?.message ?? action.userMessage ?? `Tool ${def.name} was blocked.`);
+        }
+        return action?.value ?? action?.userMessage ?? { ok: true };
+      },
+    });
+  }
+  return tools;
+}
+
 export type SparkSkillExecutor = (skillId: string, args: unknown) => Promise<unknown> | unknown;
 
 /**

@@ -17,6 +17,7 @@ import type {
   BrainVaultArtifact,
   BrainVaultStore,
 } from '../types/spark-brain-host.js';
+import type { BrainToolRegistryLike } from './spark-voice/spark-voice-tools.js';
 
 // ---------------------------------------------------------------------------
 // Structural contracts for the dynamically-loaded @spark/brain runtime.
@@ -65,6 +66,12 @@ export interface SparkBrainRuntimeLike {
   project: string;
   projectId: string;
   store: BrainVaultStore;
+  /**
+   * The Wave 8 runtime's executable tool registry (@spark/core ToolRegistry).
+   * Optional so older brain builds without it degrade gracefully. The host
+   * bridges its executable tools into the realtime voice tool set.
+   */
+  runtimeToolRegistry?: BrainToolRegistryLike;
   coreSkillPack: { id: string; title: string; skills: SparkBrainSkillManifestLike[] };
   nativeSkills: unknown[];
   skillRegistry: {
@@ -117,6 +124,12 @@ export interface SparkBrainSettingsAdapterOptions {
 export interface SparkBrainSettingsAdapter {
   getSnapshot: () => Promise<SparkExtensionSnapshot>;
   executeAction: (action: SparkExtensionAction) => Promise<SparkExtensionActionResult>;
+  /**
+   * Resolve the bootstrapped brain runtime's executable tool registry, so the
+   * voice host can expose the brain's policy-gated skills as realtime tools.
+   * Returns null when the runtime can't load or the build predates the registry.
+   */
+  getRuntimeToolRegistry: () => Promise<BrainToolRegistryLike | null>;
 }
 
 const RISK_LEVELS = new Set<SparkApprovalRiskLevel>(['low', 'medium', 'high', 'critical']);
@@ -383,6 +396,10 @@ export function createSparkBrainSettingsAdapter(
   return {
     getSnapshot: () => buildSnapshot(),
     executeAction,
+    async getRuntimeToolRegistry() {
+      const rt = enabled ? await ensureRuntime() : runtime;
+      return rt?.runtimeToolRegistry ?? null;
+    },
   };
 }
 

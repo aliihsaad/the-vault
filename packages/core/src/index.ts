@@ -474,12 +474,17 @@ export type {
 
 export {
   buildSparkHostTools,
+  buildVoiceToolsFromBrainRegistry,
   buildVoiceToolsFromSkillRows,
   createSparkToolDispatcher,
   sanitizeToolName,
 } from './services/spark-voice/spark-voice-tools.js';
 
 export type {
+  BrainToolDefinitionLike,
+  BrainToolDispatchResultLike,
+  BrainToolRegistryLike,
+  BuildVoiceToolsFromBrainRegistryOptions,
   SparkCanvasToolItem,
   SparkHostToolDeps,
   SparkSkillExecutor,

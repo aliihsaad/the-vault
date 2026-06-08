@@ -17,9 +17,11 @@ import WebSocket from 'ws';
 import {
   buildSparkHostTools,
   buildSparkVoiceReadiness,
+  buildVoiceToolsFromBrainRegistry,
   createSparkRealtimeRuntimeSession,
   createSparkToolDispatcher,
   createSparkVoiceRuntimeSession,
+  type BrainToolRegistryLike,
   type SparkFetch,
   type SparkProviderCredentialStore,
   type SparkRealtimeSession,
@@ -54,6 +56,12 @@ export interface SparkVoiceHostDeps {
    * to fall back to the default instructions.
    */
   getInstructions?: () => Promise<string | null>;
+  /**
+   * Resolve the brain runtime's executable tool registry at session start, so
+   * the realtime model can run the brain's policy-gated skills as tools (beyond
+   * recall + canvas). Returns null when the brain isn't installed/loaded.
+   */
+  getBrainRegistry?: () => Promise<BrainToolRegistryLike | null>;
 }
 
 export interface SparkVoiceUtteranceInput {
@@ -109,7 +117,15 @@ export function createSparkVoiceHost(deps: SparkVoiceHostDeps): SparkVoiceHost {
             ts: Date.now(),
           }),
       });
-      const dispatcher = createSparkToolDispatcher(hostTools);
+      // Bridge the brain runtime's executable skills into the realtime tool set
+      // (roadmap E). Host tools win on name collisions.
+      const brainRegistry = (await deps.getBrainRegistry?.()) ?? null;
+      const brainTools = brainRegistry
+        ? buildVoiceToolsFromBrainRegistry(brainRegistry, {
+            reservedNames: hostTools.map((tool) => tool.definition.function.name),
+          })
+        : [];
+      const dispatcher = createSparkToolDispatcher([...hostTools, ...brainTools]);
       const toolDefs: SparkRealtimeToolDefinition[] = dispatcher.listDefinitions().map((def) => ({
         name: def.function.name,
         description: def.function.description,
