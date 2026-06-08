@@ -64,6 +64,11 @@ export function createSparkPcmCapture(options: SparkPcmCaptureOptions): SparkPcm
     source.connect(processor);
     processor.connect(silentSink);
     silentSink.connect(context.destination);
+    // An AudioContext can start 'suspended' (autoplay policy); without resuming,
+    // onaudioprocess never fires and no mic audio is ever streamed to the server.
+    if (context.state === 'suspended') {
+      await context.resume();
+    }
     capturing = true;
   }
 

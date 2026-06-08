@@ -196,12 +196,67 @@ function toolFunctionDeclarations(tools: SparkRealtimeToolDefinition[] | undefin
       if (description) {
         declaration.description = description;
       }
-      if (tool.parameters && typeof tool.parameters === 'object') {
-        declaration.parameters = tool.parameters;
-      }
+      // Gemini-Live validates functionDeclarations against an OpenAPI subset and
+      // rejects the whole setup (HTTP 400) if any schema is malformed — e.g. a
+      // property with no `type`, or unsupported keywords like additionalProperties
+      // / $schema carried in from a brain skill. Sanitize every schema so one bad
+      // tool can't sink the session.
+      const params = sanitizeGeminiSchema(tool.parameters);
+      declaration.parameters = params.type === 'object' ? params : { type: 'object', properties: {} };
       return declaration;
     })
     .filter((declaration): declaration is JsonRecord => Boolean(declaration));
+}
+
+/**
+ * Coerce an arbitrary JSON-schema-ish object into the OpenAPI subset Gemini-Live
+ * accepts in functionDeclarations: every node gets a concrete `type`, only known
+ * keywords survive, and object/array children recurse. Defaults a typeless node
+ * to `string` (or `object`/`array` when it has properties/items).
+ */
+function sanitizeGeminiSchema(value: unknown): JsonRecord {
+  const src = value && typeof value === 'object' && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {};
+  const hasProps = Boolean(src.properties && typeof src.properties === 'object');
+  const hasItems = src.items !== undefined;
+  const type = typeof src.type === 'string' && src.type
+    ? src.type
+    : hasProps
+      ? 'object'
+      : hasItems
+        ? 'array'
+        : 'string';
+
+  const out: JsonRecord = { type };
+  if (typeof src.description === 'string' && src.description) {
+    out.description = src.description;
+  }
+  if (Array.isArray(src.enum) && src.enum.length > 0) {
+    out.enum = src.enum;
+  }
+  if (typeof src.format === 'string') {
+    out.format = src.format;
+  }
+
+  if (type === 'object') {
+    const props = hasProps ? (src.properties as Record<string, unknown>) : {};
+    const cleanProps: JsonRecord = {};
+    for (const [key, child] of Object.entries(props)) {
+      cleanProps[key] = sanitizeGeminiSchema(child);
+    }
+    out.properties = cleanProps;
+    if (Array.isArray(src.required)) {
+      const required = src.required.filter((entry) => typeof entry === 'string' && entry in cleanProps);
+      if (required.length > 0) {
+        out.required = required;
+      }
+    }
+  } else if (type === 'array') {
+    out.items = sanitizeGeminiSchema(src.items);
+  }
+
+  return out;
 }
 
 function collectParts(root: JsonRecord | null, content: JsonRecord | null): unknown[] {

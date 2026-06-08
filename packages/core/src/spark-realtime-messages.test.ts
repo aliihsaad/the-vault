@@ -28,6 +28,44 @@ describe('createSparkRealtimeSetupMessage', () => {
     expect(setup.tools[0].functionDeclarations[0].name).toBe('recall_memory');
   });
 
+  it('sanitizes tool schemas into the Gemini OpenAPI subset (no 400-causing shapes)', () => {
+    const message = createSparkRealtimeSetupMessage({
+      model: 'auto',
+      tools: [
+        {
+          name: 'show_on_canvas',
+          description: 'Render',
+          parameters: {
+            type: 'object',
+            additionalProperties: true, // unsupported keyword — must be dropped
+            properties: {
+              kind: { type: 'string', enum: ['markdown', 'table'] },
+              payload: { description: 'anything' }, // no type — must be coerced
+            },
+            required: ['kind', 'payload', 'ghost'], // ghost is not a property
+          },
+        },
+      ],
+    });
+    const params = (message as any).setup.tools[0].functionDeclarations[0].parameters;
+    expect(params.type).toBe('object');
+    expect(params.additionalProperties).toBeUndefined();
+    expect(params.properties.kind).toEqual({ type: 'string', enum: ['markdown', 'table'] });
+    // typeless property is coerced to a concrete type so Gemini accepts it
+    expect(params.properties.payload.type).toBe('string');
+    // required is filtered to actual properties
+    expect(params.required).toEqual(['kind', 'payload']);
+  });
+
+  it('forces a valid object schema when a tool declares no/invalid parameters', () => {
+    const message = createSparkRealtimeSetupMessage({
+      model: 'auto',
+      tools: [{ name: 'no_args', description: 'x' }],
+    });
+    const params = (message as any).setup.tools[0].functionDeclarations[0].parameters;
+    expect(params).toEqual({ type: 'object', properties: {} });
+  });
+
   it('does not prefix an already-namespaced model and omits voice for text-only', () => {
     const message = createSparkRealtimeSetupMessage({
       model: 'models/gemini-live',

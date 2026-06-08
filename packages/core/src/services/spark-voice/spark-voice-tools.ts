@@ -245,7 +245,9 @@ export function buildSparkHostTools(deps: SparkHostToolDeps): SparkVoiceTool[] {
                 description: 'markdown text, an array of row objects (table), or an object (result/artifact)',
               },
               payload: {
-                description: 'Markdown string for markdown; array of row objects for table; an object for result/artifact',
+                type: 'string',
+                description:
+                  'Markdown text for kind=markdown; otherwise a JSON string (an array of row objects for table, an object for result/artifact).',
               },
             },
             required: ['kind', 'payload'],
@@ -263,7 +265,17 @@ export function buildSparkHostTools(deps: SparkHostToolDeps): SparkVoiceTool[] {
       handler: (args) => {
         const record = args && typeof args === 'object' ? (args as Record<string, unknown>) : {};
         const kind = typeof record.kind === 'string' ? record.kind : 'markdown';
-        deps.showOnCanvas!({ kind, payload: record.payload });
+        // The realtime schema sends payload as a string; for non-markdown kinds
+        // the model passes JSON — parse it back so the canvas gets real data.
+        let payload = record.payload;
+        if (kind !== 'markdown' && typeof payload === 'string') {
+          try {
+            payload = JSON.parse(payload);
+          } catch {
+            /* not JSON — fall through with the raw string */
+          }
+        }
+        deps.showOnCanvas!({ kind, payload });
         return { ok: true, message: 'Displayed on the canvas.' };
       },
     });
