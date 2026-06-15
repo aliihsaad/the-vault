@@ -76,7 +76,7 @@ if (process.env.VAULT_AUTO_START_TASK_EXECUTOR === 'true') {
 // Create MCP server
 const server = new McpServer({
   name: 'vault-memory',
-  version: '0.1.0',
+  version: '0.4.8',
 });
 
 // ============================================================================

@@ -611,6 +611,7 @@ function mapProjectRow(row: typeof projects.$inferSelect): Project {
   return {
     id: row.id,
     name: row.name,
+    slug: slugify(row.name),
     description: row.description,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,

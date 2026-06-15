@@ -15,6 +15,8 @@ export const DEFAULT_RECALL_PACKING = {
 
 export const RECALL_ANALYTICS_DAYS = 14;
 export const RECALL_ANALYTICS_LOG_LIMIT = 5000;
+export const OVERVIEW_TELEMETRY_DAYS = 7;
+export const OVERVIEW_TELEMETRY_LOG_LIMIT = RECALL_ANALYTICS_LOG_LIMIT;
 export const OPERATIONAL_ANALYTICS_DAYS = 14;
 export const OPERATIONAL_ANALYTICS_LOG_LIMIT = RECALL_ANALYTICS_LOG_LIMIT;
 
@@ -84,7 +86,9 @@ export type MemoryWorkspaceSummary = {
 
 export type ProjectCockpitRow = {
   name: string;
+  slug: string;
   description: string;
+  createdAt: string;
   memoryCount: number;
   last7dCount: number;
   prior7dCount: number;
@@ -195,6 +199,13 @@ export function getRecallAnalyticsDateFrom(
   start.setHours(0, 0, 0, 0);
   start.setDate(start.getDate() - Math.max(days - 1, 0));
   return start.toISOString();
+}
+
+export function getOverviewTelemetryDateFrom(
+  referenceDate: Date = new Date(),
+  days: number = OVERVIEW_TELEMETRY_DAYS,
+): string {
+  return getRecallAnalyticsDateFrom(referenceDate, days);
 }
 
 export function getOperationalAnalyticsDateFrom(
@@ -417,7 +428,9 @@ export function buildProjectCockpitRows({
 
     return {
       name: project.name,
+      slug: project.slug,
       description: project.description || 'No description stored for this project.',
+      createdAt: project.createdAt,
       memoryCount,
       last7dCount,
       prior7dCount,
@@ -437,6 +450,19 @@ export function buildProjectCockpitRows({
 
     return right.memoryCount - left.memoryCount || left.name.localeCompare(right.name);
   });
+}
+
+export function filterProjectCockpitRows(rows: ProjectCockpitRow[], search: string): ProjectCockpitRow[] {
+  const query = search.trim().toLowerCase();
+  if (!query) {
+    return rows;
+  }
+
+  return rows.filter((row) => [
+    row.name,
+    row.slug,
+    row.description,
+  ].join(' ').toLowerCase().includes(query));
 }
 
 export function buildRelationshipGraphPreview(

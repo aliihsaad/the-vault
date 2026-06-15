@@ -35,9 +35,12 @@ import {
   extractResultCount,
   extractTotalCandidates,
   formatCompactNumber,
+  getOverviewTelemetryDateFrom,
   getRecallAnalyticsDateFrom,
   getRecallPackingSettings,
   isSameLocalDay,
+  OVERVIEW_TELEMETRY_DAYS,
+  OVERVIEW_TELEMETRY_LOG_LIMIT,
   RECALL_ANALYTICS_LOG_LIMIT,
   type ProjectCockpitRow,
 } from '../cockpit-metrics.js';
@@ -103,7 +106,7 @@ export function OverviewCockpitView({
         queueStatsResponse,
       ] = await Promise.all([
         window.vaultAPI.getLatest(undefined, 80),
-        window.vaultAPI.getRecentLogs(320),
+        window.vaultAPI.getRecentLogs(OVERVIEW_TELEMETRY_LOG_LIMIT, { dateFrom: getOverviewTelemetryDateFrom() }),
         window.vaultAPI.getRecentLogs(RECALL_ANALYTICS_LOG_LIMIT, { actionType: 'recall', dateFrom: getRecallAnalyticsDateFrom() }),
         window.vaultAPI.getAllSettings(),
         window.vaultAPI.listProjectProposals({ status: 'pending' }),
@@ -135,7 +138,7 @@ export function OverviewCockpitView({
   const totalMemories = projects.reduce((count, project) => count + (project.memoryCount || 0), 0);
   const recallPacking = getRecallPackingSettings(settings);
   const recallTrend = useMemo(() => buildRecallTrend(recallLogs, 14, recallPacking), [recallLogs, recallPacking]);
-  const activitySeries = useMemo(() => buildActivitySeries(logs, 7), [logs]);
+  const activitySeries = useMemo(() => buildActivitySeries(logs, OVERVIEW_TELEMETRY_DAYS), [logs]);
   const memoryTypeMetrics = useMemo(() => buildMemoryTypeMetrics(latest), [latest]);
   const projectRows = useMemo(
     () => buildProjectCockpitRows({ projects, momentum, workspaces, memories: latest, logs, openLoops }),

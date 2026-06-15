@@ -70,6 +70,7 @@ describe('project context pack service', () => {
       listProjects: (): Project[] => [{
         id: 1,
         name: 'the-vault',
+        slug: 'the-vault',
         description: 'Local-first memory system.',
         createdAt: '2026-05-01T00:00:00.000Z',
         updatedAt: '2026-05-01T00:00:00.000Z',

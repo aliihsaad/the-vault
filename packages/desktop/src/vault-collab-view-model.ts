@@ -67,6 +67,10 @@ export interface VaultCollabHandoffRow {
   routeLabel: string;
   routeHintLabel: string | null;
   suggestedRoleProfileId: string | null;
+  sourceProjectLabel: string;
+  sourceProjectSlug: string;
+  projectAccentColor: string;
+  projectAccentSoftColor: string;
   queueLabel: string;
   ownerLabel: string;
   dependencyLabel: string | null;
@@ -507,6 +511,17 @@ const EVENT_FEED_PREFIXES = [
   'security.',
   'tool.',
   'loop.',
+];
+
+const PROJECT_ACCENT_PALETTE = [
+  { color: '#8fb3a6', softColor: 'rgba(143, 179, 166, 0.16)' },
+  { color: '#9aa7d1', softColor: 'rgba(154, 167, 209, 0.16)' },
+  { color: '#d0a36f', softColor: 'rgba(208, 163, 111, 0.16)' },
+  { color: '#b98aa6', softColor: 'rgba(185, 138, 166, 0.16)' },
+  { color: '#8bb3c7', softColor: 'rgba(139, 179, 199, 0.16)' },
+  { color: '#b7b07a', softColor: 'rgba(183, 176, 122, 0.16)' },
+  { color: '#a7c28b', softColor: 'rgba(167, 194, 139, 0.16)' },
+  { color: '#c28f8f', softColor: 'rgba(194, 143, 143, 0.16)' },
 ];
 
 function buildCockpitViewModel(
@@ -1790,6 +1805,7 @@ function buildHandoffRow(
   const routeHintLabel = suggestedRoleProfileId
     ? `${getRoleDisplayName(suggestedRoleProfileId, suggestedRoleProfileId, roleLookup)} office`
     : null;
+  const projectAccent = getProjectAccent(handoff.sourceProject);
 
   return {
     uid: handoff.handoffUid,
@@ -1804,6 +1820,10 @@ function buildHandoffRow(
     routeLabel: `${handoff.sourceProject} -> ${handoff.targetProject}`,
     routeHintLabel,
     suggestedRoleProfileId,
+    sourceProjectLabel: handoff.sourceProject,
+    sourceProjectSlug: projectAccent.slug,
+    projectAccentColor: projectAccent.color,
+    projectAccentSoftColor: projectAccent.softColor,
     queueLabel,
     ownerLabel: handoff.claimedBySessionUid
       ? formatVaultCollabShortUid(handoff.claimedBySessionUid)
@@ -1822,6 +1842,37 @@ function buildHandoffRow(
     attention,
     urgent: handoff.urgent,
   };
+}
+
+function getProjectAccent(project: string): { slug: string; color: string; softColor: string } {
+  const slug = slugifyProject(project);
+  const paletteEntry = PROJECT_ACCENT_PALETTE[hashProjectSlug(slug) % PROJECT_ACCENT_PALETTE.length];
+  return {
+    slug,
+    color: paletteEntry.color,
+    softColor: paletteEntry.softColor,
+  };
+}
+
+function slugifyProject(project: string): string {
+  const slug = project
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+
+  return slug || 'unknown-project';
+}
+
+function hashProjectSlug(slug: string): number {
+  let hash = 2166136261;
+
+  for (let index = 0; index < slug.length; index += 1) {
+    hash ^= slug.charCodeAt(index);
+    hash = Math.imul(hash, 16777619) >>> 0;
+  }
+
+  return hash;
 }
 
 function formatHandoffCardTitle(prompt: string, handoffUid: string): string {

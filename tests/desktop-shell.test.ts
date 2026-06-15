@@ -69,6 +69,15 @@ describe('desktop shell navigation', () => {
     expect(overviewSource).not.toContain('over 7 days');
   });
 
+  it('loads Overview operational telemetry with an explicit seven-day window', () => {
+    expect(overviewSource).toContain('OVERVIEW_TELEMETRY_DAYS');
+    expect(overviewSource).toContain('OVERVIEW_TELEMETRY_LOG_LIMIT');
+    expect(overviewSource).toContain('getOverviewTelemetryDateFrom');
+    expect(overviewSource).toContain('window.vaultAPI.getRecentLogs(OVERVIEW_TELEMETRY_LOG_LIMIT, { dateFrom: getOverviewTelemetryDateFrom() })');
+    expect(overviewSource).toContain('buildActivitySeries(logs, OVERVIEW_TELEMETRY_DAYS)');
+    expect(overviewSource).not.toContain('window.vaultAPI.getRecentLogs(320)');
+  });
+
   it('frames the Recall page as an efficiency dashboard instead of an Activity duplicate', () => {
     expect(operationsSource).toContain('Estimated tokens saved');
     expect(operationsSource).toContain('Compact recall log');

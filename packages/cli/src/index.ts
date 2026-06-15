@@ -14,7 +14,7 @@ const vault = new Vault();
 program
   .name('vault')
   .description('Vault CLI — test harness for the AI memory operating system')
-  .version('0.1.0');
+  .version('0.4.8');
 
 // ============================================================================
 // Command: init

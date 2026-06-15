@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { type CSSProperties, useState } from 'react';
 import { Clock3, Inbox } from 'lucide-react';
 
 import type {
@@ -72,13 +72,23 @@ export function WorkBoard({
                       key={card.uid}
                       type="button"
                       className={`vault-collab-work-card ${selectedHandoffUid === card.uid ? 'vault-collab-work-card-active' : ''}`}
+                      style={getProjectAccentStyle(card)}
                       onClick={() => onSelectHandoff(card.uid)}
                     >
                       <span className={`queue-status-rail ${card.railClass}`} />
                       <span className="vault-collab-work-card-main">
                         <span className="vault-collab-row-title">
                           <strong>{card.title}</strong>
-                          <span className={`badge ${card.badgeClass}`}>{card.statusLabel}</span>
+                          <span className="vault-collab-work-card-badges">
+                            <span
+                              className="vault-collab-project-pill"
+                              title={`Source project: ${card.sourceProjectLabel}`}
+                            >
+                              <span className="vault-collab-project-pill-dot" aria-hidden="true" />
+                              <span>{card.sourceProjectLabel}</span>
+                            </span>
+                            <span className={`badge ${card.badgeClass}`}>{card.statusLabel}</span>
+                          </span>
                         </span>
                         <span className="vault-collab-work-card-preview">{card.promptPreview}</span>
                         {card.visibleLabels.length > 0 ? (
@@ -129,4 +139,11 @@ export function WorkBoard({
       />
     </section>
   );
+}
+
+function getProjectAccentStyle(card: VaultCollabWorkColumn['cards'][number]): CSSProperties {
+  return {
+    '--vault-collab-project-accent': card.projectAccentColor,
+    '--vault-collab-project-accent-soft': card.projectAccentSoftColor,
+  } as CSSProperties;
 }

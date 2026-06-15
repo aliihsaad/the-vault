@@ -387,7 +387,7 @@ function App() {
                   onInitialSelectionConsumed={() => setMemoryInitialSelection(null)}
                 />
               ) : null}
-              {activeTab === 'projects' ? <ProjectsOperationsView vaultStatus={vaultStatus} /> : null}
+              {activeTab === 'projects' ? <ProjectsOperationsView vaultStatus={vaultStatus} onStatusRefresh={fetchStatus} /> : null}
               {activeTab === 'handoffs' ? (
                 <FilteredMemoryWorkspaceView
                   memoryType="handoff"

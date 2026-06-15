@@ -1789,6 +1789,54 @@ describe('Vault Collab dashboard view model', () => {
     }));
   });
 
+  it('adds deterministic source-project accent data to work cards', () => {
+    const model = buildVaultCollabDashboardViewModel(snapshot({
+      handoffs: [
+        handoff({
+          handoffUid: 'vc_handoff_vault_collab_a_1234567890',
+          sourceProject: 'Vault Collab',
+          status: 'available',
+        }),
+        handoff({
+          handoffUid: 'vc_handoff_vault_collab_b_1234567890',
+          sourceProject: 'Vault Collab',
+          status: 'claimed',
+        }),
+        handoff({
+          handoffUid: 'vc_handoff_aura_desktop_1234567890',
+          sourceProject: 'Aura Desktop',
+          status: 'available',
+        }),
+      ],
+    }), now);
+    const cards = model.cockpit.work.flatMap((column) => column.cards);
+    const vaultCollabA = cards.find((card) => card.uid === 'vc_handoff_vault_collab_a_1234567890') as unknown as {
+      sourceProjectLabel?: string;
+      sourceProjectSlug?: string;
+      projectAccentColor?: string;
+      projectAccentSoftColor?: string;
+    };
+    const vaultCollabB = cards.find((card) => card.uid === 'vc_handoff_vault_collab_b_1234567890') as unknown as {
+      projectAccentColor?: string;
+      projectAccentSoftColor?: string;
+    };
+    const auraDesktop = cards.find((card) => card.uid === 'vc_handoff_aura_desktop_1234567890') as unknown as {
+      sourceProjectSlug?: string;
+      projectAccentColor?: string;
+    };
+
+    expect(vaultCollabA).toMatchObject({
+      sourceProjectLabel: 'Vault Collab',
+      sourceProjectSlug: 'vault-collab',
+    });
+    expect(vaultCollabA.projectAccentColor).toMatch(/^#[0-9a-f]{6}$/);
+    expect(vaultCollabA.projectAccentSoftColor).toMatch(/^rgba\(\d+, \d+, \d+, 0\.\d+\)$/);
+    expect(vaultCollabB.projectAccentColor).toBe(vaultCollabA.projectAccentColor);
+    expect(vaultCollabB.projectAccentSoftColor).toBe(vaultCollabA.projectAccentSoftColor);
+    expect(auraDesktop.sourceProjectSlug).toBe('aura-desktop');
+    expect(auraDesktop.projectAccentColor).not.toBe(vaultCollabA.projectAccentColor);
+  });
+
   it('merges discussion summaries and key events into a newest-first conversation stream', () => {
     const selectedHandoffUid = 'vc_handoff_selected_1234567890';
     const model = buildVaultCollabDashboardViewModel(snapshot({

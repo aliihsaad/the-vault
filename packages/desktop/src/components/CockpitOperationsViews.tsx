@@ -22,7 +22,9 @@ import {
   ShieldCheck,
   Tags,
   Target,
+  Trash2,
   Waypoints,
+  X,
 } from 'lucide-react';
 import {
   Area,
@@ -50,6 +52,7 @@ import {
   extractResultCount,
   extractTopScore,
   extractTotalCandidates,
+  filterProjectCockpitRows,
   formatCompactNumber,
   getOperationalAnalyticsDateFrom,
   getRecallAnalyticsDateFrom,
@@ -80,8 +83,10 @@ const CHART_COLORS = ['#38dfff', '#8b7cff', '#33d691', '#f5a524', '#5f8fff', '#e
 
 export function ProjectsOperationsView({
   vaultStatus,
+  onStatusRefresh,
 }: {
   vaultStatus: VaultStatus | null;
+  onStatusRefresh?: () => Promise<void>;
 }) {
   const [latest, setLatest] = useState<VaultMemory[]>([]);
   const [logs, setLogs] = useState<VaultLogEntry[]>([]);
@@ -89,6 +94,10 @@ export function ProjectsOperationsView({
   const [openLoops, setOpenLoops] = useState<VaultOpenLoop[]>([]);
   const [workspaces, setWorkspaces] = useState<ProjectWorkspaceConfig[]>([]);
   const [loading, setLoading] = useState(true);
+  const [projectSearch, setProjectSearch] = useState('');
+  const [deleteCandidate, setDeleteCandidate] = useState<ProjectCockpitRow | null>(null);
+  const [deletingProjectSlug, setDeletingProjectSlug] = useState<string | null>(null);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
 
   useEffect(() => {
     void hydrate();
@@ -115,6 +124,39 @@ export function ProjectsOperationsView({
     }
   }
 
+  async function refreshAll() {
+    await Promise.all([
+      hydrate(),
+      onStatusRefresh?.() ?? Promise.resolve(),
+    ]);
+  }
+
+  async function confirmDeleteProject() {
+    if (!deleteCandidate) {
+      return;
+    }
+
+    setDeletingProjectSlug(deleteCandidate.slug);
+    setDeleteError(null);
+    try {
+      const response = await window.vaultAPI.mergeProject(deleteCandidate.slug, DELETE_PROJECT_TARGET_SLUG, {
+        decidedBy: 'desktop',
+        relocateFiles: true,
+      });
+      if (!response.success) {
+        setDeleteError(response.error ?? `Failed to delete ${deleteCandidate.name}`);
+        return;
+      }
+
+      setDeleteCandidate(null);
+      await refreshAll();
+    } catch (err) {
+      setDeleteError(err instanceof Error ? err.message : `Failed to delete ${deleteCandidate.name}`);
+    } finally {
+      setDeletingProjectSlug(null);
+    }
+  }
+
   const rows = useMemo(
     () => buildProjectCockpitRows({
       projects: vaultStatus?.projects || [],
@@ -126,6 +168,7 @@ export function ProjectsOperationsView({
     }),
     [vaultStatus?.projects, momentum, workspaces, latest, logs, openLoops],
   );
+  const visibleRows = useMemo(() => filterProjectCockpitRows(rows, projectSearch), [rows, projectSearch]);
   const activeWorkspaces = rows.filter((row) => row.workspacePath).length;
   const movingProjects = rows.filter((row) => row.direction === 'up').length;
 
@@ -135,33 +178,72 @@ export function ProjectsOperationsView({
         label="Projects"
         title="Project radar"
         text="Project health is derived from saved project metadata, recent memories, workspace registry state, activity logs, and open-loop pressure."
-        chips={[`${rows.length} projects`, `${activeWorkspaces} workspaces`, `${movingProjects} gaining momentum`]}
-        onRefresh={() => void hydrate()}
+        chips={[`${visibleRows.length}/${rows.length} visible`, `${activeWorkspaces} workspaces`, `${movingProjects} gaining momentum`]}
+        onRefresh={() => void refreshAll()}
         loading={loading}
       />
 
-      <section className="ops-project-grid">
-        <div className="panel ops-project-chart">
-          <PanelHeader icon={<BarChart3 size={18} />} title="Momentum map" subtitle="Last seven days by project." />
-          <div className="ops-chart-tall">
-            <ResponsiveContainer width="100%" height="100%" minWidth={1} minHeight={1} initialDimension={{ width: 1, height: 1 }}>
-              <BarChart data={rows.slice(0, 12)} layout="vertical" margin={{ top: 8, right: 24, bottom: 8, left: 24 }}>
-                <CartesianGrid stroke="rgba(148, 166, 198, 0.12)" horizontal={false} />
-                <XAxis type="number" stroke="#708097" tickLine={false} axisLine={false} allowDecimals={false} />
-                <YAxis dataKey="name" type="category" width={126} stroke="#a8b4c6" tickLine={false} axisLine={false} />
-                <Tooltip content={<ChartTooltip />} />
-                <Bar dataKey="last7dCount" fill="#38dfff" radius={[0, 7, 7, 0]} />
-              </BarChart>
-            </ResponsiveContainer>
-          </div>
+      <section className="panel ops-project-directory">
+        <div className="ops-project-directory-header">
+          <PanelHeader
+            icon={<FolderOpen size={18} />}
+            title="Project directory"
+            subtitle="Dense project index with memory counts, descriptions, creation dates, and delete controls."
+          />
+          <label className="search-field ops-project-search">
+            <Search size={16} />
+            <input
+              value={projectSearch}
+              onChange={(event) => setProjectSearch(event.target.value)}
+              placeholder="Search projects"
+            />
+          </label>
         </div>
 
-        <div className="ops-project-list">
+        <div className="ops-project-table-scroll">
           {rows.length === 0 ? (
-            <div className="panel empty-state">No projects are stored in this vault yet.</div>
-          ) : rows.map((row) => <ProjectOpsRow key={row.name} row={row} />)}
+            <div className="empty-state">No projects are stored in this vault yet.</div>
+          ) : visibleRows.length === 0 ? (
+            <div className="empty-state">No projects match the current search.</div>
+          ) : (
+            <div className="ops-project-table" role="table" aria-label="Projects">
+              <div className="ops-project-table-head" role="row">
+                <span role="columnheader">Name</span>
+                <span role="columnheader">Memories</span>
+                <span role="columnheader">Description</span>
+                <span role="columnheader">Created</span>
+                <span role="columnheader" aria-label="Actions" />
+              </div>
+              {visibleRows.map((row) => (
+                <ProjectOpsRow
+                  key={row.name}
+                  row={row}
+                  deleting={deletingProjectSlug === row.slug}
+                  onDelete={() => {
+                    setDeleteError(null);
+                    setDeleteCandidate(row);
+                  }}
+                />
+              ))}
+            </div>
+          )}
         </div>
       </section>
+
+      {deleteCandidate ? (
+        <ProjectDeleteModal
+          project={deleteCandidate}
+          deleting={deletingProjectSlug === deleteCandidate.slug}
+          error={deleteError}
+          onCancel={() => {
+            if (!deletingProjectSlug) {
+              setDeleteCandidate(null);
+              setDeleteError(null);
+            }
+          }}
+          onConfirm={() => void confirmDeleteProject()}
+        />
+      ) : null}
     </div>
   );
 }
@@ -1372,37 +1454,109 @@ function PanelHeader({ icon, title, subtitle }: { icon: ReactNode; title: string
   );
 }
 
-function ProjectOpsRow({ row }: { row: ProjectCockpitRow }) {
+const DELETE_PROJECT_TARGET_SLUG = 'the-vault';
+
+function ProjectOpsRow({
+  row,
+  deleting,
+  onDelete,
+}: {
+  row: ProjectCockpitRow;
+  deleting: boolean;
+  onDelete: () => void;
+}) {
+  const isFallbackTarget = row.slug === DELETE_PROJECT_TARGET_SLUG;
+
   return (
-    <article className="panel ops-project-row">
-      <div className="ops-project-row-head">
-        <div>
-          <h3>{row.name}</h3>
-          <p>{row.description}</p>
-        </div>
-        <span className={`ops-momentum ops-momentum-${row.direction}`}>{row.direction}</span>
+    <div className="ops-project-table-row" role="row">
+      <div className="ops-project-name-cell" role="cell">
+        <strong title={row.name}>{row.name}</strong>
+        <span>{row.slug}</span>
       </div>
-      <div className="ops-project-metrics">
-        <Metric label="memories" value={row.memoryCount} />
-        <Metric label="recent" value={row.last7dCount} />
-        <Metric label="loops" value={row.openLoopCount} />
-        <Metric label="events" value={row.logCount} />
-      </div>
-      <div className="ops-project-workspace">
-        <GitBranch size={14} />
-        <span>{row.workspacePath || 'No workspace mapped'}</span>
-        {row.workspacePath ? <strong>{row.workspaceTrusted ? 'trusted' : 'untrusted'}</strong> : null}
-      </div>
-    </article>
+      <span className="ops-project-memory-cell" role="cell">{formatCompactNumber(row.memoryCount)}</span>
+      <span className="ops-project-description-cell" role="cell" title={row.description}>{row.description}</span>
+      <span className="ops-project-created-cell" role="cell" title={row.createdAt || 'not recorded'}>{formatShortDate(row.createdAt)}</span>
+      <span className="ops-project-action-cell" role="cell">
+        <button
+          type="button"
+          className="header-button icon-only-button danger-button ops-project-delete-button"
+          onClick={onDelete}
+          disabled={deleting || isFallbackTarget}
+          title={isFallbackTarget ? 'Cannot delete the fallback project' : `Delete ${row.name}`}
+          aria-label={isFallbackTarget ? 'Cannot delete the fallback project' : `Delete ${row.name}`}
+        >
+          <Trash2 size={15} />
+        </button>
+      </span>
+    </div>
   );
 }
 
-function Metric({ label, value }: { label: string; value: number }) {
+function ProjectDeleteModal({
+  project,
+  deleting,
+  error,
+  onCancel,
+  onConfirm,
+}: {
+  project: ProjectCockpitRow;
+  deleting: boolean;
+  error: string | null;
+  onCancel: () => void;
+  onConfirm: () => void;
+}) {
+  const titleId = `ops-project-delete-title-${project.slug}`;
+  const hasMemories = project.memoryCount > 0;
+
   return (
-    <span className="ops-mini-metric">
-      <strong>{value}</strong>
-      <span>{label}</span>
-    </span>
+    <div className="ops-project-delete-modal-backdrop" onClick={onCancel}>
+      <section
+        className="ops-project-delete-modal"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
+        onClick={(event) => event.stopPropagation()}
+      >
+        <header className="ops-project-delete-modal-header">
+          <div>
+            <span>Delete project</span>
+            <strong id={titleId}>{project.name}</strong>
+          </div>
+          <button
+            type="button"
+            className="header-button icon-only-button ops-project-delete-modal-close"
+            onClick={onCancel}
+            disabled={deleting}
+            aria-label="Close delete project dialog"
+          >
+            <X size={15} />
+          </button>
+        </header>
+
+        <div className="ops-project-delete-modal-body">
+          <div className="ops-project-delete-warning">
+            <AlertTriangle size={18} />
+            <p>Are you sure you want to delete {project.name}? This cannot be undone.</p>
+          </div>
+          {hasMemories ? (
+            <p>This project has {project.memoryCount} memories. Confirming will merge them into {DELETE_PROJECT_TARGET_SLUG} before removing the project.</p>
+          ) : (
+            <p>This empty project will be merged into {DELETE_PROJECT_TARGET_SLUG} and removed from the project list.</p>
+          )}
+          {error ? <div className="ops-project-delete-error">{error}</div> : null}
+        </div>
+
+        <footer className="ops-project-delete-modal-actions">
+          <button type="button" className="pill-button" onClick={onCancel} disabled={deleting}>
+            Cancel
+          </button>
+          <button type="button" className="danger-button" onClick={onConfirm} disabled={deleting}>
+            <Trash2 size={16} />
+            <span>{deleting ? 'Deleting...' : 'Delete project'}</span>
+          </button>
+        </footer>
+      </section>
+    </div>
   );
 }
 
@@ -1602,6 +1756,17 @@ function formatRelativeTime(timestamp: string | null | undefined): string {
   return Number.isNaN(date.getTime())
     ? 'not recorded'
     : `${formatDistanceToNow(date)} ago`;
+}
+
+function formatShortDate(timestamp: string | null | undefined): string {
+  if (!timestamp) {
+    return 'not recorded';
+  }
+
+  const date = new Date(timestamp);
+  return Number.isNaN(date.getTime())
+    ? 'not recorded'
+    : date.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
 }
 
 function formatChartLabel(value: string | undefined): string {
