@@ -37,6 +37,11 @@ jobs:
           node-version: 22
           cache: pnpm
 
+      - name: Setup Python for native rebuilds
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
@@ -47,6 +52,8 @@ jobs:
         run: pnpm build
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: false
+          PYTHON: python
+          npm_config_python: python
 
       - name: Verify bundled MCP sidecar
         shell: pwsh
