@@ -15,7 +15,7 @@ It ships as a TypeScript workspace with a shared core engine, command-line inter
 
 The Vault also includes an optional Graphify extension. When enabled for a project, Vault manages the Graphify runtime and artifacts, embeds Graphify's generated project graph in the desktop app, and exposes graph-aware MCP tools so agents can ask structural questions before reading large parts of a repository.
 
-The Vault also includes an optional Vault Collab extension: a live, provider-neutral multi-agent collaboration layer with sessions, roles, handoff inboxes, and append-only discussions over its own separate local SQLite store (the memory engine only reads it). Agents coordinate by pulling their own inbox via a `receive` work-loop, and new agents are launched only with explicit permission (a user-approved copy-command), never silently spawned. It is surfaced in the desktop "Vault Collab" operator cockpit.
+The Vault also includes an optional Vault Collab extension: a live, provider-neutral multi-agent collaboration layer with sessions, roles, handoff inboxes, launch requests, policy packs, and append-only discussions over its own separate local SQLite store (the memory engine only reads it). Agents coordinate by pulling their own inbox via a `receive` work-loop. New workers launch only after explicit user approval; on Windows the app can open a visible PowerShell worker window, and every approved launch still exposes a copyable command fallback.
 
 ## The 60-Second Version
 
@@ -24,7 +24,7 @@ The Vault also includes an optional Vault Collab extension: a live, provider-neu
 - Agents ask the Vault MCP server for relevant context instead of reading the whole memory store.
 - Graphify can add a local project graph so agents can narrow file reads through graph queries, paths, neighbors, and impact checks.
 - Work can continue later from Codex, Claude Desktop, Claude Code, or another MCP client.
-- Vault does not launch local Codex or Claude terminal agents; those clients stay external and connect through MCP.
+- Vault does not silently spawn agents; launch requests require explicit approval and use a visible terminal or copyable command fallback.
 - You stay in control because memory is local, inspectable, and important cleanup changes are reviewable.
 
 ## How It Feels To Use
@@ -163,7 +163,7 @@ The Vault is not:
 - a replacement for GitHub issues or documentation
 - memory locked inside one model provider
 - a dump of every saved note into every prompt
-- a local Codex or Claude terminal launcher
+- an unsupervised Codex or Claude process spawner
 
 The Vault is:
 
@@ -180,7 +180,7 @@ The Vault is:
 - MCP clients receive recall packs, not the entire memory store.
 - Destructive cleanup uses lifecycle states and review before final deletion.
 - Client setup backs up existing config files before changing them.
-- The desktop setup flow edits only the Vault-specific MCP entry and leaves other client config intact.
+- The desktop setup flow edits only Vault-owned MCP entries and leaves other client config intact.
 - The desktop UI lets you inspect saved memory, file placement, activity logs, project proposals, and pending-delete flows.
 
 ## Core Concepts
@@ -204,17 +204,17 @@ The Vault is:
 | Smart recall | Returns ranked memory packs using project match, keywords, tags, memory type, explicit memory UID matches, recency, promoted decisions, and related context. |
 | Graphify extension | Optional project graph integration that detects or installs Graphify, stores artifacts under Vault-managed paths, embeds real `graph.html`, and keeps the rest of Vault working when Graphify is missing or failed. |
 | Graph-aware recall | Combines Vault memory recall with Graphify context when a fresh or usable graph exists, while logging graph use, fallback reasons, and token-savings telemetry locally. |
-| Vault Collab extension | Optional live collaboration layer: provider-neutral sessions with roles, handoff inboxes, append-only discussions, lease-based ghost cleanup, and permission-gated agent launch — surfaced in a desktop operator cockpit (Needs You / Agents / Work / Conversation). Uses a separate local SQLite store and pull-based (`receive`) delivery. |
-| Desktop console | Electron app with overview, memory browser, recall, loops, Graphify project graph, analytics, Vault task runtime, settings, and client setup. |
+| Vault Collab extension | Optional live collaboration layer: provider-neutral sessions with roles, handoff inboxes, append-only discussions, lease-based ghost cleanup, policy packs, event registry, and permission-gated agent launch — surfaced in a desktop operator cockpit (Needs You plus Work / Agents / Events / Policy / Registry). Uses a separate local SQLite store and pull-based (`receive`) delivery. |
+| Desktop console | Electron app with overview, memories, projects, handoffs, decisions, loops, recall, analytics, Graphify, Vault Collab, agent runtime, settings, and inspector tabs. |
 | MCP integration | `vault-memory` MCP server for external agents and clients, including memory tools, task tools, and Vault-owned Graphify graph tools. |
-| One-click client setup | Desktop Settings -> Client setup can connect Codex, Claude Desktop, and Claude Code to the bundled runtime. |
+| One-click client setup | Desktop Settings -> Client setup can connect Codex, Claude Desktop, and Claude Code to the bundled memory runtime, add Vault Collab as a second MCP server, and install/remove the matching agent guide files. |
 | CLI access | Command-line entry point over the same core APIs. |
 | Project hygiene | Project descriptions, project listing, naming drift handling, duplicate project merging, and relationship tracking. |
 | Lifecycle controls | Reversible memory states such as `active`, `stale`, `archived`, and `pending_delete` before deletion. |
 | Task records | Queued task metadata, model routing, executor status, task results, retries, and saved summaries. |
 | Project momentum | Per-project week-over-week activity delta (↑/↓/inactive) shown on the Overview to make stagnating projects visible. |
 | Open loops panel | Aggregated unfinished work — items with non-empty `next_steps` plus stale debugging routines — bucketed by derived priority (high/medium/low) with snooze support via `snoozed_until`. |
-| Close-the-loop on recall | `vault_recall_context` returns an `open_loops` field so agents surface unfinished work back to the user. The dedicated `vault_resolve_loop` MCP tool atomically closes a loop with an outcome (`fixed`/`wont_fix`/`obsolete`/`duplicate`). |
+| Close-the-loop on recall | `vault_recall_context` returns a capped, pressure-ranked `open_loops` field so agents surface unfinished work back to the user. Dedicated MCP tools support single-loop resolution plus exhaustive loop audits and batch resolution. |
 | Local privacy | SQLite database and memory files stay on the user's machine unless the user explicitly pushes or exports them. |
 
 ## Interfaces
@@ -231,22 +231,24 @@ The Vault is built around one shared core package and several thin interfaces:
 The desktop app currently includes:
 
 - **Overview**: local memory status, activity, recall, open loops, relationship graph, and project radar in one cockpit.
+- **Memories**: search, filter, inspect, edit, and save structured memory items.
+- **Projects**: searchable project directory with memory counts, descriptions, workspace signals, momentum, and delete/merge controls.
+- **Handoffs**: filtered workspace for transfer notes and preserved next actions.
+- **Decisions**: promoted project choices and rationale.
+- **Loops**: open-loop control surface with project/routine/tag filtering, snooze, open, and resolve actions.
 - **Recall**: inspect recall activity, candidate pruning, prompt packing efficiency, and compact recall logs.
-- **Memory Bank**: browse and inspect saved memory items.
-- **Graph**: choose a project source folder, build or rebuild Graphify artifacts, inspect graph freshness, open reports, and view the real Graphify graph.
-- **Agent Runtime**: inspect Vault's built-in task runtime, delegated task queue, and executor events. External Codex and Claude clients stay connected through MCP.
-- **Agent Review**: review project proposals and pending-delete flows.
-- **Vault Collab**: operator cockpit for the optional collaboration extension — a "Needs You" action strip, agents grouped by role, a handoff/work board, and a shared conversation/event stream. Approve permission-gated agent launches (copy-command) here.
-- **Activity**: inspect operational logs.
-- **Vault Files**: browse saved memory files on disk.
-- **Settings**: configure runtime behavior, lifecycle policy, Graphify extension detection/install, prompt guides, model routing, and client setup.
-- **Client setup**: connect/disconnect Codex, Claude Desktop, Claude Code, install agent guide references, and troubleshoot MCP.
+- **Analytics**: operational charts from logs, memory state, and task queue counters.
+- **Graphify**: choose a project source folder, build or rebuild Graphify artifacts, inspect graph freshness, open reports, and view the real Graphify graph.
+- **Vault Collab**: operator cockpit for the optional collaboration extension — Needs You plus Work, Agents, Events, Policy, and Registry tabs. Request agents for a selected project/workspace, approve or reject launch requests, and inspect role/session state.
+- **Agent**: inspect Vault's built-in task runtime, delegated task queue, executor events, and runtime controls.
+- **Settings**: configure runtime behavior, lifecycle policy, Graphify and Vault Collab extension detection/install, prompt guides, model routing, and client setup.
+- **Inspectors**: Activity, Files, and Reviews tabs for operational logs, vault files, project proposals, and pending deletes.
 
 ### Operations Overview
 
 The Overview is the daily operator surface: live local status, activity, project radar, recent relationship graph, open loops, recall trends, telemetry, and review queues.
 
-![The Vault Operations Overview showing local runtime status, activity, relationship graph, project radar, open loops, recall trend, and telemetry](assets/screenshots/operations-overview.png)
+![The Vault Operations Overview showing local runtime status, memory footprint, open loops, recall efficiency, activity, relationship graph, and project radar](assets/screenshots/overview-dashboard.png)
 
 ### Open Loops
 
@@ -258,15 +260,23 @@ The Loops page turns unfinished work into an explicit queue. Operators can filte
 
 Recall shows how much prompt context Vault avoided sending to the agent window: estimated tokens saved, candidate pruning, recall volume, signal strength, and a compact signal log. When Graphify is enabled, recall activity also records graph-aware context use so operators can see when the project graph is contributing to the answer path.
 
-![The Vault Recall page showing estimated tokens saved, candidate reduction, recall volume, signal strength, a pruning trend chart, and compact recall log](assets/screenshots/recall-efficiency.png)
-
-![The Vault Recall page after Graphify integration showing graph-aware recall telemetry and the Graphify-on annotation](assets/screenshots/graphify-extension-on.png)
+![The Vault Recall page showing estimated tokens saved, candidate reduction, recall volume, signal strength, a pruning chart, and compact recall log](assets/screenshots/recall-dashboard.png)
 
 ### Graphify Project Graph
 
 The Graph page is now Graphify-aware. Vault keeps Graphify optional, but when it is installed and enabled for a project, Vault stores graph artifacts under managed extension paths, embeds Graphify's generated `graph.html`, preserves the last good graph when rebuilds fail, and asks for a source folder before building projects that do not yet have one.
 
-![The Vault Graph page showing a relationship map and linked memory records](assets/screenshots/relationship-graph.png)
+![The Vault Graphify page showing graph freshness, source folder controls, artifact actions, and the embedded Graphify graph](assets/screenshots/graphify-dashboard.png)
+
+### Vault Collab Cockpit
+
+Vault Collab is a separate live coordination layer for multi-agent work. The desktop cockpit shows approval-needed items, routed handoffs, role-grouped sessions, policy packs, and the event registry. Launches stay permission-gated: after approval, The Vault opens a visible worker terminal on supported Windows builds or leaves a copyable command for manual launch.
+
+![Vault Collab process showing an external coordination session alongside The Vault's live handoff cockpit](assets/screenshots/vault-collab-proccess.png)
+
+![The Vault Collab Work tab showing routed handoffs across available, in-progress, verification, and resolved columns](assets/screenshots/vault-collab-handoffs.png)
+
+![The Vault Collab Agents tab showing role profiles, live sessions, and routed handoffs](assets/screenshots/vault-collab-agents.png)
 
 ### Memory Bank
 
@@ -334,7 +344,7 @@ resources/mcp/node.exe
 resources/mcp/dist/index.js
 ```
 
-Use **Settings -> Client setup** in the desktop app. The UI writes only the Vault-specific MCP entry and keeps other client config entries intact. It also shows connection status and includes a troubleshooting panel.
+Use **Settings -> Client setup** in the desktop app. The UI writes only Vault-owned MCP entries such as `vault-memory` and `vault-collab`, leaves other client config entries intact, shows connection status, and includes a troubleshooting panel.
 
 ![The Vault Client setup screen showing the bundled MCP runtime, all-client connection status, and troubleshooting details](assets/screenshots/client-setup.png)
 
@@ -374,11 +384,14 @@ The repo includes agent-facing operating guides:
 
 - `skills/claude-vault-skill.md`
 - `skills/codex-vault-skill.md`
+- `skills/claude-vault-collab-skill.md`
+- `skills/codex-vault-collab-skill.md`
 
 Installed releases package these guide files under app resources. The desktop **Client setup** page can install or reference them at:
 
-- Claude Code: `%USERPROFILE%\.claude\skills\vault-memory\SKILL.md`
-- Codex: `%USERPROFILE%\.codex\AGENTS.md`
+- Claude Code Vault memory: `%USERPROFILE%\.claude\skills\vault-memory\SKILL.md`
+- Claude Code Vault Collab: `%USERPROFILE%\.claude\skills\vault-collab\SKILL.md`
+- Codex memory and Collab references: `%USERPROFILE%\.codex\AGENTS.md`
 
 The guides teach agents when to recall, when to save, how to structure memory, how to bootstrap client brain projects, and how to use queued Vault tasks.
 
@@ -392,7 +405,7 @@ Each guide tells the client to call `vault_list_projects` first, create one cano
 
 They also include Graphify routing guidance. For code structure, dependency, path, neighbor, and impact questions, agents should call Vault's Graphify MCP tools first instead of jumping straight to broad file search. Vault remains the interface; agents should not call the raw Graphify CLI during normal use.
 
-They also include optional Vault Collab MCP guidance. Vault MCP stays the durable memory layer; Vault Collab MCP is the live session and handoff inbox layer when its `vault_collab_*` tools are attached. Clients should register sessions, check the inbox only when idle or user-approved, claim handoffs deliberately, and save full execution briefs back to Vault memory.
+Vault Collab has separate opt-in guide files because it is a live coordination layer, not durable memory. Vault MCP stays the memory layer; Vault Collab MCP is the session, attention, handoff, discussion, permission, and launch-request layer when its `vault_collab_*` tools are attached. Clients should read `vault_collab_get_agent_guide` as the live loop, register sessions deliberately, drain their own attention feed, claim handoffs only when idle or user-approved, and save full execution briefs back to Vault memory.
 
 ## Graphify Extension
 
@@ -430,10 +443,11 @@ Vault Collab is an optional, provider-neutral collaboration layer for real-time 
 It lets Codex, Claude Code, and other MCP clients coordinate live:
 
 - Sessions register with a role; the live roster auto-cleans stale/ghost sessions via lease + heartbeat.
-- Work is shared as handoffs (publish -> claim -> resolve) with append-only discussion threads.
-- **Pull-based delivery:** each agent drains its own inbox with a `receive` work-loop, so coordination never depends on injecting messages into another agent's terminal.
-- **Permission-gated launch:** an agent (or the user) can request a new agent; the user approves it in the cockpit and runs the returned copy-command in a terminal. The Vault never silently spawns processes.
-- The desktop **Vault Collab** cockpit is the operator surface: a single "Needs You" action area, agents grouped by role, a handoff/work board, and a shared conversation/event stream.
+- Role profiles describe the session's operating posture, capability scope, and suggested next roles.
+- Work is shared as handoffs (publish -> claim -> progress -> resolve) with labels, queues, dependencies, and append-only discussion threads.
+- **Pull-based delivery:** each agent drains its own attention feed with `receive`, so coordination never depends on injecting messages into another agent's terminal.
+- **Permission-gated launch:** an agent or user can request a new worker for a selected project and workspace. The user approves, rejects, or cancels in the cockpit. On supported Windows builds The Vault opens a visible PowerShell worker window after approval; otherwise it shows the approved command to run manually.
+- **Operator cockpit:** Needs You plus Work, Agents, Events, Policy, and Registry tabs show launch approvals, handoff state, session HUDs, role profiles, event streams, policy packs, and the event type registry.
 
 Vault Collab ships as a separate package/repo and connects through its own `vault_collab_*` MCP tools. Connect it from **Settings -> Client setup -> Connect Vault Collab MCP**.
 
@@ -480,16 +494,28 @@ Recall is designed to return useful context, not every matching record. Ranking 
 
 Promoted and canonical memories are intentionally boosted because they represent durable project truths.
 
+Open loops have two MCP surfaces:
+
+| Tool | Purpose |
+| --- | --- |
+| `vault_recall_context` | Returns the most urgent few `open_loops` for close-the-loop prompts during ordinary recall. |
+| `vault_resolve_loop` | Atomically resolves one loop with an outcome: `fixed`, `wont_fix`, `obsolete`, or `duplicate`. |
+| `vault_list_open_loops` | Exhaustively lists active explicit open loops with pagination for audits and cleanup passes. |
+| `vault_count_open_loops` | Counts open loops, optionally grouped by project. |
+| `vault_resolve_loop_batch` | Resolves many confirmed loops at once with partial success reporting. |
+
 ## Project Hygiene
 
 The Vault treats project identity as data, not just a folder name. It supports:
 
-- project listing
+- searchable project listing
 - project descriptions
 - project relationship records
 - duplicate and old-name cleanup
+- workspace registration
 - canonical naming decisions
 - merge workflows for duplicated project entries
+- desktop delete controls that confirm the action, merge memories into the fallback project, and remove the source project row
 
 This matters because long-running AI work often creates naming drift across sessions and clients.
 
@@ -551,11 +577,11 @@ The root build:
 Release builds are created by GitHub Actions when a version tag is pushed:
 
 ```powershell
-git tag -a v0.2.9 -m "v0.2.9"
-git push origin v0.2.9
+git tag -a vX.Y.Z -m "vX.Y.Z"
+git push origin vX.Y.Z
 ```
 
-The workflow typechecks the repo, builds the installer, verifies the bundled MCP sidecar, uploads artifacts, and publishes a GitHub Release.
+The workflow typechecks the repo, builds the installer, verifies the bundled MCP sidecar, uploads artifacts, and publishes a GitHub Release. See `CHANGELOG.md` for the current release notes.
 
 ## Data And Privacy
 
@@ -613,13 +639,17 @@ The Vault is usable today for:
 - client setup
 - recall and save flows
 - optional Graphify project graphs and graph-aware MCP context
+- optional Vault Collab live coordination, handoff routing, policy visibility, and permission-gated worker launch
+- exhaustive open-loop audits and batch loop resolution
 - task records
+- searchable project directory and reviewable delete/merge controls
 - Windows installer releases
 
 It is still evolving in these areas:
 
 - recall explainability
 - Graphify graph quality, semantic mode tuning, and project relationship views
+- Vault Collab managed install/package polish for users without a local checkout
 - analytics for usage, recall quality, and project activity
 - onboarding polish
 - release hardening
@@ -629,7 +659,7 @@ See `docs/master-plan-status.md` for a more detailed implementation status map.
 
 ## Project Tags
 
-`local-first` `ai-memory` `agent-memory` `mcp-server` `graphify` `project-graph` `codex` `claude` `electron` `sqlite` `typescript` `developer-tools` `workflow-continuity` `knowledge-management` `task-delegation` `project-context`
+`local-first` `ai-memory` `agent-memory` `mcp-server` `vault-collab` `graphify` `project-graph` `codex` `claude` `electron` `sqlite` `typescript` `developer-tools` `workflow-continuity` `knowledge-management` `task-delegation` `project-context`
 
 ## Repository Discipline
 
