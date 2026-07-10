@@ -3,7 +3,7 @@
 // Find, filter, recall, and get memory items.
 // ============================================================================
 
-import { eq, and, like, desc, asc, gte, lte, sql, or, inArray } from 'drizzle-orm';
+import { eq, and, like, desc, asc, gte, lte, sql, or, inArray, notInArray } from 'drizzle-orm';
 import { existsSync, unlinkSync } from 'node:fs';
 import { memoryItems } from '../database/schema.js';
 import {
@@ -25,6 +25,7 @@ import {
   writeMemoryFile,
 } from './file.service.js';
 import { logActivity } from './log.service.js';
+import { resolveCanonicalProjectName } from './project.service.js';
 import { isEnrichmentAvailable, reRankWithLLM, generateContextSummary } from './enrichment.service.js';
 import { expandRecallWithRelated, surfaceProactiveContext } from './agent-duties.service.js';
 import { now } from '../utils/datetime.js';
@@ -156,7 +157,7 @@ export function findMemory(db: DB, query: FindMemoryQuery): MemoryItem[] {
   const conditions = [];
 
   if (validated.project) {
-    conditions.push(eq(memoryItems.project, validated.project));
+    conditions.push(eq(memoryItems.project, resolveCanonicalProjectName(db, validated.project)));
   }
   if (validated.memoryType) {
     conditions.push(eq(memoryItems.memoryType, validated.memoryType));
@@ -240,16 +241,28 @@ export async function recallContext(
     validated.tags,
   );
 
-  // Step 1: Get broad candidate set
+  // Step 1: Get broad candidate set. Resolve the project through the registry
+  // so slug/casing variants ("vault-collab", "VAULT COLLAB") reach the
+  // canonical stored name instead of silently matching nothing.
+  const projectName = validated.project
+    ? resolveCanonicalProjectName(db, validated.project)
+    : undefined;
   const conditions = [];
-  if (validated.project) {
+  if (projectName) {
     conditions.push(requestedItemUids.length > 0
-      ? or(eq(memoryItems.project, validated.project), inArray(memoryItems.itemUid, requestedItemUids))
-      : eq(memoryItems.project, validated.project));
+      ? or(eq(memoryItems.project, projectName), inArray(memoryItems.itemUid, requestedItemUids))
+      : eq(memoryItems.project, projectName));
   }
   // Exclude terminal lifecycle states by default. Stale items still surface
-  // (they're a soft warning, not removal); promoted items always surface.
-  const recallableState = sql`${memoryItems.status} NOT IN ('archived', 'pending_delete') OR ${memoryItems.promoted} = 1`;
+  // (they're a soft warning, not removal); promoted items always surface even
+  // when archived — but only within the project scope above. Composed with
+  // drizzle or() so the OR is parenthesized and can never escape the project
+  // filter (a raw sql fragment here previously leaked every promoted item
+  // from every project into every recall).
+  const recallableState = or(
+    notInArray(memoryItems.status, ['archived', 'pending_delete']),
+    eq(memoryItems.promoted, true),
+  );
   conditions.push(requestedItemUids.length > 0
     ? or(recallableState, inArray(memoryItems.itemUid, requestedItemUids))
     : recallableState);
@@ -265,8 +278,9 @@ export async function recallContext(
 
   const items = candidates.map(mapRow);
 
-  // Step 2: Rank candidates
-  const ranked = rankCandidates(items, validated);
+  // Step 2: Rank candidates (against the resolved project name so the
+  // same-project signal fires consistently for slug/casing queries)
+  const ranked = rankCandidates(items, { ...validated, project: projectName });
 
   // Step 3: Take top N
   const limit = validated.limit || 10;
@@ -302,14 +316,14 @@ export async function recallContext(
 
   const expandedPack = expandRecallWithRelated(db, pack, topMatches);
   let proactive: MemoryItem[] = [];
-  if (validated.project) {
+  if (projectName) {
     const sessionKeywords = [
       ...(validated.keywords || []),
       ...(validated.tags || []),
       ...(validated.queryText ? validated.queryText.split(/\s+/) : []),
     ].filter((value) => value && value.length > 2);
 
-    proactive = surfaceProactiveContext(db, validated.project, sessionKeywords, 5)
+    proactive = surfaceProactiveContext(db, projectName, sessionKeywords, 5)
       .filter((item) => !expandedPack.topMatches.some((match) => match.item.itemUid === item.itemUid));
   }
 
@@ -322,7 +336,7 @@ export async function recallContext(
   // urgent few. expandRecallWithRelated may have widened the result set
   // beyond the original limit, so the cap is independent.
   const OPEN_LOOPS_RECALL_CAP = 5;
-  expandedPack.openLoops = getOpenLoops(db, validated.project).slice(0, OPEN_LOOPS_RECALL_CAP);
+  expandedPack.openLoops = getOpenLoops(db, projectName).slice(0, OPEN_LOOPS_RECALL_CAP);
 
   for (const match of expandedPack.topMatches) {
     const { item } = match;
@@ -406,7 +420,7 @@ export function getLatest(
 ): MemoryItem[] {
   const conditions = [];
   if (project) {
-    conditions.push(eq(memoryItems.project, project));
+    conditions.push(eq(memoryItems.project, resolveCanonicalProjectName(db, project)));
   }
 
   const rows =

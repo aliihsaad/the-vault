@@ -557,7 +557,15 @@ export function expandRecallWithRelated(
   return {
     ...pack,
     related: relatedItems,
-    topMatches: expandedMatches.sort((left, right) => right.score - left.score),
+    // Preserve the ranking service's order for the original matches — it
+    // encodes relevance tiers, not just raw score, so a global re-sort here
+    // would bury on-topic matches under high-static-score expansions.
+    topMatches: [
+      ...topMatches,
+      ...expandedMatches
+        .slice(topMatches.length)
+        .sort((left, right) => right.score - left.score),
+    ],
   };
 }
 

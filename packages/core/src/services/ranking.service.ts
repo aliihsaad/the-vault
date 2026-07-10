@@ -42,18 +42,71 @@ const WEIGHTS = {
   QUERY_TEXT_WORD_SUMMARY: 6,
 };
 
+// Query-dependent signals. Everything else (promoted, priority, type,
+// recency, access) is a static boost an item carries regardless of what
+// was asked.
+const RELEVANCE_SIGNAL_KEYS = [
+  'memoryUidExact',
+  'titleExact',
+  'titlePartial',
+  'subjectExact',
+  'subjectPartial',
+  'keywordOverlap',
+  'tagOverlap',
+  'queryTextTitle',
+  'queryTextSubject',
+  'queryTextSummary',
+  'queryTextTag',
+  'queryTextKeyword',
+  'queryTextWordSubject',
+  'queryTextWordTitle',
+  'queryTextWordSummary',
+] as const;
+
+function relevanceScore(signals: Record<string, number>): number {
+  let total = 0;
+  for (const key of RELEVANCE_SIGNAL_KEYS) {
+    total += signals[key] || 0;
+  }
+  return total;
+}
+
+function queryHasRelevanceInputs(query: RecallQuery): boolean {
+  return Boolean(
+    query.subject ||
+    query.queryText ||
+    (query.keywords && query.keywords.length > 0) ||
+    (query.tags && query.tags.length > 0),
+  );
+}
+
 /**
  * Score and rank a list of memory candidates against a recall query.
  * Returns sorted candidates with scores and signal breakdowns.
+ *
+ * When the query carries relevance inputs (subject, keywords, tags, or
+ * query text), candidates that matched at least one of them always rank
+ * above candidates that matched none — static boosts (promoted, canonical,
+ * priority, type, recency) order items within each tier but can no longer
+ * bury an on-topic match under off-topic "greatest hits". Queries without
+ * relevance inputs (e.g. project-only session-start recall) keep pure
+ * score ordering, where static boosts are the intended signal.
  */
 export function rankCandidates(
   candidates: MemoryItem[],
   query: RecallQuery,
 ): RankedCandidate[] {
   const ranked = candidates.map((item) => scoreCandidate(item, query));
+  const relevanceFirst = queryHasRelevanceInputs(query);
 
-  // Sort by score descending
-  ranked.sort((a, b) => b.score - a.score);
+  ranked.sort((a, b) => {
+    if (relevanceFirst) {
+      const aRelevant = relevanceScore(a.signals) > 0 ? 1 : 0;
+      const bRelevant = relevanceScore(b.signals) > 0 ? 1 : 0;
+      if (aRelevant !== bRelevant) return bRelevant - aRelevant;
+    }
+    return b.score - a.score;
+  });
 
   return ranked;
 }

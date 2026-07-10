@@ -42,6 +42,16 @@ function findProjectBySlug(db: DB, name: string): typeof projects.$inferSelect |
 }
 
 /**
+ * Resolve a caller-supplied project name (any casing, or slug form like
+ * "vault-collab") to the canonical stored name (e.g. "Vault Collab").
+ * Returns the input unchanged when no project matches.
+ */
+export function resolveCanonicalProjectName(db: DB, name: string): string {
+  const existing = findProjectBySlug(db, name);
+  return existing ? existing.name : name;
+}
+
+/**
  * Infer the owning project from related file paths. This is intentionally
  * conservative: only absolute paths are considered, and all matching paths
  * must agree on the same known project slug.
