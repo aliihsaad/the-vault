@@ -1,6 +1,6 @@
 {
   "name": "the-vault",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "private": true,
   "description": "A local-first AI memory operating system for coding agents and humans",
   "author": "Ali Saad",
