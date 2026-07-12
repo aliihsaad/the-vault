@@ -1,9 +1,12 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
+  FailoverEnrichmentClient,
   OpenAICompatibleClient,
   OpenRouterClient,
   createProviderClient,
+  isProviderConfigUsable,
   normalizeProviderBaseUrl,
+  type EnrichmentClient,
 } from './services/openrouter-client.js';
 
 describe('AI provider clients', () => {
@@ -110,5 +113,62 @@ describe('AI provider clients', () => {
   it('llm-hub client reports unavailable without a base URL', () => {
     const client = createProviderClient({ provider: 'llm-hub', apiKey: 'k' }, 'hub/model');
     expect(client.isAvailable()).toBe(false);
+  });
+
+  it('validates provider configs for usability', () => {
+    expect(isProviderConfigUsable({ provider: 'openrouter', apiKey: 'k' })).toBe(true);
+    expect(isProviderConfigUsable({ provider: 'openrouter', apiKey: '  ' })).toBe(false);
+    expect(isProviderConfigUsable({ provider: 'llm-hub', apiKey: 'k', baseUrl: 'http://hub/v1' })).toBe(true);
+    expect(isProviderConfigUsable({ provider: 'llm-hub', apiKey: 'k' })).toBe(false);
+    expect(isProviderConfigUsable(null)).toBe(false);
+  });
+});
+
+describe('FailoverEnrichmentClient', () => {
+  const okResult = { text: 'ok', model: 'm', usage: { promptTokens: 0, completionTokens: 0 } };
+
+  function stubClient(overrides: Partial<EnrichmentClient>): EnrichmentClient {
+    return {
+      isAvailable: () => true,
+      complete: async () => okResult,
+      ...overrides,
+    };
+  }
+
+  it('uses the primary provider when it succeeds', async () => {
+    const fallbackComplete = vi.fn(async () => ({ ...okResult, text: 'fallback' }));
+    const client = new FailoverEnrichmentClient(
+      stubClient({}),
+      stubClient({ complete: fallbackComplete }),
+    );
+
+    const result = await client.complete({ systemPrompt: 's', userPrompt: 'u' });
+    expect(result.text).toBe('ok');
+    expect(fallbackComplete).not.toHaveBeenCalled();
+  });
+
+  it('fails over to the fallback provider when the primary throws', async () => {
+    const client = new FailoverEnrichmentClient(
+      stubClient({ complete: async () => { throw new Error('primary down'); } }),
+      stubClient({ complete: async () => ({ ...okResult, text: 'fallback answered' }) }),
+    );
+
+    const result = await client.complete({ systemPrompt: 's', userPrompt: 'u' });
+    expect(result.text).toBe('fallback answered');
+  });
+
+  it('skips an unavailable primary and rethrows when no fallback can serve', async () => {
+    const skipped = new FailoverEnrichmentClient(
+      stubClient({ isAvailable: () => false }),
+      stubClient({ complete: async () => ({ ...okResult, text: 'fallback only' }) }),
+    );
+    expect((await skipped.complete({ systemPrompt: 's', userPrompt: 'u' })).text).toBe('fallback only');
+
+    const primaryError = new Error('primary exploded');
+    const noFallback = new FailoverEnrichmentClient(
+      stubClient({ complete: async () => { throw primaryError; } }),
+      null,
+    );
+    await expect(noFallback.complete({ systemPrompt: 's', userPrompt: 'u' })).rejects.toBe(primaryError);
   });
 });

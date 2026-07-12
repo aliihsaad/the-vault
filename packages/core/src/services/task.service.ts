@@ -12,7 +12,8 @@ import { generateItemUid } from '../utils/uid.js';
 import { now } from '../utils/datetime.js';
 import { CreateTaskInputSchema, FindTaskQuerySchema } from '../rules/validation.js';
 import { resolveModelRoute, mergeRoutingTable, DEFAULT_MODEL_ROUTING } from '../rules/model-routing.js';
-import { getSetting } from '../config/settings.js';
+import { getSetting, getPrimaryProviderId, getRoutingTableKey } from '../config/settings.js';
+import type { AiProviderId } from './openrouter-client.js';
 import type { VaultTask, CreateTaskInput, FindTaskQuery, SaveMemoryResult, TaskQueueStats, ModelRoutingTable } from '../types/index.js';
 import type { MemoryType, RoutineType, TaskType } from '../rules/controlled-values.js';
 import type { BetterSQLite3Database } from 'drizzle-orm/better-sqlite3';
@@ -41,8 +42,8 @@ export function createTask(
   const taskUid = generateItemUid().replace('vm_', 'vt_');
   const timestamp = now();
 
-  // Resolve model route
-  const routingTable = getRoutingTable(db);
+  // Resolve model route from the primary provider's routing table
+  const routingTable = getRoutingTable(db, getPrimaryProviderId(db));
   const route = resolveModelRoute(routingTable, validated.taskType);
 
   // Insert into DB
@@ -545,10 +546,11 @@ export function getTaskQueueStats(db: DB): TaskQueueStats {
 // ---------------------------------------------------------------------------
 
 /**
- * Get the effective routing table: defaults merged with user overrides from settings.
+ * Get the effective routing table for a provider: defaults merged with that
+ * provider's user overrides from settings.
  */
-function getRoutingTable(db: DB): ModelRoutingTable {
-  const userOverrides = getSetting(db, 'model_routing_table') as Partial<ModelRoutingTable> | undefined;
+export function getRoutingTable(db: DB, provider: AiProviderId = 'openrouter'): ModelRoutingTable {
+  const userOverrides = getSetting(db, getRoutingTableKey(provider)) as Partial<ModelRoutingTable> | undefined;
   return mergeRoutingTable(DEFAULT_MODEL_ROUTING, userOverrides || null);
 }
 

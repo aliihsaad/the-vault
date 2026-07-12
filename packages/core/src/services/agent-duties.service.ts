@@ -6,8 +6,8 @@ import {
   projectRelationships,
   tasks,
 } from '../database/schema.js';
-import { getSetting, setSetting } from '../config/settings.js';
-import { DEFAULT_MODEL_ROUTING, mergeRoutingTable, resolveModelRoute } from '../rules/model-routing.js';
+import { getSetting, setSetting, getPrimaryProviderId } from '../config/settings.js';
+import { resolveModelRoute } from '../rules/model-routing.js';
 import { CreateTaskInputSchema } from '../rules/validation.js';
 import { slugify } from '../rules/naming.js';
 import {
@@ -24,7 +24,7 @@ import {
   promoteMemory,
   updateMemory,
 } from './retrieve.service.js';
-import { createTask } from './task.service.js';
+import { createTask, getRoutingTable as getProviderRoutingTable } from './task.service.js';
 import { generateItemUid } from '../utils/uid.js';
 import { now } from '../utils/datetime.js';
 import type {
@@ -35,7 +35,6 @@ import type {
   MemoryItem,
   MemoryPack,
   MergeMemoryItemsResult,
-  ModelRoutingTable,
   ProjectBriefing,
   ProjectProposal,
   ProjectReviewOptions,
@@ -842,7 +841,7 @@ function createDutyTaskIfMissing(
 
   const taskUid = generateItemUid().replace('vm_', 'vt_');
   const timestamp = now();
-  const route = resolveModelRoute(getRoutingTable(db), validated.taskType);
+  const route = resolveModelRoute(getProviderRoutingTable(db, getPrimaryProviderId(db)), validated.taskType);
 
   db.insert(tasks)
     .values({
@@ -913,11 +912,6 @@ function findActiveDutyTask(
     .filter((task) => DUTY_TASK_ACTIVE_STATUSES.has(task.status));
 
   return rows[0] ?? null;
-}
-
-function getRoutingTable(db: DB): ModelRoutingTable {
-  const userOverrides = getSetting(db, 'model_routing_table') as Partial<ModelRoutingTable> | undefined;
-  return mergeRoutingTable(DEFAULT_MODEL_ROUTING, userOverrides || null);
 }
 
 function ensureMemoryLink(

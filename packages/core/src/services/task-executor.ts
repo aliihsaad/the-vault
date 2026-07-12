@@ -2,7 +2,10 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import {
   createProviderClient,
+  isProviderConfigUsable,
+  type AiProviderChain,
   type AiProviderConfig,
+  type AiProviderId,
   type GeneratedImage,
 } from './openrouter-client.js';
 import { buildProjectContextPack } from './project-context-pack.service.js';
@@ -82,6 +85,12 @@ export interface TaskExecutorOptions {
    * OpenAI-compatible hub like LLM-Hub with a configurable base URL).
    */
   getProviderConfig?: () => AiProviderConfig;
+  /**
+   * Optional primary + fallback provider resolution. Takes precedence over
+   * getProviderConfig. The fallback provider (with its own routing table and
+   * models) is tried when the primary fails or is not configured.
+   */
+  getProviderChain?: () => AiProviderChain;
   emitEvent: (event: TaskExecutorEvent) => void;
   pollIntervalMs?: number;
   createClient?: (apiKey: string, modelId: string, providerConfig?: AiProviderConfig) => TaskExecutorClient;
@@ -97,6 +106,7 @@ export class TaskExecutor {
   private readonly vault: Vault;
   private readonly getApiKey: () => string;
   private readonly getProviderConfig?: () => AiProviderConfig;
+  private readonly getProviderChain?: () => AiProviderChain;
   private readonly emitEvent: (event: TaskExecutorEvent) => void;
   private readonly pollIntervalMs: number;
   private readonly createClient: (apiKey: string, modelId: string, providerConfig?: AiProviderConfig) => TaskExecutorClient;
@@ -115,6 +125,7 @@ export class TaskExecutor {
     this.vault = options.vault;
     this.getApiKey = options.getApiKey;
     this.getProviderConfig = options.getProviderConfig;
+    this.getProviderChain = options.getProviderChain;
     this.emitEvent = options.emitEvent;
     this.pollIntervalMs = options.pollIntervalMs ?? 5000;
     this.createClient = options.createClient
@@ -122,12 +133,18 @@ export class TaskExecutor {
         createProviderClient(providerConfig ?? { provider: 'openrouter', apiKey }, modelId));
   }
 
-  private resolveProviderConfig(): AiProviderConfig {
+  private resolveProviderChain(): AiProviderChain {
+    const chain = this.getProviderChain?.();
+    if (chain) {
+      return chain;
+    }
+
     const config = this.getProviderConfig?.();
     if (config) {
-      return config;
+      return { primary: config, fallback: null };
     }
-    return { provider: 'openrouter', apiKey: this.getApiKey() };
+
+    return { primary: { provider: 'openrouter', apiKey: this.getApiKey() }, fallback: null };
   }
 
   start(): TaskExecutorStatus {
@@ -304,25 +321,48 @@ export class TaskExecutor {
       throw new Error('SYSTEM_DUTY tasks are reserved for Phase 5 agent duties and are not executable yet.');
     }
 
-    const route = this.getEffectiveRoute(task);
-    const providerConfig = this.resolveProviderConfig();
-    providerConfig.apiKey = providerConfig.apiKey.trim();
+    const chain = this.resolveProviderChain();
+    const attempts: Array<{ config: AiProviderConfig; isPrimary: boolean }> = [
+      { config: { ...chain.primary, apiKey: chain.primary.apiKey.trim() }, isPrimary: true },
+      ...(chain.fallback
+        ? [{ config: { ...chain.fallback, apiKey: chain.fallback.apiKey.trim() }, isPrimary: false }]
+        : []),
+    ];
 
-    if (!providerConfig.apiKey) {
-      throw new Error(
-        providerConfig.provider === 'llm-hub'
-          ? 'LLM-Hub API key is not configured.'
-          : 'OpenRouter API key is not configured.',
-      );
-    }
-    if (providerConfig.provider === 'llm-hub' && !providerConfig.baseUrl?.trim()) {
-      throw new Error('LLM-Hub base URL is not configured.');
+    if (!attempts.some((attempt) => isProviderConfigUsable(attempt.config))) {
+      const primaryLabel = chain.primary.provider === 'llm-hub' ? 'LLM-Hub' : 'OpenRouter';
+      throw new Error(`${primaryLabel} is not configured (missing API key${chain.primary.provider === 'llm-hub' ? ' or base URL' : ''}) and no usable fallback provider is set.`);
     }
 
-    if (task.taskType === 'image' || /dall-e|image/i.test(route.modelId)) {
-      return this.executeImageTask(task, route, providerConfig);
+    let lastError: Error | null = null;
+
+    for (const attempt of attempts) {
+      if (!isProviderConfigUsable(attempt.config)) {
+        continue;
+      }
+
+      // Each provider routes with its own table; the model stamped on the
+      // task at creation only applies to the primary provider it came from.
+      const route = this.getEffectiveRoute(task, attempt.config.provider, attempt.isPrimary);
+
+      try {
+        return task.taskType === 'image' || /dall-e|image/i.test(route.modelId)
+          ? await this.executeImageTask(task, route, attempt.config, attempt.isPrimary)
+          : await this.executeTextTask(task, route, attempt.config, attempt.isPrimary);
+      } catch (error) {
+        lastError = error instanceof Error ? error : new Error(String(error));
+      }
     }
 
+    throw lastError ?? new Error('Task execution failed without an error message.');
+  }
+
+  private async executeTextTask(
+    task: VaultTask,
+    route: ModelRouteConfig,
+    providerConfig: AiProviderConfig,
+    isPrimaryProvider: boolean,
+  ): Promise<TaskExecutionSuccess> {
     const projectContext = await this.buildProjectContextBlock(task);
     const prompt = buildUserPrompt(task, projectContext);
     const systemPrompt = buildSystemPrompt(task.taskType);
@@ -357,6 +397,8 @@ export class TaskExecutor {
             latencyMs: Date.now() - startedAt,
             taskType: task.taskType,
             fallbackUsed: index > 0,
+            provider: providerConfig.provider,
+            providerFallbackUsed: !isPrimaryProvider,
             route,
             ...(annotated.annotated ? { sideEffectsAppliedByExecutor: false } : {}),
           },
@@ -373,6 +415,7 @@ export class TaskExecutor {
     task: VaultTask,
     route: ModelRouteConfig,
     providerConfig: AiProviderConfig,
+    isPrimaryProvider: boolean = true,
   ): Promise<TaskExecutionSuccess> {
     const prompt = buildImagePrompt(task);
     const aspectRatio = getStringTaskContextValue(task, 'aspectRatio')
@@ -419,6 +462,8 @@ export class TaskExecutor {
               latencyMs: Date.now() - startedAt,
               taskType: task.taskType,
               fallbackUsed: index > 0,
+              provider: providerConfig.provider,
+              providerFallbackUsed: !isPrimaryProvider,
               route,
               modalitiesUsed: modalities,
               imageCount: persistedImages.length,
@@ -462,9 +507,16 @@ export class TaskExecutor {
     return pack.markdown;
   }
 
-  private getEffectiveRoute(task: VaultTask): ModelRouteConfig {
-    const route = this.vault.resolveModelForTask(task.taskType);
-    const modelId = task.routedModel || route.modelId;
+  private getEffectiveRoute(
+    task: VaultTask,
+    provider: AiProviderId,
+    honorTaskRoutedModel: boolean,
+  ): ModelRouteConfig {
+    const route = this.vault.resolveModelForTask(task.taskType, provider);
+    // task.routedModel was stamped from the primary provider's table at
+    // creation — it means nothing on the fallback provider.
+    const routedModel = honorTaskRoutedModel ? task.routedModel : null;
+    const modelId = routedModel || route.modelId;
     const fallbackModelId = route.fallbackModelId;
 
     if (task.taskType === 'image') {
@@ -475,10 +527,10 @@ export class TaskExecutor {
       });
     }
 
-    return task.routedModel
+    return routedModel
       ? {
           ...route,
-          modelId: task.routedModel,
+          modelId: routedModel,
         }
       : route;
   }

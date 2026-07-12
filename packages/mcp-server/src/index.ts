@@ -7,7 +7,7 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
-import { Vault, TaskExecutor, createProviderClient, portableDecrypt, slugify, MEMORY_TYPES, ROUTINE_TYPES, STATUS_VALUES, PRIORITY_VALUES, SOURCE_APPS, TASK_TYPES, TASK_STATUSES, TASK_PRIORITIES, PROPOSAL_STATUSES, PROPOSAL_TYPES, PROJECT_LINK_TYPES, OUTCOME_VALUES, MEMORY_CONTENT_MAX_CHARS, type AiProviderConfig } from '@the-vault/core';
+import { Vault, TaskExecutor, createProviderClient, FailoverEnrichmentClient, isProviderConfigUsable, getEnrichmentModelKey, portableDecrypt, slugify, MEMORY_TYPES, ROUTINE_TYPES, STATUS_VALUES, PRIORITY_VALUES, SOURCE_APPS, TASK_TYPES, TASK_STATUSES, TASK_PRIORITIES, PROPOSAL_STATUSES, PROPOSAL_TYPES, PROJECT_LINK_TYPES, OUTCOME_VALUES, MEMORY_CONTENT_MAX_CHARS, type AiProviderChain, type AiProviderConfig, type AiProviderId, type EnrichmentClient } from '@the-vault/core';
 import { registerGraphifyMcpTools } from './graphify-tools.js';
 
 // Initialize Vault
@@ -53,11 +53,8 @@ function getLlmHubApiKey(): string {
   return resolveProviderApiKey('VAULT_LLM_HUB_API_KEY', 'llm_hub_api_key');
 }
 
-// Resolve which AI provider executes tasks and enrichment.
-// Priority: env override > shared vault setting > OpenRouter default.
-function getAiProviderConfig(): AiProviderConfig {
-  const provider = (process.env.VAULT_AI_PROVIDER || String(vault.getSetting('ai_provider') || '')).trim();
-
+// Build the runtime config for one provider.
+function buildProviderConfig(provider: AiProviderId): AiProviderConfig {
   if (provider === 'llm-hub') {
     return {
       provider: 'llm-hub',
@@ -69,22 +66,46 @@ function getAiProviderConfig(): AiProviderConfig {
   return { provider: 'openrouter', apiKey: getOpenRouterApiKey() };
 }
 
+// Resolve the primary + fallback provider chain shared with the desktop app.
+// VAULT_AI_PROVIDER overrides the primary role.
+function getAiProviderChain(): AiProviderChain {
+  const envPrimary = (process.env.VAULT_AI_PROVIDER || '').trim();
+  const primaryId: AiProviderId = envPrimary === 'llm-hub' || envPrimary === 'openrouter'
+    ? envPrimary
+    : vault.getPrimaryProviderId();
+  const fallbackId = vault.getFallbackProviderId();
+
+  return {
+    primary: buildProviderConfig(primaryId),
+    fallback: fallbackId && fallbackId !== primaryId ? buildProviderConfig(fallbackId) : null,
+  };
+}
+
+// Build a provider's enrichment client using that provider's saved
+// enrichment model. VAULT_ENRICHMENT_MODEL overrides the primary's model.
+function buildEnrichmentClientFor(config: AiProviderConfig, isPrimary: boolean): EnrichmentClient | null {
+  const model = (isPrimary && process.env.VAULT_ENRICHMENT_MODEL)
+    || String(vault.getSetting(getEnrichmentModelKey(config.provider)) || '').trim();
+
+  if (!isProviderConfigUsable(config) || !model) {
+    return null;
+  }
+
+  return createProviderClient(config, model);
+}
+
 function initializeEnrichment(): void {
-  const config = getAiProviderConfig();
+  const chain = getAiProviderChain();
+  const primaryClient = buildEnrichmentClientFor(chain.primary, true);
+  const fallbackClient = chain.fallback ? buildEnrichmentClientFor(chain.fallback, false) : null;
 
-  // Model: env override > vault setting
-  const model = process.env.VAULT_ENRICHMENT_MODEL
-    || (vault.getSetting('enrichment_model') as string)
-    || '';
-
-  if (!config.apiKey || !model) {
-    return;
-  }
-  if (config.provider === 'llm-hub' && !config.baseUrl) {
+  if (!primaryClient && !fallbackClient) {
     return;
   }
 
-  vault.setEnrichmentClient(createProviderClient(config, model));
+  vault.setEnrichmentClient(primaryClient && fallbackClient
+    ? new FailoverEnrichmentClient(primaryClient, fallbackClient)
+    : (primaryClient ?? fallbackClient));
 }
 
 initializeEnrichment();
@@ -92,7 +113,7 @@ initializeEnrichment();
 const taskExecutor = new TaskExecutor({
   vault,
   getApiKey: () => getOpenRouterApiKey(),
-  getProviderConfig: () => getAiProviderConfig(),
+  getProviderChain: () => getAiProviderChain(),
   emitEvent: () => {},
   pollIntervalMs: Number(process.env.VAULT_TASK_EXECUTOR_POLL_MS || 5000),
 });
@@ -104,7 +125,7 @@ if (process.env.VAULT_AUTO_START_TASK_EXECUTOR === 'true') {
 // Create MCP server
 const server = new McpServer({
   name: 'vault-memory',
-  version: '0.5.0',
+  version: '0.5.1',
 });
 
 // ============================================================================

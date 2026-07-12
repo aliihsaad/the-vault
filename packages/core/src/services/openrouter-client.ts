@@ -369,11 +369,29 @@ export class OpenRouterClient extends OpenAICompatibleClient {
 
 export type AiProviderId = 'openrouter' | 'llm-hub';
 
+export const AI_PROVIDER_IDS: AiProviderId[] = ['openrouter', 'llm-hub'];
+
 export interface AiProviderConfig {
   provider: AiProviderId;
   apiKey: string;
   /** Required for providers without a fixed base URL (LLM-Hub). */
   baseUrl?: string;
+}
+
+/**
+ * The ordered provider setup: one primary provider and an optional fallback
+ * that is tried when the primary fails or is not configured.
+ */
+export interface AiProviderChain {
+  primary: AiProviderConfig;
+  fallback: AiProviderConfig | null;
+}
+
+/** True when a provider config has everything it needs to make requests. */
+export function isProviderConfigUsable(config: AiProviderConfig | null | undefined): config is AiProviderConfig {
+  if (!config || !config.apiKey.trim()) return false;
+  if (config.provider === 'llm-hub' && !config.baseUrl?.trim()) return false;
+  return true;
 }
 
 /**
@@ -391,6 +409,40 @@ export function createProviderClient(config: AiProviderConfig, model: string): O
   }
 
   return new OpenRouterClient(config.apiKey, model);
+}
+
+/**
+ * Enrichment client that tries the primary provider first and fails over to
+ * the fallback provider (each with its own model) when the primary is
+ * unavailable or errors.
+ */
+export class FailoverEnrichmentClient implements EnrichmentClient {
+  constructor(
+    private readonly primary: EnrichmentClient,
+    private readonly fallback: EnrichmentClient | null = null,
+  ) {}
+
+  isAvailable(): boolean {
+    return this.primary.isAvailable() || Boolean(this.fallback?.isAvailable());
+  }
+
+  async complete(params: CompletionParams): Promise<CompletionResult> {
+    if (this.primary.isAvailable()) {
+      try {
+        return await this.primary.complete(params);
+      } catch (error) {
+        if (!this.fallback?.isAvailable()) {
+          throw error;
+        }
+      }
+    }
+
+    if (this.fallback?.isAvailable()) {
+      return this.fallback.complete(params);
+    }
+
+    throw new EnrichmentError('No configured AI provider is available for enrichment.');
+  }
 }
 
 function extractMimeTypeFromDataUrl(dataUrl: string): string {

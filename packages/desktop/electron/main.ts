@@ -23,7 +23,10 @@ import {
   buildVaultCollabLaunchCommand,
   createProviderClient,
   detectDuplicates,
+  FailoverEnrichmentClient,
+  getEnrichmentModelKey,
   GraphifyBuildQueue,
+  isProviderConfigUsable,
   OpenAICompatibleClient,
   executeVaultCollabAction,
   executeVaultCollabDashboardSessionRegistration,
@@ -71,7 +74,9 @@ import type {
   VaultCollabPolicyPackSnapshot,
   VaultCollabRuntimeConfig,
   SaveVaultCollabRuntimeConfigInput,
+  AiProviderChain,
   AiProviderConfig,
+  AiProviderId,
 } from '@the-vault/core';
 
 // Recreate __dirname for ESM
@@ -84,28 +89,41 @@ vault.initialize();
 // Initialize AI enrichment from saved settings.
 // Enrichment activates automatically when API key + model are configured.
 // The `enrichment_enabled` toggle in Settings is a user-facing kill switch only.
+// Build a provider's enrichment client using that provider's own saved
+// enrichment model. Also mirrors the API key into the portable encrypted
+// copy so the MCP server process can decrypt it.
+function buildEnrichmentClientFor(config: AiProviderConfig): OpenAICompatibleClient | null {
+  const model = String(vault.getSetting(getEnrichmentModelKey(config.provider)) || '').trim();
+
+  if (!isProviderConfigUsable(config) || !model) {
+    return null;
+  }
+
+  const portableKeyName = config.provider === 'llm-hub'
+    ? 'llm_hub_api_key_portable'
+    : 'openrouter_api_key_portable';
+  vault.setSetting(portableKeyName, portableEncrypt(config.apiKey, vault.getVaultRoot()));
+
+  return createProviderClient(config, model);
+}
+
 function initializeEnrichment(): boolean {
   try {
-    const config = getAiProviderConfig();
-    const model = vault.getSetting('enrichment_model') as string;
+    const chain = getAiProviderChain();
+    const primaryClient = buildEnrichmentClientFor(chain.primary);
+    const fallbackClient = chain.fallback ? buildEnrichmentClientFor(chain.fallback) : null;
 
-    if (!config.apiKey || !model || (config.provider === 'llm-hub' && !config.baseUrl)) {
+    if (!primaryClient && !fallbackClient) {
       vault.setEnrichmentClient(null);
       return false;
     }
 
-    // Write a portably-encrypted copy so the MCP server can also read
-    // the API key from the shared vault database (it can't use Electron safeStorage)
-    const vaultRoot = vault.getVaultRoot();
-    const portableKeyName = config.provider === 'llm-hub'
-      ? 'llm_hub_api_key_portable'
-      : 'openrouter_api_key_portable';
-    vault.setSetting(portableKeyName, portableEncrypt(config.apiKey, vaultRoot));
-
     // Auto-mark as enabled since we have valid credentials
     vault.setSetting('enrichment_enabled', true);
 
-    vault.setEnrichmentClient(createProviderClient(config, model));
+    vault.setEnrichmentClient(primaryClient && fallbackClient
+      ? new FailoverEnrichmentClient(primaryClient, fallbackClient)
+      : (primaryClient ?? fallbackClient));
     return true;
   } catch (err) {
     console.error('[vault] initializeEnrichment failed:', err instanceof Error ? err.message : String(err));
@@ -332,7 +350,7 @@ const VITE_DEV_SERVER_URL = app.isPackaged ? undefined : process.env['VITE_DEV_S
 const taskExecutor = new TaskExecutor({
   vault,
   getApiKey: () => resolveOpenRouterApiKey(),
-  getProviderConfig: () => getAiProviderConfig(),
+  getProviderChain: () => getAiProviderChain(),
   emitEvent: (event) => {
     win?.webContents.send('vault:taskEvent', event);
   },
@@ -1267,13 +1285,13 @@ function resolveLlmHubApiKey(): string {
   return resolveProviderApiKey('VAULT_LLM_HUB_API_KEY', 'llm_hub_api_key');
 }
 
-/**
- * Resolve the active AI provider configuration for the executor and
- * enrichment. Priority: env override > vault setting > OpenRouter default.
- */
-function getAiProviderConfig(): AiProviderConfig {
-  const provider = (process.env.VAULT_AI_PROVIDER || String(vault.getSetting('ai_provider') || '')).trim();
+/** Coerce an IPC-supplied provider argument to a valid provider id. */
+function normalizeProviderArg(provider: unknown): AiProviderId {
+  return provider === 'llm-hub' ? 'llm-hub' : 'openrouter';
+}
 
+/** Build the runtime config for one provider. */
+function buildProviderConfig(provider: AiProviderId): AiProviderConfig {
   if (provider === 'llm-hub') {
     return {
       provider: 'llm-hub',
@@ -1283,6 +1301,24 @@ function getAiProviderConfig(): AiProviderConfig {
   }
 
   return { provider: 'openrouter', apiKey: resolveOpenRouterApiKey() };
+}
+
+/**
+ * Resolve the primary + fallback provider chain for the executor and
+ * enrichment. VAULT_AI_PROVIDER overrides the primary; roles come from
+ * settings (with the legacy single 'ai_provider' honored for migration).
+ */
+function getAiProviderChain(): AiProviderChain {
+  const envPrimary = (process.env.VAULT_AI_PROVIDER || '').trim();
+  const primaryId: AiProviderId = envPrimary === 'llm-hub' || envPrimary === 'openrouter'
+    ? envPrimary
+    : vault.getPrimaryProviderId();
+  const fallbackId = vault.getFallbackProviderId();
+
+  return {
+    primary: buildProviderConfig(primaryId),
+    fallback: fallbackId && fallbackId !== primaryId ? buildProviderConfig(fallbackId) : null,
+  };
 }
 
 function getSecretSetting(key: string): string {
@@ -1396,15 +1432,13 @@ async function executeVaultApiAgent(input: { prompt?: unknown; memoryContext?: u
     throw new Error('Prompt is required.');
   }
 
-  const providerConfig = getAiProviderConfig();
-  const model = String(vault.getSetting('enrichment_model') || '').trim();
+  const chain = getAiProviderChain();
+  const primaryClient = buildEnrichmentClientFor(chain.primary);
+  const fallbackClient = chain.fallback ? buildEnrichmentClientFor(chain.fallback) : null;
   const enrichmentEnabled = Boolean(vault.getSetting('enrichment_enabled'));
 
-  if (!providerConfig.apiKey || !model) {
-    throw new Error('Configure an AI provider API key and enrichment model in Settings first.');
-  }
-  if (providerConfig.provider === 'llm-hub' && !providerConfig.baseUrl) {
-    throw new Error('Configure the LLM-Hub base URL in Settings first.');
+  if (!primaryClient && !fallbackClient) {
+    throw new Error('Configure an AI provider (API key + enrichment model) in Settings first.');
   }
 
   if (!enrichmentEnabled) {
@@ -1412,7 +1446,9 @@ async function executeVaultApiAgent(input: { prompt?: unknown; memoryContext?: u
   }
 
   const memoryContext = typeof input?.memoryContext === 'string' ? input.memoryContext.trim() : '';
-  const client = createProviderClient(providerConfig, model);
+  const client = primaryClient && fallbackClient
+    ? new FailoverEnrichmentClient(primaryClient, fallbackClient)
+    : (primaryClient ?? fallbackClient)!;
   const startedAt = Date.now();
   const result = await client.complete({
     systemPrompt: [
@@ -1431,8 +1467,8 @@ async function executeVaultApiAgent(input: { prompt?: unknown; memoryContext?: u
   });
 
   return {
-    provider: providerConfig.provider,
-    model: result.model || model,
+    provider: primaryClient ? chain.primary.provider : chain.fallback!.provider,
+    model: result.model,
     durationMs: Date.now() - startedAt,
     output: result.text,
     usage: result.usage,
@@ -2363,18 +2399,19 @@ app.whenReady().then(() => {
     }
   });
 
-  ipcMain.handle('vault:getModelRoutingTable', () => {
+  ipcMain.handle('vault:getModelRoutingTable', (_, provider) => {
     try {
-      return { success: true, data: vault.getModelRoutingTable() };
+      return { success: true, data: vault.getModelRoutingTable(normalizeProviderArg(provider)) };
     } catch (e: any) {
       return { success: false, error: e.message };
     }
   });
 
-  ipcMain.handle('vault:setModelRoutingTable', (_, overrides) => {
+  ipcMain.handle('vault:setModelRoutingTable', (_, overrides, provider) => {
     try {
-      vault.setModelRoutingTable((overrides || {}) as Partial<ModelRoutingTable>);
-      return { success: true, data: vault.getModelRoutingTable() };
+      const providerId = normalizeProviderArg(provider);
+      vault.setModelRoutingTable((overrides || {}) as Partial<ModelRoutingTable>, providerId);
+      return { success: true, data: vault.getModelRoutingTable(providerId) };
     } catch (e: any) {
       return { success: false, error: e.message };
     }

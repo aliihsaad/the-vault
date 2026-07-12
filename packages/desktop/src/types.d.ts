@@ -355,11 +355,16 @@ declare global {
     } | null;
   }
 
+  type AiProviderId = 'openrouter' | 'llm-hub';
+
   interface VaultSettings {
     vault_root: string;
-    ai_provider?: 'openrouter' | 'llm-hub';
+    ai_provider?: AiProviderId;
+    ai_provider_primary?: AiProviderId;
+    ai_provider_fallback?: AiProviderId | 'none';
     llm_hub_base_url?: string;
     enrichment_model: string;
+    enrichment_model_llm_hub?: string;
     enrichment_enabled: boolean;
     recall_max_results: number;
     recall_compact_limit?: number;
@@ -711,8 +716,8 @@ declare global {
     setSetting: (key: string, value: unknown) => Promise<VaultResponse<boolean>>;
     getSecretSetting: (key: string) => Promise<VaultResponse<string>>;
     setSecretSetting: (key: string, value: string) => Promise<VaultResponse<boolean>>;
-    getModelRoutingTable: () => Promise<VaultResponse<ModelRoutingTable>>;
-    setModelRoutingTable: (overrides: Partial<ModelRoutingTable>) => Promise<VaultResponse<ModelRoutingTable>>;
+    getModelRoutingTable: (provider?: AiProviderId) => Promise<VaultResponse<ModelRoutingTable>>;
+    setModelRoutingTable: (overrides: Partial<ModelRoutingTable>, provider?: AiProviderId) => Promise<VaultResponse<ModelRoutingTable>>;
     getOpenRouterModels: (apiKey: string) => Promise<VaultResponse<OpenRouterModelSummary[]>>;
     testOpenRouterApiKey: (apiKey: string) => Promise<VaultResponse<OpenRouterKeyTestResult>>;
     getLlmHubModels: (baseUrl: string, apiKey: string) => Promise<VaultResponse<OpenRouterModelSummary[]>>;

@@ -7,6 +7,7 @@ import { eq } from 'drizzle-orm';
 import { settings } from '../database/schema.js';
 import { DEFAULT_VAULT_ROOT } from './vault-root.js';
 import { now } from '../utils/datetime.js';
+import type { AiProviderId } from '../services/openrouter-client.js';
 import type { BetterSQLite3Database } from 'drizzle-orm/better-sqlite3';
 import type * as schema from '../database/schema.js';
 
@@ -17,13 +18,21 @@ type DB = BetterSQLite3Database<typeof schema>;
  */
 const DEFAULT_SETTINGS: Record<string, unknown> = {
   vault_root: DEFAULT_VAULT_ROOT,
-  // AI provider selection: 'openrouter' (fixed base URL) or 'llm-hub'
-  // (OpenAI-compatible, user-configured base URL + API key).
+  // AI provider roles: one primary provider plus an optional fallback that
+  // is tried when the primary fails. 'ai_provider' is the legacy single-
+  // provider switch, still read for migration.
+  ai_provider_primary: 'openrouter',
+  ai_provider_fallback: 'none',
   ai_provider: 'openrouter',
   openrouter_api_key: '',
   llm_hub_api_key: '',
   llm_hub_base_url: '',
+  // Per-provider model selections. 'enrichment_model' and
+  // 'model_routing_table' are the OpenRouter (legacy) slots; LLM-Hub keeps
+  // its own so switching roles never loses a provider's chosen models.
   enrichment_model: '',
+  enrichment_model_llm_hub: '',
+  model_routing_table_llm_hub: null,
   enrichment_enabled: false,
   recall_max_results: 10,
   recall_compact_limit: 6,
@@ -123,4 +132,44 @@ export function getAllSettings(db: DB): Record<string, unknown> {
     result[row.key] = JSON.parse(row.valueJson);
   }
   return result;
+}
+
+// ---------------------------------------------------------------------------
+// AI provider role resolution (primary / fallback)
+// ---------------------------------------------------------------------------
+
+function asProviderId(value: unknown): AiProviderId | null {
+  return value === 'openrouter' || value === 'llm-hub' ? value : null;
+}
+
+/**
+ * Which provider is primary. Falls back to the legacy single-provider
+ * 'ai_provider' setting so pre-role configurations keep working.
+ */
+export function getPrimaryProviderId(db: DB): AiProviderId {
+  return asProviderId(getSetting(db, 'ai_provider_primary'))
+    ?? asProviderId(getSetting(db, 'ai_provider'))
+    ?? 'openrouter';
+}
+
+/**
+ * Which provider (if any) is the fallback. Returns null for 'none' or when
+ * the fallback would duplicate the primary.
+ */
+export function getFallbackProviderId(db: DB): AiProviderId | null {
+  const fallback = asProviderId(getSetting(db, 'ai_provider_fallback'));
+  if (!fallback || fallback === getPrimaryProviderId(db)) {
+    return null;
+  }
+  return fallback;
+}
+
+/** The per-provider settings key holding that provider's enrichment model. */
+export function getEnrichmentModelKey(provider: AiProviderId): string {
+  return provider === 'llm-hub' ? 'enrichment_model_llm_hub' : 'enrichment_model';
+}
+
+/** The per-provider settings key holding that provider's routing overrides. */
+export function getRoutingTableKey(provider: AiProviderId): string {
+  return provider === 'llm-hub' ? 'model_routing_table_llm_hub' : 'model_routing_table';
 }

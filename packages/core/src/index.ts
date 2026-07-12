@@ -457,16 +457,26 @@ export { detectDuplicates } from './services/enrichment.service.js';
 export {
   OpenRouterClient,
   OpenAICompatibleClient,
+  FailoverEnrichmentClient,
   EnrichmentError,
   createProviderClient,
   normalizeProviderBaseUrl,
+  isProviderConfigUsable,
+  AI_PROVIDER_IDS,
 } from './services/openrouter-client.js';
 export type {
   AiProviderId,
   AiProviderConfig,
+  AiProviderChain,
   OpenAICompatibleClientOptions,
   ProviderModelSummary,
 } from './services/openrouter-client.js';
+export {
+  getPrimaryProviderId,
+  getFallbackProviderId,
+  getEnrichmentModelKey,
+  getRoutingTableKey,
+} from './config/settings.js';
 export { TaskExecutor } from './services/task-executor.js';
 export type {
   TaskExecutorEvent,

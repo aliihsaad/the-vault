@@ -15,6 +15,9 @@ import {
   getSetting,
   setSetting,
   getAllSettings,
+  getPrimaryProviderId,
+  getFallbackProviderId,
+  getRoutingTableKey,
 } from './config/settings.js';
 import { saveMemory } from './services/save.service.js';
 import {
@@ -149,7 +152,7 @@ import {
   resolveModelRoute,
   mergeRoutingTable,
 } from './rules/model-routing.js';
-import type { EnrichmentClient } from './services/openrouter-client.js';
+import type { AiProviderId, EnrichmentClient } from './services/openrouter-client.js';
 import type { TaskType } from './rules/controlled-values.js';
 import type {
   SaveMemoryInput,
@@ -1225,26 +1228,42 @@ export class Vault {
   /**
    * Get the effective model routing table (defaults merged with user overrides).
    */
-  getModelRoutingTable(): ModelRoutingTable {
+  getModelRoutingTable(provider: AiProviderId = 'openrouter'): ModelRoutingTable {
     this.ensureInitialized();
-    const userOverrides = this.getSetting('model_routing_table') as Partial<ModelRoutingTable> | undefined;
+    const userOverrides = this.getSetting(getRoutingTableKey(provider)) as Partial<ModelRoutingTable> | undefined;
     return mergeRoutingTable(DEFAULT_MODEL_ROUTING, userOverrides || null);
   }
 
   /**
-   * Save user overrides for the model routing table.
+   * Save user overrides for a provider's model routing table.
    */
-  setModelRoutingTable(overrides: Partial<ModelRoutingTable>): void {
+  setModelRoutingTable(overrides: Partial<ModelRoutingTable>, provider: AiProviderId = 'openrouter'): void {
     this.ensureInitialized();
-    this.setSetting('model_routing_table', overrides);
+    this.setSetting(getRoutingTableKey(provider), overrides);
   }
 
   /**
-   * Resolve which model would be used for a given task type.
+   * Resolve which model would be used for a given task type on a provider.
    */
-  resolveModelForTask(taskType: TaskType): ModelRouteConfig {
+  resolveModelForTask(taskType: TaskType, provider?: AiProviderId): ModelRouteConfig {
     this.ensureInitialized();
-    return resolveModelRoute(this.getModelRoutingTable(), taskType);
+    return resolveModelRoute(this.getModelRoutingTable(provider ?? this.getPrimaryProviderId()), taskType);
+  }
+
+  /**
+   * The configured primary AI provider (legacy 'ai_provider' honored).
+   */
+  getPrimaryProviderId(): AiProviderId {
+    this.ensureInitialized();
+    return getPrimaryProviderId(this.db);
+  }
+
+  /**
+   * The configured fallback AI provider, or null when none is set.
+   */
+  getFallbackProviderId(): AiProviderId | null {
+    this.ensureInitialized();
+    return getFallbackProviderId(this.db);
   }
 
   // =========================================================================

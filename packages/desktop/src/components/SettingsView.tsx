@@ -389,16 +389,32 @@ function WorkflowCard({
 
 export function SettingsView({ vaultStatus }: { vaultStatus: VaultStatus | null }) {
   const [settings, setSettings] = useState<VaultSettings>(DEFAULT_SETTINGS);
-  const [routingTable, setRoutingTable] = useState<ModelRoutingTable>(DEFAULT_ROUTING_TABLE);
+  const [routingTables, setRoutingTables] = useState<Record<AiProviderId, ModelRoutingTable>>({
+    openrouter: DEFAULT_ROUTING_TABLE,
+    'llm-hub': DEFAULT_ROUTING_TABLE,
+  });
   const [apiKey, setApiKey] = useState('');
-  const [aiProvider, setAiProvider] = useState<'openrouter' | 'llm-hub'>('openrouter');
+  const [primaryProvider, setPrimaryProvider] = useState<AiProviderId>('openrouter');
+  const [fallbackProvider, setFallbackProvider] = useState<AiProviderId | 'none'>('none');
+  const [routingProvider, setRoutingProvider] = useState<AiProviderId>('openrouter');
+  const [enrichmentModels, setEnrichmentModels] = useState<Record<AiProviderId, string>>({
+    openrouter: '',
+    'llm-hub': '',
+  });
   const [llmHubBaseUrl, setLlmHubBaseUrl] = useState('');
   const [llmHubApiKey, setLlmHubApiKey] = useState('');
   const [llmHubTestResult, setLlmHubTestResult] = useState<LlmHubConnectionTestResult | null>(null);
-  const [models, setModels] = useState<OpenRouterModelSummary[]>(FALLBACK_MODELS);
+  const [modelsByProvider, setModelsByProvider] = useState<Record<AiProviderId, OpenRouterModelSummary[]>>({
+    openrouter: FALLBACK_MODELS,
+    'llm-hub': [],
+  });
   const [testingKey, setTestingKey] = useState(false);
   const [loadingModels, setLoadingModels] = useState(false);
   const [testResult, setTestResult] = useState<OpenRouterKeyTestResult | null>(null);
+
+  // The routing editor always works on one provider's table + model list.
+  const routingTable = routingTables[routingProvider];
+  const models = modelsByProvider[routingProvider];
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
@@ -432,11 +448,12 @@ export function SettingsView({ vaultStatus }: { vaultStatus: VaultStatus | null 
     setMessage(null);
 
     try {
-      const [response, secretResponse, llmHubSecretResponse, routingResponse] = await Promise.all([
+      const [response, secretResponse, llmHubSecretResponse, routingResponse, llmHubRoutingResponse] = await Promise.all([
         window.vaultAPI.getAllSettings(),
         window.vaultAPI.getSecretSetting('openrouter_api_key'),
         window.vaultAPI.getSecretSetting('llm_hub_api_key'),
-        window.vaultAPI.getModelRoutingTable(),
+        window.vaultAPI.getModelRoutingTable('openrouter'),
+        window.vaultAPI.getModelRoutingTable('llm-hub'),
       ]);
 
       if (!response.success) {
@@ -455,15 +472,36 @@ export function SettingsView({ vaultStatus }: { vaultStatus: VaultStatus | null 
         ...DEFAULT_SETTINGS,
         ...response.data,
       };
-      const nextRoutingTable = routingResponse.data;
-      const nextProvider = nextSettings.ai_provider === 'llm-hub' ? 'llm-hub' : 'openrouter';
+      const nextRoutingTables: Record<AiProviderId, ModelRoutingTable> = {
+        openrouter: routingResponse.data,
+        'llm-hub': llmHubRoutingResponse.success && llmHubRoutingResponse.data
+          ? llmHubRoutingResponse.data
+          : DEFAULT_ROUTING_TABLE,
+      };
+      const nextPrimary: AiProviderId = nextSettings.ai_provider_primary === 'llm-hub'
+        || (!nextSettings.ai_provider_primary && nextSettings.ai_provider === 'llm-hub')
+        ? 'llm-hub'
+        : 'openrouter';
+      const nextFallback: AiProviderId | 'none' =
+        (nextSettings.ai_provider_fallback === 'openrouter' || nextSettings.ai_provider_fallback === 'llm-hub')
+          && nextSettings.ai_provider_fallback !== nextPrimary
+          ? nextSettings.ai_provider_fallback
+          : 'none';
+      const nextEnrichmentModels: Record<AiProviderId, string> = {
+        openrouter: nextSettings.enrichment_model || '',
+        'llm-hub': typeof nextSettings.enrichment_model_llm_hub === 'string' ? nextSettings.enrichment_model_llm_hub : '',
+      };
       const nextLlmHubBaseUrl = typeof nextSettings.llm_hub_base_url === 'string' ? nextSettings.llm_hub_base_url : '';
       const nextLlmHubApiKey = llmHubSecretResponse.success ? (llmHubSecretResponse.data || '') : '';
+      const nextOpenRouterKey = secretResponse.data || '';
 
       setSettings(nextSettings);
-      setRoutingTable(nextRoutingTable);
-      setApiKey(secretResponse.data || '');
-      setAiProvider(nextProvider);
+      setRoutingTables(nextRoutingTables);
+      setApiKey(nextOpenRouterKey);
+      setPrimaryProvider(nextPrimary);
+      setFallbackProvider(nextFallback);
+      setRoutingProvider(nextPrimary);
+      setEnrichmentModels(nextEnrichmentModels);
       setLlmHubBaseUrl(nextLlmHubBaseUrl);
       setLlmHubApiKey(nextLlmHubApiKey);
 
@@ -487,18 +525,17 @@ export function SettingsView({ vaultStatus }: { vaultStatus: VaultStatus | null 
         staleArchivedToPendingDeleteDays: num('agent.stale_archival.archived_to_pending_delete_days', DEFAULT_AGENT_DUTIES.staleArchivedToPendingDeleteDays),
       });
 
-      const selectedModels = collectSelectedTextModels(nextSettings.enrichment_model, nextRoutingTable);
-      if (nextProvider === 'llm-hub') {
-        if (nextLlmHubBaseUrl && nextLlmHubApiKey) {
-          await loadLlmHubModels(nextLlmHubBaseUrl, nextLlmHubApiKey, selectedModels);
-        } else {
-          setModels(ensureSelectedModels([], selectedModels));
-        }
-      } else if (secretResponse.data) {
-        await loadModels(secretResponse.data, selectedModels);
-      } else {
-        setModels(ensureSelectedModels(FALLBACK_MODELS, selectedModels));
-      }
+      // Load each provider's model list with its own saved selections pinned.
+      const openRouterSelected = collectSelectedTextModels(nextEnrichmentModels.openrouter, nextRoutingTables.openrouter);
+      const llmHubSelected = collectSelectedTextModels(nextEnrichmentModels['llm-hub'], nextRoutingTables['llm-hub']);
+      await Promise.all([
+        nextOpenRouterKey
+          ? loadOpenRouterModels(nextOpenRouterKey, openRouterSelected)
+          : Promise.resolve(setProviderModels('openrouter', FALLBACK_MODELS, openRouterSelected)),
+        nextLlmHubBaseUrl && nextLlmHubApiKey
+          ? loadLlmHubModels(nextLlmHubBaseUrl, nextLlmHubApiKey, llmHubSelected)
+          : Promise.resolve(setProviderModels('llm-hub', [], llmHubSelected)),
+      ]);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load settings');
     } finally {
@@ -680,9 +717,20 @@ export function SettingsView({ vaultStatus }: { vaultStatus: VaultStatus | null 
     ];
   }
 
-  async function loadModels(nextApiKey: string, selectedModels: string[]) {
+  function setProviderModels(provider: AiProviderId, list: OpenRouterModelSummary[], selectedModels: string[]) {
+    setModelsByProvider((current) => ({
+      ...current,
+      [provider]: ensureSelectedModels(list, selectedModels),
+    }));
+  }
+
+  function selectedModelsFor(provider: AiProviderId): string[] {
+    return collectSelectedTextModels(enrichmentModels[provider], routingTables[provider]);
+  }
+
+  async function loadOpenRouterModels(nextApiKey: string, selectedModels: string[]) {
     if (!nextApiKey.trim()) {
-      setModels(ensureSelectedModels(FALLBACK_MODELS, selectedModels));
+      setProviderModels('openrouter', FALLBACK_MODELS, selectedModels);
       return;
     }
 
@@ -694,9 +742,9 @@ export function SettingsView({ vaultStatus }: { vaultStatus: VaultStatus | null 
         throw new Error(response.error || 'Failed to load model list');
       }
 
-      setModels(ensureSelectedModels(response.data, selectedModels));
+      setProviderModels('openrouter', response.data, selectedModels);
     } catch (err) {
-      setModels(ensureSelectedModels(FALLBACK_MODELS, selectedModels));
+      setProviderModels('openrouter', FALLBACK_MODELS, selectedModels);
       setError(err instanceof Error ? err.message : 'Failed to load model list');
     } finally {
       setLoadingModels(false);
@@ -705,7 +753,7 @@ export function SettingsView({ vaultStatus }: { vaultStatus: VaultStatus | null 
 
   async function loadLlmHubModels(baseUrl: string, key: string, selectedModels: string[]) {
     if (!baseUrl.trim() || !key.trim()) {
-      setModels(ensureSelectedModels([], selectedModels));
+      setProviderModels('llm-hub', [], selectedModels);
       return;
     }
 
@@ -717,9 +765,9 @@ export function SettingsView({ vaultStatus }: { vaultStatus: VaultStatus | null 
         throw new Error(response.error || 'Failed to load LLM-Hub model list');
       }
 
-      setModels(ensureSelectedModels(response.data, selectedModels));
+      setProviderModels('llm-hub', response.data, selectedModels);
     } catch (err) {
-      setModels(ensureSelectedModels([], selectedModels));
+      setProviderModels('llm-hub', [], selectedModels);
       setError(err instanceof Error ? err.message : 'Failed to load LLM-Hub model list');
     } finally {
       setLoadingModels(false);
@@ -740,7 +788,7 @@ export function SettingsView({ vaultStatus }: { vaultStatus: VaultStatus | null 
     try {
       const [testResponse] = await Promise.all([
         window.vaultAPI.testLlmHubConnection(llmHubBaseUrl.trim(), llmHubApiKey.trim()),
-        loadLlmHubModels(llmHubBaseUrl, llmHubApiKey, collectSelectedTextModels(settings.enrichment_model, routingTable)),
+        loadLlmHubModels(llmHubBaseUrl, llmHubApiKey, selectedModelsFor('llm-hub')),
       ]);
 
       if (!testResponse.success || !testResponse.data) {
@@ -757,27 +805,19 @@ export function SettingsView({ vaultStatus }: { vaultStatus: VaultStatus | null 
     }
   }
 
-  function refreshActiveProviderModels() {
-    const selectedModels = collectSelectedTextModels(settings.enrichment_model, routingTable);
-    if (aiProvider === 'llm-hub') {
-      void loadLlmHubModels(llmHubBaseUrl, llmHubApiKey, selectedModels);
+  function refreshProviderModels(provider: AiProviderId) {
+    if (provider === 'llm-hub') {
+      void loadLlmHubModels(llmHubBaseUrl, llmHubApiKey, selectedModelsFor('llm-hub'));
     } else {
-      void loadModels(apiKey.trim(), selectedModels);
+      void loadOpenRouterModels(apiKey.trim(), selectedModelsFor('openrouter'));
     }
   }
 
-  function switchAiProvider(nextProvider: 'openrouter' | 'llm-hub') {
-    setAiProvider(nextProvider);
-    setTestResult(null);
-    setLlmHubTestResult(null);
-
-    const selectedModels = collectSelectedTextModels(settings.enrichment_model, routingTable);
-    if (nextProvider === 'llm-hub') {
-      void loadLlmHubModels(llmHubBaseUrl, llmHubApiKey, selectedModels);
-    } else if (apiKey.trim()) {
-      void loadModels(apiKey.trim(), selectedModels);
-    } else {
-      setModels(ensureSelectedModels(FALLBACK_MODELS, selectedModels));
+  function changePrimaryProvider(next: AiProviderId) {
+    setPrimaryProvider(next);
+    setRoutingProvider(next);
+    if (fallbackProvider === next) {
+      setFallbackProvider('none');
     }
   }
 
@@ -795,7 +835,7 @@ export function SettingsView({ vaultStatus }: { vaultStatus: VaultStatus | null 
     try {
       const [testResponse] = await Promise.all([
         window.vaultAPI.testOpenRouterApiKey(apiKey.trim()),
-        loadModels(apiKey.trim(), collectSelectedTextModels(settings.enrichment_model, routingTable)),
+        loadOpenRouterModels(apiKey.trim(), selectedModelsFor('openrouter')),
       ]);
 
       if (!testResponse.success || !testResponse.data) {
@@ -819,7 +859,7 @@ export function SettingsView({ vaultStatus }: { vaultStatus: VaultStatus | null 
 
     try {
       const updates: EditableSettings = {
-        enrichment_model: settings.enrichment_model,
+        enrichment_model: enrichmentModels.openrouter,
         enrichment_enabled: settings.enrichment_enabled,
         recall_max_results: Number(settings.recall_max_results) || 10,
         recall_compact_limit: clampNumber(settings.recall_compact_limit, 6, 1, 12),
@@ -854,14 +894,19 @@ export function SettingsView({ vaultStatus }: { vaultStatus: VaultStatus | null 
         }
       }
 
-      const providerResponse = await window.vaultAPI.setSetting('ai_provider', aiProvider);
-      if (!providerResponse.success) {
-        throw new Error(providerResponse.error || 'Failed to save AI provider');
-      }
-
-      const baseUrlResponse = await window.vaultAPI.setSetting('llm_hub_base_url', llmHubBaseUrl.trim());
-      if (!baseUrlResponse.success) {
-        throw new Error(baseUrlResponse.error || 'Failed to save LLM-Hub base URL');
+      const providerSettings: Array<[string, unknown]> = [
+        ['ai_provider_primary', primaryProvider],
+        ['ai_provider_fallback', fallbackProvider],
+        // Legacy single-provider key kept in sync for older readers.
+        ['ai_provider', primaryProvider],
+        ['llm_hub_base_url', llmHubBaseUrl.trim()],
+        ['enrichment_model_llm_hub', enrichmentModels['llm-hub']],
+      ];
+      for (const [key, value] of providerSettings) {
+        const response = await window.vaultAPI.setSetting(key, value);
+        if (!response.success) {
+          throw new Error(response.error || `Failed to save ${key}`);
+        }
       }
 
       const secretResponse = await window.vaultAPI.setSecretSetting('openrouter_api_key', apiKey.trim());
@@ -874,11 +919,20 @@ export function SettingsView({ vaultStatus }: { vaultStatus: VaultStatus | null 
         throw new Error(llmHubSecretResponse.error || 'Failed to save LLM-Hub API key');
       }
 
-      const routingResponse = await window.vaultAPI.setModelRoutingTable(routingTable);
-      if (!routingResponse.success || !routingResponse.data) {
-        throw new Error(routingResponse.error || 'Failed to save task routing');
+      const openRouterRoutingResponse = await window.vaultAPI.setModelRoutingTable(routingTables.openrouter, 'openrouter');
+      if (!openRouterRoutingResponse.success || !openRouterRoutingResponse.data) {
+        throw new Error(openRouterRoutingResponse.error || 'Failed to save task routing');
       }
-      setRoutingTable(routingResponse.data);
+
+      const llmHubRoutingResponse = await window.vaultAPI.setModelRoutingTable(routingTables['llm-hub'], 'llm-hub');
+      if (!llmHubRoutingResponse.success || !llmHubRoutingResponse.data) {
+        throw new Error(llmHubRoutingResponse.error || 'Failed to save LLM-Hub task routing');
+      }
+
+      setRoutingTables({
+        openrouter: openRouterRoutingResponse.data,
+        'llm-hub': llmHubRoutingResponse.data,
+      });
 
       // Re-initialize the enrichment client with the new settings
       await window.vaultAPI.refreshEnrichment();
@@ -973,8 +1027,15 @@ export function SettingsView({ vaultStatus }: { vaultStatus: VaultStatus | null 
     }
   }
 
+  function updateRoutingTableForEditor(updater: (current: ModelRoutingTable) => ModelRoutingTable) {
+    setRoutingTables((tables) => ({
+      ...tables,
+      [routingProvider]: updater(tables[routingProvider]),
+    }));
+  }
+
   function updateRouteModel(taskType: VaultTaskType, modelId: string) {
-    setRoutingTable((current) => {
+    updateRoutingTableForEditor((current) => {
       const existingRoute = getRouteConfig(current, taskType);
       const nextRoute = existingRoute
         ? { ...existingRoute, modelId }
@@ -991,7 +1052,7 @@ export function SettingsView({ vaultStatus }: { vaultStatus: VaultStatus | null 
   }
 
   function updateFallbackRouteModel(taskType: VaultTaskType, fallbackModelId: string) {
-    setRoutingTable((current) => {
+    updateRoutingTableForEditor((current) => {
       const existingRoute = getRouteConfig(current, taskType);
       const nextRoute = existingRoute
         ? {
@@ -1028,8 +1089,8 @@ export function SettingsView({ vaultStatus }: { vaultStatus: VaultStatus | null 
       return;
     }
 
-    setRoutingTable(structuredClone(preset.table));
-    setMessage(`Applied the ${preset.label.toLowerCase()} routing preset. Save runtime settings to persist it.`);
+    updateRoutingTableForEditor(() => structuredClone(preset.table));
+    setMessage(`Applied the ${preset.label.toLowerCase()} routing preset. Save settings to persist it.`);
     setError(null);
   }
 
@@ -1085,10 +1146,9 @@ export function SettingsView({ vaultStatus }: { vaultStatus: VaultStatus | null 
   }
 
   function renderOverviewTab() {
-    const selectedPresetId = getSelectedRoutingPreset();
-    const selectedPresetLabel = selectedPresetId
-      ? ROUTING_PRESETS.find((preset) => preset.id === selectedPresetId)?.label || 'Custom'
-      : 'Custom';
+    const primaryTable = routingTables[primaryProvider];
+    const selectedPresetLabel = ROUTING_PRESETS.find((preset) => routingTablesEqual(primaryTable, preset.table))?.label
+      || 'Custom';
 
     return (
       <div className="settings-tab-panel">
@@ -1120,7 +1180,7 @@ export function SettingsView({ vaultStatus }: { vaultStatus: VaultStatus | null 
           <article className="hero-card hero-card-accent">
             <span className="hero-card-label">Delegated routing</span>
             <strong className="hero-card-value hero-card-value-compact">{selectedPresetLabel}</strong>
-            <span className="hero-card-note">{routingTable.defaultModelId} is the current default delegated task model.</span>
+            <span className="hero-card-note">{primaryTable.defaultModelId} is the default delegated task model on {primaryProvider === 'llm-hub' ? 'LLM-Hub' : 'OpenRouter'}.</span>
           </article>
         </section>
 
@@ -1512,47 +1572,47 @@ export function SettingsView({ vaultStatus }: { vaultStatus: VaultStatus | null 
                 />
               </label>
 
-              <label className="field-row">
-                <span className="field-label">AI provider</span>
-                <select
-                  className="text-input"
-                  value={aiProvider}
-                  onChange={(event) => switchAiProvider(event.target.value === 'llm-hub' ? 'llm-hub' : 'openrouter')}
-                >
-                  <option value="openrouter">OpenRouter</option>
-                  <option value="llm-hub">LLM-Hub (OpenAI-compatible)</option>
-                </select>
-                <span className="field-help">
-                  Drives the task executor, enrichment, and the Vault API backend. OpenRouter uses its fixed endpoint; LLM-Hub uses your own base URL.
-                </span>
-              </label>
-
-              <label className="field-row">
-                <span className="field-label">Enrichment model</span>
-                <select
-                  className="text-input"
-                  value={settings.enrichment_model}
-                  onChange={(event) => updateSetting('enrichment_model', event.target.value)}
-                >
-                  <option value="">Select a model</option>
-                  {models.map((model) => (
-                    <option key={model.id} value={model.id}>
-                      {model.name} ({model.id})
-                    </option>
-                  ))}
-                </select>
-                <span className="field-help">
-                  {loadingModels
-                    ? 'Refreshing model list...'
-                    : aiProvider === 'llm-hub'
-                      ? 'Model list comes from your LLM-Hub /models endpoint. Test the connection to load it.'
-                      : 'Model list comes from OpenRouter when available, otherwise Vault falls back to a safe built-in list.'}
-                </span>
-              </label>
-
-              {aiProvider === 'openrouter' ? (
+              <div className="field-row-pair">
                 <label className="field-row">
-                  <span className="field-label">OpenRouter API key</span>
+                  <span className="field-label">Primary provider</span>
+                  <select
+                    className="text-input"
+                    value={primaryProvider}
+                    onChange={(event) => changePrimaryProvider(event.target.value === 'llm-hub' ? 'llm-hub' : 'openrouter')}
+                  >
+                    <option value="openrouter">OpenRouter</option>
+                    <option value="llm-hub">LLM-Hub (OpenAI-compatible)</option>
+                  </select>
+                  <span className="field-help">Handles the task executor, enrichment, and the Vault API backend first.</span>
+                </label>
+
+                <label className="field-row">
+                  <span className="field-label">Fallback provider</span>
+                  <select
+                    className="text-input"
+                    value={fallbackProvider}
+                    onChange={(event) => setFallbackProvider(
+                      event.target.value === 'llm-hub' || event.target.value === 'openrouter'
+                        ? event.target.value
+                        : 'none',
+                    )}
+                  >
+                    <option value="none">None</option>
+                    {primaryProvider !== 'openrouter' ? <option value="openrouter">OpenRouter</option> : null}
+                    {primaryProvider !== 'llm-hub' ? <option value="llm-hub">LLM-Hub (OpenAI-compatible)</option> : null}
+                  </select>
+                  <span className="field-help">Tried automatically — with its own models below — when the primary fails.</span>
+                </label>
+              </div>
+
+              <div className="detail-section">
+                <div className="detail-section-title">
+                  <KeyRound size={16} />
+                  <span>OpenRouter{primaryProvider === 'openrouter' ? ' — primary' : fallbackProvider === 'openrouter' ? ' — fallback' : ''}</span>
+                </div>
+
+                <label className="field-row">
+                  <span className="field-label">API key</span>
                   <input
                     className="text-input"
                     type="password"
@@ -1573,7 +1633,7 @@ export function SettingsView({ vaultStatus }: { vaultStatus: VaultStatus | null 
                     <button
                       type="button"
                       className="header-button"
-                      onClick={refreshActiveProviderModels}
+                      onClick={() => refreshProviderModels('openrouter')}
                       disabled={loadingModels || !apiKey.trim()}
                     >
                       <Sparkles size={16} />
@@ -1582,77 +1642,104 @@ export function SettingsView({ vaultStatus }: { vaultStatus: VaultStatus | null 
                   </div>
                   <span className="field-help">The key is saved locally in encrypted form and tested against OpenRouter before use.</span>
                 </label>
-              ) : (
-                <>
-                  <label className="field-row">
-                    <span className="field-label">LLM-Hub base URL</span>
-                    <input
-                      className="text-input"
-                      type="text"
-                      value={llmHubBaseUrl}
-                      onChange={(event) => setLlmHubBaseUrl(event.target.value)}
-                      placeholder="http://localhost:3000/v1"
-                    />
-                    <span className="field-help">OpenAI-compatible API root of your LLM-Hub instance (the /v1 path).</span>
-                  </label>
 
-                  <label className="field-row">
-                    <span className="field-label">LLM-Hub API key</span>
-                    <input
-                      className="text-input"
-                      type="password"
-                      value={llmHubApiKey}
-                      onChange={(event) => setLlmHubApiKey(event.target.value)}
-                      placeholder="Stored locally in encrypted form"
-                    />
-                    <div className="inline-actions">
-                      <button
-                        type="button"
-                        className="header-button"
-                        onClick={() => void handleTestLlmHubConnection()}
-                        disabled={testingKey || loading}
-                      >
-                        <Wifi size={16} />
-                        <span>{testingKey ? 'Testing...' : 'Test connection'}</span>
-                      </button>
-                      <button
-                        type="button"
-                        className="header-button"
-                        onClick={refreshActiveProviderModels}
-                        disabled={loadingModels || !llmHubBaseUrl.trim() || !llmHubApiKey.trim()}
-                      >
-                        <Sparkles size={16} />
-                        <span>{loadingModels ? 'Loading models...' : 'Refresh models'}</span>
-                      </button>
-                    </div>
-                    <span className="field-help">The key is saved locally in encrypted form. Testing fetches the model list from your hub.</span>
-                  </label>
-                </>
-              )}
+                <label className="field-row">
+                  <span className="field-label">Enrichment model</span>
+                  <select
+                    className="text-input"
+                    value={enrichmentModels.openrouter}
+                    onChange={(event) => setEnrichmentModels((current) => ({ ...current, openrouter: event.target.value }))}
+                  >
+                    <option value="">Select a model</option>
+                    {modelsByProvider.openrouter.map((model) => (
+                      <option key={`or-enrich-${model.id}`} value={model.id}>
+                        {model.name} ({model.id})
+                      </option>
+                    ))}
+                  </select>
+                  <span className="field-help">Used for enrichment whenever OpenRouter serves the request.</span>
+                </label>
 
-              {aiProvider === 'openrouter' && testResult ? (
-                <div className="note-card">
-                  <div className="detail-section-title">
-                    <KeyRound size={16} />
-                    <span>Last API test</span>
+                {testResult ? (
+                  <div className="note-card">
+                    <p>Label: {testResult.label} · Remaining limit: {testResult.limitRemaining ?? 'unknown'} · Usage: {testResult.usage ?? 'unknown'} · Free tier: {testResult.isFreeTier ? 'yes' : 'no'}</p>
                   </div>
-                  <p>Label: {testResult.label}</p>
-                  <p>Remaining limit: {testResult.limitRemaining ?? 'unknown'}</p>
-                  <p>Total usage: {testResult.usage ?? 'unknown'}</p>
-                  <p>Free tier: {testResult.isFreeTier ? 'yes' : 'no'}</p>
-                </div>
-              ) : null}
+                ) : null}
+              </div>
 
-              {aiProvider === 'llm-hub' && llmHubTestResult ? (
-                <div className="note-card">
-                  <div className="detail-section-title">
-                    <KeyRound size={16} />
-                    <span>Last connection test</span>
-                  </div>
-                  <p>Status: {llmHubTestResult.label}</p>
-                  <p>Models available: {llmHubTestResult.modelCount}</p>
+              <div className="detail-section">
+                <div className="detail-section-title">
+                  <KeyRound size={16} />
+                  <span>LLM-Hub{primaryProvider === 'llm-hub' ? ' — primary' : fallbackProvider === 'llm-hub' ? ' — fallback' : ''}</span>
                 </div>
-              ) : null}
+
+                <label className="field-row">
+                  <span className="field-label">Base URL</span>
+                  <input
+                    className="text-input"
+                    type="text"
+                    value={llmHubBaseUrl}
+                    onChange={(event) => setLlmHubBaseUrl(event.target.value)}
+                    placeholder="http://localhost:3000/v1"
+                  />
+                  <span className="field-help">OpenAI-compatible API root of your LLM-Hub instance (the /v1 path).</span>
+                </label>
+
+                <label className="field-row">
+                  <span className="field-label">API key</span>
+                  <input
+                    className="text-input"
+                    type="password"
+                    value={llmHubApiKey}
+                    onChange={(event) => setLlmHubApiKey(event.target.value)}
+                    placeholder="Stored locally in encrypted form"
+                  />
+                  <div className="inline-actions">
+                    <button
+                      type="button"
+                      className="header-button"
+                      onClick={() => void handleTestLlmHubConnection()}
+                      disabled={testingKey || loading}
+                    >
+                      <Wifi size={16} />
+                      <span>{testingKey ? 'Testing...' : 'Test connection'}</span>
+                    </button>
+                    <button
+                      type="button"
+                      className="header-button"
+                      onClick={() => refreshProviderModels('llm-hub')}
+                      disabled={loadingModels || !llmHubBaseUrl.trim() || !llmHubApiKey.trim()}
+                    >
+                      <Sparkles size={16} />
+                      <span>{loadingModels ? 'Loading models...' : 'Refresh models'}</span>
+                    </button>
+                  </div>
+                  <span className="field-help">The key is saved locally in encrypted form. Testing fetches the model list from your hub.</span>
+                </label>
+
+                <label className="field-row">
+                  <span className="field-label">Enrichment model</span>
+                  <select
+                    className="text-input"
+                    value={enrichmentModels['llm-hub']}
+                    onChange={(event) => setEnrichmentModels((current) => ({ ...current, 'llm-hub': event.target.value }))}
+                  >
+                    <option value="">Select a model</option>
+                    {modelsByProvider['llm-hub'].map((model) => (
+                      <option key={`hub-enrich-${model.id}`} value={model.id}>
+                        {model.name} ({model.id})
+                      </option>
+                    ))}
+                  </select>
+                  <span className="field-help">Used for enrichment whenever LLM-Hub serves the request. Test the connection to load the list.</span>
+                </label>
+
+                {llmHubTestResult ? (
+                  <div className="note-card">
+                    <p>Status: {llmHubTestResult.label} · Models available: {llmHubTestResult.modelCount}</p>
+                  </div>
+                ) : null}
+              </div>
             </div>
           </section>
 
@@ -1660,39 +1747,60 @@ export function SettingsView({ vaultStatus }: { vaultStatus: VaultStatus | null 
             <div className="panel-header">
               <div>
                 <div className="panel-title">Task model routing</div>
-                <div className="panel-subtitle">Choose cheaper or stronger models per delegated task type. These settings drive the task executor and queued task defaults.</div>
+                <div className="panel-subtitle">Choose cheaper or stronger models per delegated task type. Each provider keeps its own routing table — the fallback provider uses its own models when it takes over.</div>
               </div>
               <Sparkles size={18} className="panel-icon" />
             </div>
 
-            <div className="note-card">
-              <div className="detail-section-title">
-                <Coins size={16} />
-                <span>Routing presets</span>
-              </div>
-              <div className="inline-actions routing-preset-actions">
-                {ROUTING_PRESETS.map((preset) => (
-                  <button
-                    key={preset.id}
-                    type="button"
-                    className={`header-button routing-preset-button ${selectedPresetId === preset.id ? 'routing-preset-button-active' : ''}`}
-                    onClick={() => applyRoutingPreset(preset.id)}
-                  >
-                    <span>{preset.label}</span>
-                  </button>
-                ))}
-              </div>
-              <p>
-                {selectedPresetId
-                  ? `Current preset match: ${ROUTING_PRESETS.find((preset) => preset.id === selectedPresetId)?.label || 'Custom'}.`
-                  : 'Current routing is custom.'}
-              </p>
-              <p>
-                {selectedPresetId
-                  ? ROUTING_PRESETS.find((preset) => preset.id === selectedPresetId)?.description
-                  : 'Presets overwrite the current route table in the editor. You can still tweak individual task types before saving.'}
-              </p>
+            <div className="field-grid">
+              <label className="field-row">
+                <span className="field-label">Edit routing for</span>
+                <select
+                  className="text-input"
+                  value={routingProvider}
+                  onChange={(event) => setRoutingProvider(event.target.value === 'llm-hub' ? 'llm-hub' : 'openrouter')}
+                >
+                  <option value="openrouter">OpenRouter{primaryProvider === 'openrouter' ? ' (primary)' : fallbackProvider === 'openrouter' ? ' (fallback)' : ''}</option>
+                  <option value="llm-hub">LLM-Hub{primaryProvider === 'llm-hub' ? ' (primary)' : fallbackProvider === 'llm-hub' ? ' (fallback)' : ''}</option>
+                </select>
+                <span className="field-help">The dropdowns below use this provider's model list and save to its own routing table.</span>
+              </label>
             </div>
+
+            {routingProvider === 'openrouter' ? (
+              <div className="note-card">
+                <div className="detail-section-title">
+                  <Coins size={16} />
+                  <span>Routing presets</span>
+                </div>
+                <div className="inline-actions routing-preset-actions">
+                  {ROUTING_PRESETS.map((preset) => (
+                    <button
+                      key={preset.id}
+                      type="button"
+                      className={`header-button routing-preset-button ${selectedPresetId === preset.id ? 'routing-preset-button-active' : ''}`}
+                      onClick={() => applyRoutingPreset(preset.id)}
+                    >
+                      <span>{preset.label}</span>
+                    </button>
+                  ))}
+                </div>
+                <p>
+                  {selectedPresetId
+                    ? `Current preset match: ${ROUTING_PRESETS.find((preset) => preset.id === selectedPresetId)?.label || 'Custom'}.`
+                    : 'Current routing is custom.'}
+                </p>
+                <p>
+                  {selectedPresetId
+                    ? ROUTING_PRESETS.find((preset) => preset.id === selectedPresetId)?.description
+                    : 'Presets overwrite the current route table in the editor. You can still tweak individual task types before saving.'}
+                </p>
+              </div>
+            ) : (
+              <div className="note-card">
+                <p>Presets use OpenRouter model IDs, so they are hidden while editing the LLM-Hub table. Pick models from your hub's list below; test the LLM-Hub connection first to load it.</p>
+              </div>
+            )}
 
             <div className="field-grid">
               <label className="field-row">
@@ -1700,7 +1808,7 @@ export function SettingsView({ vaultStatus }: { vaultStatus: VaultStatus | null 
                 <select
                   className="text-input"
                   value={routingTable.defaultModelId}
-                  onChange={(event) => setRoutingTable((current) => ({ ...current, defaultModelId: event.target.value }))}
+                  onChange={(event) => updateRoutingTableForEditor((current) => ({ ...current, defaultModelId: event.target.value }))}
                 >
                   {models.map((model) => (
                     <option key={`default-${model.id}`} value={model.id}>

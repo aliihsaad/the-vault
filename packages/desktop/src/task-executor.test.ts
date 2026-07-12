@@ -180,6 +180,79 @@ describe('TaskExecutor', () => {
     );
   });
 
+  it('fails over from the primary provider to the fallback provider with its own routing table', async () => {
+    const task = createTask({
+      taskUid: 'vt_provider_failover',
+      title: 'General delegated work',
+      taskType: 'general',
+      project: 'Vault',
+      prompt: 'Do the delegated work.',
+      routedModel: 'hub/primary-model',
+    });
+
+    const { vault } = createVaultHarness(task);
+    vault.resolveModelForTask.mockImplementation((_taskType?: string, provider?: string) => (
+      provider === 'llm-hub'
+        ? { taskType: 'general', modelId: 'hub/general-model', maxTokens: 2048, temperature: 0.3, timeoutMs: 30000 }
+        : { taskType: 'general', modelId: 'openrouter/general-model', maxTokens: 2048, temperature: 0.3, timeoutMs: 30000 }
+    ));
+
+    const attempts: Array<{ provider: string; modelId: string }> = [];
+
+    const executor = new TaskExecutor({
+      vault: vault as never,
+      getApiKey: () => 'unused',
+      getProviderChain: () => ({
+        primary: { provider: 'llm-hub', apiKey: 'hub-key', baseUrl: 'http://hub.local/v1' },
+        fallback: { provider: 'openrouter', apiKey: 'or-key' },
+      }),
+      emitEvent: vi.fn(),
+      pollIntervalMs: 60000,
+      createClient: (_apiKey, modelId, providerConfig) => {
+        const provider = providerConfig?.provider ?? 'openrouter';
+        attempts.push({ provider, modelId });
+        return {
+          complete: async () => {
+            if (provider === 'llm-hub') {
+              throw new Error('hub is down');
+            }
+            return {
+              text: 'Fallback provider result.',
+              model: modelId,
+              usage: { promptTokens: 1, completionTokens: 1 },
+            };
+          },
+          generateImage: async () => {
+            throw new Error('not used');
+          },
+        };
+      },
+    });
+
+    executor.start();
+
+    await vi.waitFor(() => {
+      expect(vault.completeTask).toHaveBeenCalledTimes(1);
+    });
+
+    executor.stop();
+
+    // The task's stamped routed model only applies to the primary provider;
+    // the fallback provider routes with its own table.
+    expect(attempts.map((attempt) => `${attempt.provider}:${attempt.modelId}`)).toEqual([
+      'llm-hub:hub/primary-model',
+      'openrouter:openrouter/general-model',
+    ]);
+    expect(vault.completeTask).toHaveBeenCalledWith(
+      task.taskUid,
+      'Fallback provider result.',
+      expect.objectContaining({
+        provider: 'openrouter',
+        providerFallbackUsed: true,
+      }),
+    );
+  });
+
   it('annotates action-like text tasks so model output is not mistaken for applied Vault mutations', async () => {
     const task = createTask({
       taskUid: 'vt_organize_action',
@@ -566,7 +639,7 @@ function createVaultHarness(
       archivedItemUids: [],
       promotedItemUids: [],
     })),
-    resolveModelForTask: vi.fn(() => route),
+    resolveModelForTask: vi.fn((_taskType?: string, _provider?: string) => route),
     getVaultRoot: vi.fn(() => vaultRoot),
   };
 
