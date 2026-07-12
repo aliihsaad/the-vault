@@ -7,23 +7,24 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
-import { Vault, OpenRouterClient, TaskExecutor, portableDecrypt, slugify, MEMORY_TYPES, ROUTINE_TYPES, STATUS_VALUES, PRIORITY_VALUES, SOURCE_APPS, TASK_TYPES, TASK_STATUSES, TASK_PRIORITIES, PROPOSAL_STATUSES, PROPOSAL_TYPES, PROJECT_LINK_TYPES, OUTCOME_VALUES, MEMORY_CONTENT_MAX_CHARS } from '@the-vault/core';
+import { Vault, TaskExecutor, createProviderClient, portableDecrypt, slugify, MEMORY_TYPES, ROUTINE_TYPES, STATUS_VALUES, PRIORITY_VALUES, SOURCE_APPS, TASK_TYPES, TASK_STATUSES, TASK_PRIORITIES, PROPOSAL_STATUSES, PROPOSAL_TYPES, PROJECT_LINK_TYPES, OUTCOME_VALUES, MEMORY_CONTENT_MAX_CHARS, type AiProviderConfig } from '@the-vault/core';
 import { registerGraphifyMcpTools } from './graphify-tools.js';
 
 // Initialize Vault
 const vault = new Vault();
 vault.initialize();
 
-// Initialize AI enrichment from vault settings (shared with desktop app).
-// Priority: env var > portable-encrypted key > plain key from settings DB
-function getOpenRouterApiKey(): string {
+// Resolve a provider API key from the shared vault settings (written by the
+// desktop app). Priority: env var > portable-encrypted key > plain key.
+function resolveProviderApiKey(envVar: string, settingKey: string): string {
   // 1. Env var override (highest priority)
-  if (process.env.VAULT_OPENROUTER_API_KEY) {
-    return process.env.VAULT_OPENROUTER_API_KEY;
+  const envValue = process.env[envVar];
+  if (envValue) {
+    return envValue;
   }
 
   // 2. Portable-encrypted blob (written by the desktop app — shared format)
-  const portableBlob = vault.getSetting('openrouter_api_key_portable');
+  const portableBlob = vault.getSetting(`${settingKey}_portable`);
   if (portableBlob) {
     try {
       const decrypted = portableDecrypt(portableBlob, vault.getVaultRoot());
@@ -36,7 +37,7 @@ function getOpenRouterApiKey(): string {
   // 3. Plain unencrypted key stored directly in settings DB.
   //    Guard against the desktop format (encrypted object) being mistaken
   //    for a plain string — the MCP has no safeStorage/DPAPI context.
-  const plainKey = vault.getSetting('openrouter_api_key');
+  const plainKey = vault.getSetting(settingKey);
   if (typeof plainKey === 'string' && plainKey.trim()) {
     return plainKey.trim();
   }
@@ -44,20 +45,46 @@ function getOpenRouterApiKey(): string {
   return '';
 }
 
+function getOpenRouterApiKey(): string {
+  return resolveProviderApiKey('VAULT_OPENROUTER_API_KEY', 'openrouter_api_key');
+}
+
+function getLlmHubApiKey(): string {
+  return resolveProviderApiKey('VAULT_LLM_HUB_API_KEY', 'llm_hub_api_key');
+}
+
+// Resolve which AI provider executes tasks and enrichment.
+// Priority: env override > shared vault setting > OpenRouter default.
+function getAiProviderConfig(): AiProviderConfig {
+  const provider = (process.env.VAULT_AI_PROVIDER || String(vault.getSetting('ai_provider') || '')).trim();
+
+  if (provider === 'llm-hub') {
+    return {
+      provider: 'llm-hub',
+      apiKey: getLlmHubApiKey(),
+      baseUrl: (process.env.VAULT_LLM_HUB_BASE_URL || String(vault.getSetting('llm_hub_base_url') || '')).trim(),
+    };
+  }
+
+  return { provider: 'openrouter', apiKey: getOpenRouterApiKey() };
+}
+
 function initializeEnrichment(): void {
-  // API key: env override > portable-encrypted copy from desktop
-  const apiKey = getOpenRouterApiKey();
+  const config = getAiProviderConfig();
 
   // Model: env override > vault setting
   const model = process.env.VAULT_ENRICHMENT_MODEL
     || (vault.getSetting('enrichment_model') as string)
     || '';
 
-  if (!apiKey || !model) {
+  if (!config.apiKey || !model) {
+    return;
+  }
+  if (config.provider === 'llm-hub' && !config.baseUrl) {
     return;
   }
 
-  vault.setEnrichmentClient(new OpenRouterClient(apiKey, model));
+  vault.setEnrichmentClient(createProviderClient(config, model));
 }
 
 initializeEnrichment();
@@ -65,6 +92,7 @@ initializeEnrichment();
 const taskExecutor = new TaskExecutor({
   vault,
   getApiKey: () => getOpenRouterApiKey(),
+  getProviderConfig: () => getAiProviderConfig(),
   emitEvent: () => {},
   pollIntervalMs: Number(process.env.VAULT_TASK_EXECUTOR_POLL_MS || 5000),
 });
@@ -76,7 +104,7 @@ if (process.env.VAULT_AUTO_START_TASK_EXECUTOR === 'true') {
 // Create MCP server
 const server = new McpServer({
   name: 'vault-memory',
-  version: '0.4.8',
+  version: '0.5.0',
 });
 
 // ============================================================================
@@ -745,7 +773,7 @@ server.tool(
     prompt: z.string().describe('The instruction/prompt for the AI model'),
     priority: z.enum(TASK_PRIORITIES).optional().describe('Execution priority (default: normal)'),
     project: z.string().optional().describe('Project scope'),
-    context: z.record(z.unknown()).optional().describe('Additional context: related memory UIDs, file paths, etc.'),
+    context: z.record(z.unknown()).optional().describe('Additional context: related memory UIDs (item_uids), file paths (related_files), etc. Recall-quality keys for the persisted result memory: subject (string — the topic used for recall matching), tags (string[] — topical tags), keywords (string[] — search terms), skipResultMemory (true — do not persist the result as a memory).'),
     max_retries: z.number().optional().describe('Max retry attempts (default: 2)'),
     source_memory_uid: z.string().optional().describe('Memory item that triggered this task'),
     target_memory_uid: z.string().optional().describe('Memory item this task should update'),

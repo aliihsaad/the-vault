@@ -6,7 +6,7 @@ import { basename, dirname, join } from 'node:path';
 import { homedir, tmpdir } from 'node:os';
 import { eq } from 'drizzle-orm';
 import { Vault } from './index.js';
-import { memoryItems } from './database/schema.js';
+import { memoryItems, tasks } from './database/schema.js';
 
 describe('task delegation system', () => {
   let vaultRoot: string;
@@ -223,12 +223,160 @@ describe('task delegation system', () => {
     expect(detail?.memoryType).toBe('summary');
     expect(detail?.project).toBe('Vault');
     expect(detail?.title).toBe('Summarize migration notes');
-    expect(detail?.subject).toBe('Delegated summarize result');
+    expect(detail?.subject).toBe('Summarize migration notes');
     expect(detail?.summary).toContain('The migration is stable');
     expect(detail?.relatedItemIds).toContain('vm_source123');
     expect(detail?.relatedFiles).toContain('packages/core/src/services/task.service.ts');
     expect(detail?.content).toContain('Task UID:');
     expect(detail?.content).toContain('Result:');
+  });
+
+  it('requeues stale running tasks with retries left and fails ancient or exhausted ones', () => {
+    const db = (vault as unknown as { db: any }).db;
+    const backdate = (taskUid: string, startedAt: string) => {
+      db.update(tasks)
+        .set({ startedAt, updatedAt: startedAt })
+        .where(eq(tasks.taskUid, taskUid))
+        .run();
+    };
+
+    const requeueable = vault.createTask({
+      title: 'Recently interrupted organize run',
+      taskType: 'organize',
+      prompt: 'Organize the latest session notes.',
+      project: 'Vault',
+      maxRetries: 2,
+      createdBy: 'desktop',
+    });
+    const exhausted = vault.createTask({
+      title: 'Interrupted run with no retries left',
+      taskType: 'analysis',
+      prompt: 'Analyze sync throughput.',
+      project: 'Vault',
+      maxRetries: 0,
+      createdBy: 'desktop',
+    });
+    const ancient = vault.createTask({
+      title: 'Task abandoned weeks ago',
+      taskType: 'summarize',
+      prompt: 'Summarize old migration notes.',
+      project: 'Vault',
+      maxRetries: 2,
+      createdBy: 'desktop',
+    });
+    const fresh = vault.createTask({
+      title: 'Task claimed moments ago',
+      taskType: 'general',
+      prompt: 'Currently executing.',
+      project: 'Vault',
+      createdBy: 'desktop',
+    });
+
+    // Claim everything so all four are 'running', then backdate the claims.
+    for (let i = 0; i < 4; i += 1) vault.claimNextTask();
+    const thirtyMinutesAgo = new Date(Date.now() - 30 * 60 * 1000).toISOString();
+    const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
+    backdate(requeueable.taskUid, thirtyMinutesAgo);
+    backdate(exhausted.taskUid, thirtyMinutesAgo);
+    backdate(ancient.taskUid, thirtyDaysAgo);
+
+    const recovery = vault.recoverStaleRunningTasks();
+    expect(recovery.requeuedTaskUids).toEqual([requeueable.taskUid]);
+    expect(recovery.failedTaskUids.sort()).toEqual([exhausted.taskUid, ancient.taskUid].sort());
+
+    const requeued = vault.getTask(requeueable.taskUid);
+    expect(requeued?.status).toBe('pending');
+    expect(requeued?.retryCount).toBe(1);
+    expect(requeued?.startedAt).toBeNull();
+
+    expect(vault.getTask(exhausted.taskUid)?.status).toBe('failed');
+    expect(vault.getTask(ancient.taskUid)?.status).toBe('failed');
+    expect(vault.getTask(ancient.taskUid)?.errorMessage).toContain('abandoned');
+
+    // The freshly claimed task is left alone — it may still be executing.
+    expect(vault.getTask(fresh.taskUid)?.status).toBe('running');
+
+    const stats = vault.getTaskQueueStats();
+    expect(stats.running).toBe(1);
+    expect(stats.pending).toBe(1);
+    expect(stats.failed).toBe(2);
+  });
+
+  it('never lets a completed or failed transition clobber a cancelled task', () => {
+    const task = vault.createTask({
+      title: 'Cancelled mid-flight organize run',
+      taskType: 'organize',
+      prompt: 'Organize the session log.',
+      project: 'Vault',
+      maxRetries: 2,
+      createdBy: 'desktop',
+    });
+
+    const claimed = vault.claimNextTask();
+    expect(claimed?.taskUid).toBe(task.taskUid);
+
+    const cancelled = vault.cancelTask(task.taskUid);
+    expect(cancelled?.status).toBe('cancelled');
+
+    // Simulates the executor's in-flight LLM call returning after the cancel.
+    expect(vault.completeTask(task.taskUid, 'Result arriving too late.')).toBeNull();
+    expect(vault.failTask(task.taskUid, 'Late failure.')).toBeNull();
+    expect(vault.retryTask(task.taskUid)).toBeNull();
+
+    const persisted = vault.getTask(task.taskUid);
+    expect(persisted?.status).toBe('cancelled');
+    expect(persisted?.resultText).toBeNull();
+  });
+
+  it('persists recall-friendly task result memories: topical subject, clean summary, filtered keywords, context tags', () => {
+    const task = vault.createTask({
+      title: 'Merge the duplicate sync memories',
+      taskType: 'organize',
+      prompt: 'Review the duplicate sync investigation notes and recommend a merge target.',
+      project: 'Vault',
+      context: {
+        tags: ['sync', 'deduplication'],
+        keywords: ['duplicate-detection'],
+      },
+      createdBy: 'codex',
+    });
+
+    const noteResult = [
+      'Executor note: No Vault mutations, file edits, or external actions were applied by this text task executor. Treat any requested merge/update/delete/archive/promote/save operation below as analysis or a recommendation unless separate tool metadata confirms it was applied.',
+      '',
+      'Recommend merging vm_b into vm_a because both cover the sync race.',
+    ].join('\n');
+
+    const completed = vault.completeTask(task.taskUid, noteResult);
+    expect(completed?.targetMemoryUid).toMatch(/^vm_/);
+
+    const detail = vault.getMemoryDetail(completed!.targetMemoryUid!);
+    expect(detail?.subject).toBe('Merge the duplicate sync memories');
+    // The executor boundary note must not consume the recall summary.
+    expect(detail?.summary).not.toContain('Executor note');
+    expect(detail?.summary).toContain('Recommend merging vm_b into vm_a');
+    // The full content keeps the honest record, including the note.
+    expect(detail?.content).toContain('Executor note');
+    expect(detail?.tags).toEqual(expect.arrayContaining(['task-result', 'delegated', 'organize', 'sync', 'deduplication']));
+    expect(detail?.keywords).toEqual(expect.arrayContaining(['organize', 'duplicate-detection', 'merge', 'duplicate', 'sync']));
+    expect(detail?.keywords).not.toContain('the');
+    expect(detail?.routineType).toBe('refactor');
+  });
+
+  it('skips result memory persistence when the task opts out via skipResultMemory', () => {
+    const task = vault.createTask({
+      title: 'Ephemeral scratch analysis',
+      taskType: 'analysis',
+      prompt: 'One-off throwaway analysis.',
+      project: 'Vault',
+      context: { skipResultMemory: true },
+      createdBy: 'codex',
+    });
+
+    const completed = vault.completeTask(task.taskUid, 'Throwaway result.');
+    expect(completed?.status).toBe('completed');
+    expect(completed?.targetMemoryUid).toBeNull();
+    expect(completed?.resultMetadata?.savedMemoryUid).toBeUndefined();
   });
 
   it('retries failed tasks until max retries is reached', () => {
@@ -634,6 +782,213 @@ describe('task delegation system', () => {
       'latest',
       'project_briefing',
     ]);
+  });
+
+  it('applies enrich duty JSON suggestions back to the source memory with validation', async () => {
+    const saved = vault.saveMemory({
+      title: 'Sync retry backoff fix',
+      project: 'Vault',
+      memoryType: 'summary',
+      subject: 'sync retry backoff',
+      summary: 'Fixed the retry backoff.',
+      tags: ['sync'],
+      keywords: ['retry'],
+      sourceApp: 'codex',
+    });
+    await flushAsyncWork();
+
+    const enrichTask = vault.findTasks({ project: 'Vault', taskType: 'enrich', limit: 10 })
+      .find((task) => task.sourceMemoryUid === saved.item.itemUid);
+    expect(enrichTask).toBeDefined();
+    expect(enrichTask?.context.skipResultMemory).toBe(true);
+    expect(enrichTask?.prompt).toContain('Return ONLY a JSON object');
+
+    // Simulates the executor result: annotation note followed by model JSON.
+    const resultText = [
+      'Executor note: No Vault mutations, file edits, or external actions were applied by this text task executor.',
+      '',
+      JSON.stringify({
+        summary: 'Fixed the sync retry backoff so failed pushes retry with exponential delay instead of hammering the server in a tight loop.',
+        tags: ['sync', 'backoff', 'bugfix'],
+        keywords: ['retry', 'exponential-backoff', 'sync'],
+        next_steps: ['Verify retry timing under packet loss'],
+      }),
+    ].join('\n');
+    const completed = vault.completeTask(enrichTask!.taskUid, resultText);
+    // skipResultMemory: duty output must not become a standalone memory.
+    expect(completed?.targetMemoryUid).toBe(saved.item.itemUid);
+    expect(completed?.resultMetadata?.savedMemoryUid).toBeUndefined();
+
+    const applyResult = vault.applyDutyTaskResult(enrichTask!.taskUid);
+    expect(applyResult.applied).toBe(true);
+    expect(applyResult.appliedFields.sort()).toEqual(['keywords', 'nextSteps', 'summary', 'tags']);
+
+    const detail = vault.getMemoryDetail(saved.item.itemUid);
+    expect(detail?.summary).toContain('exponential delay');
+    expect(detail?.tags).toEqual(expect.arrayContaining(['sync', 'backoff', 'bugfix']));
+    expect(detail?.keywords).toEqual(expect.arrayContaining(['retry', 'exponential-backoff']));
+    expect(detail?.nextSteps).toEqual(['Verify retry timing under packet loss']);
+
+    const taskAfter = vault.getTask(enrichTask!.taskUid);
+    expect(taskAfter?.resultMetadata?.dutyApplied).toBe(true);
+  });
+
+  it('applies organize duty metadata additively but never prose or merges', async () => {
+    const saved = vault.saveMemory({
+      title: 'Adapter wiring session',
+      project: 'Vault',
+      memoryType: 'summary',
+      subject: 'adapter wiring for local resume',
+      summary: 'Wired the local adapter resume flow end to end with checkpoint validation and rollback safety checks.',
+      sourceApp: 'codex',
+    });
+    await flushAsyncWork();
+
+    const organizeTask = vault.findTasks({ project: 'Vault', taskType: 'organize', limit: 10 })
+      .find((task) => task.sourceMemoryUid === saved.item.itemUid);
+    expect(organizeTask).toBeDefined();
+
+    const originalSummary = vault.getMemoryDetail(saved.item.itemUid)!.summary;
+    vault.completeTask(organizeTask!.taskUid, JSON.stringify({
+      summary: 'A totally different summary the organize duty must not be allowed to apply over the original.',
+      tags: ['adapter', 'resume'],
+      keywords: ['checkpoint', 'rollback'],
+      duplicate_actions: [{ item_uid: 'vm_fake', action: 'merge', rationale: 'should never auto-run' }],
+    }));
+
+    const applyResult = vault.applyDutyTaskResult(organizeTask!.taskUid);
+    expect(applyResult.applied).toBe(true);
+    expect(applyResult.appliedFields.sort()).toEqual(['keywords', 'tags']);
+
+    const detail = vault.getMemoryDetail(saved.item.itemUid);
+    expect(detail?.summary).toBe(originalSummary);
+    expect(detail?.tags).toEqual(expect.arrayContaining(['adapter', 'resume']));
+    expect(detail?.keywords).toEqual(expect.arrayContaining(['checkpoint', 'rollback']));
+    expect(detail?.status).not.toBe('archived');
+  });
+
+  it('rejects unusable duty results without touching the memory', async () => {
+    const saved = vault.saveMemory({
+      title: 'Short note',
+      project: 'Vault',
+      memoryType: 'summary',
+      subject: 'short note',
+      summary: 'Tiny.',
+      tags: ['note'],
+      sourceApp: 'codex',
+    });
+    await flushAsyncWork();
+
+    const enrichTask = vault.findTasks({ project: 'Vault', taskType: 'enrich', limit: 10 })
+      .find((task) => task.sourceMemoryUid === saved.item.itemUid);
+    vault.completeTask(enrichTask!.taskUid, 'The model rambled and returned no JSON at all.');
+
+    const applyResult = vault.applyDutyTaskResult(enrichTask!.taskUid);
+    expect(applyResult.applied).toBe(false);
+    expect(applyResult.reason).toBe('unparseable_result');
+
+    const detail = vault.getMemoryDetail(saved.item.itemUid);
+    expect(detail?.summary).toBe('Tiny.');
+    expect(detail?.tags).toEqual(['note']);
+
+    const taskAfter = vault.getTask(enrichTask!.taskUid);
+    expect(taskAfter?.resultMetadata?.dutyApplied).toBe(false);
+    expect(taskAfter?.resultMetadata?.dutyApplyReason).toBe('unparseable_result');
+  });
+
+  it('refuses to apply duty results to non-duty tasks', () => {
+    const task = vault.createTask({
+      title: 'Regular user task',
+      taskType: 'enrich',
+      prompt: 'A user-created enrich task with no duty context.',
+      project: 'Vault',
+      createdBy: 'codex',
+    });
+    vault.completeTask(task.taskUid, JSON.stringify({ tags: ['should-not-apply'] }));
+
+    const applyResult = vault.applyDutyTaskResult(task.taskUid);
+    expect(applyResult.applied).toBe(false);
+    expect(applyResult.reason).toBe('not_a_duty_task');
+  });
+
+  it('skips description proposals entirely when no enrichment client is available', async () => {
+    vault.setEnrichmentClient(null);
+
+    for (let i = 0; i < 3; i += 1) {
+      vault.saveMemory({
+        title: `Setup note ${i}`,
+        project: 'DescriptionlessProject',
+        memoryType: 'summary',
+        subject: `setup topic ${i}`,
+        summary: `Setup summary number ${i} for the description review test.`,
+        sourceApp: 'codex',
+      });
+    }
+
+    const review = await vault.executeProjectReview('DescriptionlessProject', { force: true });
+    // No AI available → no proposal at all, never item-count boilerplate.
+    expect(review.proposalsCreated.filter((p) => p.proposalType === 'description')).toHaveLength(0);
+  });
+
+  it('drafts project descriptions from high-signal items and excludes task-result noise', async () => {
+    const prompts: string[] = [];
+    vault.setEnrichmentClient({
+      isAvailable: () => true,
+      complete: async (params) => {
+        prompts.push(params.userPrompt);
+        return {
+          text: 'ReviewedProject is a local-first sync engine with deterministic conflict replay.',
+          model: 'mock-model',
+          usage: { promptTokens: 0, completionTokens: 0 },
+        };
+      },
+    });
+
+    try {
+      const decision = vault.saveMemory({
+        title: 'Adopt deterministic conflict replay',
+        project: 'ReviewedProject',
+        memoryType: 'decision',
+        subject: 'conflict replay strategy',
+        summary: 'Sync conflicts resolve through deterministic replay of operations.',
+        tags: ['sync', 'architecture'],
+        sourceApp: 'codex',
+      });
+      vault.promoteMemory(decision.item.itemUid);
+
+      vault.saveMemory({
+        title: 'Sync hardening plan',
+        project: 'ReviewedProject',
+        memoryType: 'plan',
+        subject: 'sync hardening',
+        summary: 'Plan for hardening the sync layer against replay races.',
+        tags: ['sync', 'plan'],
+        sourceApp: 'codex',
+      });
+
+      vault.saveMemory({
+        title: 'Delegated organize output',
+        project: 'ReviewedProject',
+        memoryType: 'summary',
+        subject: 'delegated organize output',
+        summary: 'Noise from a delegated agent task that says nothing about the project.',
+        tags: ['task-result', 'delegated'],
+        sourceApp: 'other',
+      });
+
+      const review = await vault.executeProjectReview('ReviewedProject', { force: true });
+      const descriptionProposal = review.proposalsCreated.find((p) => p.proposalType === 'description');
+      expect(descriptionProposal).toBeDefined();
+      expect(JSON.stringify(descriptionProposal?.payload)).toContain('deterministic conflict replay');
+
+      const prompt = prompts.at(-1) ?? '';
+      expect(prompt).toContain('Adopt deterministic conflict replay');
+      expect(prompt).toContain('Sync hardening plan');
+      expect(prompt).not.toContain('Delegated organize output');
+      expect(prompt).toContain('Common tags: sync');
+    } finally {
+      vault.setEnrichmentClient(null);
+    }
   });
 
   it('builds project briefings and creates summarize tasks for memory clusters', () => {

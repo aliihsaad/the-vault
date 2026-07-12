@@ -103,6 +103,10 @@ export async function schedulePostSaveDuties(
       prompt: buildOrganizePrompt(item, organizeReasons, duplicateDetection.matches),
       context: {
         dutyType: 'post_save_organize',
+        // Duty results are applied to the source memory (or kept as task
+        // recommendations) — persisting them as standalone memories would
+        // flood the project with agent-activity noise.
+        skipResultMemory: true,
         source_item_uid: item.itemUid,
         duty_reasons: organizeReasons,
         duplicate_matches: duplicateDetection.matches,
@@ -130,6 +134,7 @@ export async function schedulePostSaveDuties(
       prompt: buildEnrichPrompt(item),
       context: {
         dutyType: 'post_save_enrich',
+        skipResultMemory: true,
         source_item_uid: item.itemUid,
         summary_length: item.summary.trim().length,
         current_summary: item.summary,
@@ -755,39 +760,55 @@ function buildOrganizePrompt(
     : 'Potential duplicates: none detected.';
 
   return [
-    'Review this saved memory and produce a concise curation note.',
-    'Focus on metadata quality, project reuse, and duplicate handling.',
+    'Review this saved memory and suggest metadata improvements.',
+    'Vault validates your suggestions and applies safe ones (tags and keywords are merged additively);',
+    'duplicate actions are recommendations only and require a human decision.',
     '',
     `Memory title: ${item.title}`,
     `Subject: ${item.subject}`,
     `Project: ${item.project}`,
+    `Summary: ${item.summary}`,
+    `Current tags: ${item.tags.join(', ') || '(none)'}`,
+    `Current keywords: ${item.keywords.join(', ') || '(none)'}`,
     '',
     'Why this task was scheduled:',
     ...reasons.map((reason) => `- ${reason}`),
     '',
     duplicateBlock,
     '',
-    'Return:',
-    '1. recommended tags',
-    '2. recommended keywords',
-    '3. recommended related files or related items',
-    '4. whether any duplicate should be merged or only linked, with rationale',
+    'Return ONLY a JSON object (no markdown fences, no prose) with this exact shape:',
+    '{',
+    '  "tags": ["2-6 short topical tags, lowercase"],',
+    '  "keywords": ["3-8 search-friendly terms, lowercase"],',
+    '  "duplicate_actions": [{"item_uid": "vm_...", "action": "merge" or "link", "rationale": "one sentence"}],',
+    '  "notes": "one-sentence curation rationale"',
+    '}',
+    'Only suggest tags/keywords that describe the actual topic. Omit duplicate_actions if there are no duplicates.',
   ].join('\n');
 }
 
 function buildEnrichPrompt(item: MemoryItem): string {
   return [
-    'Rewrite this saved memory into a stronger reusable note without changing its technical meaning.',
+    'Improve this saved memory without changing its technical meaning.',
+    'Vault validates your suggestions and applies safe ones: the summary replaces the current one',
+    'only if it is genuinely more informative; tags and keywords are merged additively;',
+    'next steps are only used if the memory has none yet.',
     '',
     `Title: ${item.title}`,
     `Subject: ${item.subject}`,
     `Current summary (${item.summary.trim().length} chars): ${item.summary}`,
+    item.content ? `Content excerpt: ${item.content.slice(0, 600)}` : '',
+    `Current tags: ${item.tags.join(', ') || '(none)'}`,
+    `Current keywords: ${item.keywords.join(', ') || '(none)'}`,
     '',
-    'Return:',
-    '1. an improved summary',
-    '2. optional next steps if they are clearly implied',
-    '3. any obvious metadata improvements',
-  ].join('\n');
+    'Return ONLY a JSON object (no markdown fences, no prose) with this exact shape:',
+    '{',
+    '  "summary": "improved 1-3 sentence summary, 40-400 chars, concrete and reusable",',
+    '  "tags": ["2-6 short topical tags, lowercase"],',
+    '  "keywords": ["3-8 search-friendly terms, lowercase"],',
+    '  "next_steps": ["only if clearly implied by the memory, else empty array"]',
+    '}',
+  ].filter(Boolean).join('\n');
 }
 
 function createDutyTaskIfMissing(
@@ -1099,9 +1120,13 @@ function mapMemoryRow(row: typeof memoryItems.$inferSelect): MemoryItem {
 
 const PROJECT_REVIEW_LAST_KEY = 'agent.project_maintenance.last_review_per_project';
 const PROJECT_REVIEW_DESCRIPTION_MIN_ITEMS = 3;
-const PROJECT_REVIEW_AI_TIMEOUT_MS = 6000;
+const PROJECT_REVIEW_AI_TIMEOUT_MS = 12000;
 const PROJECT_REVIEW_AI_MAX_TOKENS = 200;
 const PROJECT_REVIEW_RECENT_ITEMS_FOR_PROMPT = 6;
+const PROJECT_REVIEW_TOP_TAGS_FOR_PROMPT = 6;
+// Auto-generated bookkeeping tags that describe how a memory was created,
+// not what the project is about — useless as description evidence.
+const PROJECT_REVIEW_NOISE_TAGS = new Set(['task-result', 'delegated']);
 
 export async function executeProjectReview(
   db: DB,
@@ -1170,7 +1195,7 @@ export async function executeProjectReview(
         project: canonicalName,
         payload: { type: 'description', description },
         rationale: `Project has no description. Drafted from ${activeItems.length} active item(s).`,
-        confidence: isEnrichmentAvailable() ? 65 : 40,
+        confidence: 65,
         evidenceItemUids: activeItems
           .slice(0, PROJECT_REVIEW_RECENT_ITEMS_FOR_PROMPT)
           .map((item) => item.itemUid),
@@ -1340,31 +1365,24 @@ async function draftProjectDescription(
   projectName: string,
   items: MemoryItem[],
 ): Promise<string | null> {
-  const recent = [...items]
-    .sort(sortNewestFirst)
-    .slice(0, PROJECT_REVIEW_RECENT_ITEMS_FOR_PROMPT);
-
-  if (!isEnrichmentAvailable()) {
-    // Deterministic fallback: synthesize a one-liner from the most common
-    // memory types and most recent titles.
-    const typeCounts = new Map<string, number>();
-    for (const item of items) typeCounts.set(item.memoryType, (typeCounts.get(item.memoryType) ?? 0) + 1);
-    const topTypes = [...typeCounts.entries()]
-      .sort((l, r) => r[1] - l[1])
-      .slice(0, 3)
-      .map(([type, count]) => `${count} ${type}${count === 1 ? '' : 's'}`)
-      .join(', ');
-    const recentTitle = recent[0]?.title;
-    if (!recentTitle) return null;
-    return `Active project with ${items.length} memory items (${topTypes}). Most recent work: ${recentTitle}.`;
-  }
+  // Description proposals are only worth surfacing when an AI draft is
+  // possible. The old deterministic fallback produced item-count boilerplate
+  // ("Active project with N memory items...") that is a statistic, not a
+  // description — skipping here lets a later review retry once enrichment
+  // is configured instead of filing a junk proposal now.
+  if (!isEnrichmentAvailable()) return null;
 
   const client = getEnrichmentClient();
   if (!client) return null;
 
-  const itemsBlock = recent
+  const evidence = selectDescriptionEvidence(items);
+  if (evidence.length === 0) return null;
+
+  const itemsBlock = evidence
     .map((item) => `- [${item.memoryType}] ${item.title}: ${item.summary.slice(0, 160)}`)
     .join('\n');
+  const topTags = collectTopProjectTags(items);
+  const tagsLine = topTags.length > 0 ? `\nCommon tags: ${topTags.join(', ')}` : '';
 
   try {
     const result = await client.complete({
@@ -1372,7 +1390,7 @@ async function draftProjectDescription(
         'You write short factual project descriptions for an engineering memory system. '
         + 'Output ONE OR TWO sentences (max 240 chars total). State what the project is and what it does. '
         + 'No marketing language, no opinions, no quotes. Output ONLY the description text.',
-      userPrompt: `Project: ${projectName}\nItem count: ${items.length}\n\nRecent items:\n${itemsBlock}`,
+      userPrompt: `Project: ${projectName}\nItem count: ${items.length}${tagsLine}\n\nKey items:\n${itemsBlock}`,
       maxTokens: PROJECT_REVIEW_AI_MAX_TOKENS,
       temperature: 0.2,
       timeoutMs: PROJECT_REVIEW_AI_TIMEOUT_MS,
@@ -1383,6 +1401,55 @@ async function draftProjectDescription(
   } catch {
     return null;
   }
+}
+
+/**
+ * Pick the items that best describe what the project IS: promoted items,
+ * decisions, plans, and references first, then recent summaries/sessions.
+ * Delegated task-result noise and artifacts describe agent activity, not
+ * the project, and are excluded unless nothing else exists.
+ */
+function selectDescriptionEvidence(items: MemoryItem[]): MemoryItem[] {
+  const informative = [...items]
+    .filter((item) =>
+      item.memoryType !== 'artifact'
+      && !item.tags.some((tag) => PROJECT_REVIEW_NOISE_TAGS.has(tag)),
+    )
+    .sort(sortNewestFirst);
+  const pool = informative.length > 0 ? informative : [...items].sort(sortNewestFirst);
+
+  const isHighSignal = (item: MemoryItem) =>
+    item.promoted
+    || item.memoryType === 'decision'
+    || item.memoryType === 'plan'
+    || item.memoryType === 'reference';
+
+  const selected: MemoryItem[] = [];
+  const seen = new Set<string>();
+  for (const item of [...pool.filter(isHighSignal), ...pool]) {
+    if (seen.has(item.itemUid)) continue;
+    seen.add(item.itemUid);
+    selected.push(item);
+    if (selected.length >= PROJECT_REVIEW_RECENT_ITEMS_FOR_PROMPT) break;
+  }
+
+  return selected;
+}
+
+function collectTopProjectTags(items: MemoryItem[]): string[] {
+  const counts = new Map<string, number>();
+  for (const item of items) {
+    for (const tag of item.tags) {
+      if (PROJECT_REVIEW_NOISE_TAGS.has(tag)) continue;
+      counts.set(tag, (counts.get(tag) ?? 0) + 1);
+    }
+  }
+
+  return [...counts.entries()]
+    .filter(([, count]) => count > 1)
+    .sort((left, right) => right[1] - left[1])
+    .slice(0, PROJECT_REVIEW_TOP_TAGS_FOR_PROMPT)
+    .map(([tag]) => tag);
 }
 
 function emptyReviewResult(

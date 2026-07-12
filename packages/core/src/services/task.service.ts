@@ -14,7 +14,7 @@ import { CreateTaskInputSchema, FindTaskQuerySchema } from '../rules/validation.
 import { resolveModelRoute, mergeRoutingTable, DEFAULT_MODEL_ROUTING } from '../rules/model-routing.js';
 import { getSetting } from '../config/settings.js';
 import type { VaultTask, CreateTaskInput, FindTaskQuery, SaveMemoryResult, TaskQueueStats, ModelRoutingTable } from '../types/index.js';
-import type { MemoryType, TaskType } from '../rules/controlled-values.js';
+import type { MemoryType, RoutineType, TaskType } from '../rules/controlled-values.js';
 import type { BetterSQLite3Database } from 'drizzle-orm/better-sqlite3';
 import type * as schema from '../database/schema.js';
 
@@ -164,9 +164,10 @@ export function claimNextTask(
   const timestamp = now();
 
   // Build the claim query with priority ordering
-  const typeFilter = taskType
-    ? `AND task_type = '${taskType}'`
-    : '';
+  const typeFilter = taskType ? 'AND task_type = ?' : '';
+  const params = taskType
+    ? [timestamp, timestamp, taskType]
+    : [timestamp, timestamp];
 
   const result = raw.prepare(`
     UPDATE tasks
@@ -187,11 +188,98 @@ export function claimNextTask(
       LIMIT 1
     )
     RETURNING *
-  `).get(timestamp, timestamp) as Record<string, unknown> | undefined;
+  `).get(...params) as Record<string, unknown> | undefined;
 
   if (!result) return null;
 
   return mapRawRow(result);
+}
+
+// ---------------------------------------------------------------------------
+// Stale Running Task Recovery
+// ---------------------------------------------------------------------------
+
+/** How long a task may sit in 'running' before it is considered abandoned.
+ * Must exceed the worst-case execution time (image tasks: 2 models × 2
+ * modality variants × 120s ≈ 8 min) so a live executor in another process
+ * is never preempted. */
+const STALE_RUNNING_AFTER_MS = 15 * 60 * 1000;
+/** Abandoned tasks older than this are failed instead of requeued, so a
+ * crash from weeks ago does not silently trigger surprise executions. */
+const STALE_RETRY_WINDOW_MS = 24 * 60 * 60 * 1000;
+
+export interface StaleTaskRecoveryResult {
+  requeuedTaskUids: string[];
+  failedTaskUids: string[];
+}
+
+/**
+ * Recover tasks orphaned in 'running' status (executor process died mid-
+ * execution). Recently abandoned tasks with retries left are requeued as
+ * 'pending'; anything else is failed with an explicit error message.
+ */
+export function recoverStaleRunningTasks(
+  db: DB,
+  logsPath: string,
+  options?: { staleAfterMs?: number; retryWindowMs?: number },
+): StaleTaskRecoveryResult {
+  const staleAfterMs = options?.staleAfterMs ?? STALE_RUNNING_AFTER_MS;
+  const retryWindowMs = options?.retryWindowMs ?? STALE_RETRY_WINDOW_MS;
+  const nowMs = Date.now();
+  const result: StaleTaskRecoveryResult = { requeuedTaskUids: [], failedTaskUids: [] };
+
+  const runningRows = db.select().from(tasks)
+    .where(eq(tasks.status, 'running'))
+    .all();
+
+  for (const row of runningRows) {
+    const claimedAtMs = Date.parse(row.startedAt || row.updatedAt || row.createdAt);
+    const abandonedForMs = Number.isFinite(claimedAtMs) ? nowMs - claimedAtMs : Number.POSITIVE_INFINITY;
+    if (abandonedForMs < staleAfterMs) {
+      continue;
+    }
+
+    const timestamp = now();
+    const canRetry = row.retryCount < row.maxRetries && abandonedForMs < retryWindowMs;
+
+    if (canRetry) {
+      db.update(tasks)
+        .set({
+          status: 'pending',
+          retryCount: row.retryCount + 1,
+          startedAt: null,
+          errorMessage: null,
+          updatedAt: timestamp,
+        })
+        .where(eq(tasks.taskUid, row.taskUid))
+        .run();
+      result.requeuedTaskUids.push(row.taskUid);
+    } else {
+      db.update(tasks)
+        .set({
+          status: 'failed',
+          errorMessage: 'Task was abandoned in running status (executor interrupted) and could not be requeued.',
+          completedAt: timestamp,
+          updatedAt: timestamp,
+        })
+        .where(eq(tasks.taskUid, row.taskUid))
+        .run();
+      result.failedTaskUids.push(row.taskUid);
+    }
+
+    logActivity(db, logsPath, {
+      sourceClient: 'system',
+      project: row.project || undefined,
+      actionType: canRetry ? 'update' : 'task_fail',
+      targetItemId: row.taskUid,
+      status: canRetry ? 'success' : 'error',
+      message: canRetry
+        ? `Requeued stale running task: ${row.title}`
+        : `Failed stale running task: ${row.title}`,
+    });
+  }
+
+  return result;
 }
 
 // ---------------------------------------------------------------------------
@@ -200,6 +288,8 @@ export function claimNextTask(
 
 /**
  * Mark a task as completed with its result.
+ * Only pending/running tasks can complete — a task cancelled mid-flight
+ * must not be clobbered back to 'completed' when its LLM call returns.
  */
 export function completeTask(
   db: DB,
@@ -214,6 +304,7 @@ export function completeTask(
 
   const existing = getTask(db, taskUid);
   if (!existing) return null;
+  if (existing.status !== 'pending' && existing.status !== 'running') return null;
 
   db.update(tasks)
     .set({
@@ -279,6 +370,7 @@ export function completeTask(
 
 /**
  * Mark a task as failed with an error message.
+ * Only pending/running tasks can fail — cancelled/completed states are final.
  */
 export function failTask(
   db: DB,
@@ -291,6 +383,7 @@ export function failTask(
 
   const existing = getTask(db, taskUid);
   if (!existing) return null;
+  if (existing.status !== 'pending' && existing.status !== 'running') return null;
 
   db.update(tasks)
     .set({
@@ -367,6 +460,9 @@ export function retryTask(
 ): VaultTask | null {
   const existing = getTask(db, taskUid);
   if (!existing) return null;
+  // Only interrupted or failed executions may be retried — never resurrect
+  // a cancelled or completed task back into the queue.
+  if (existing.status !== 'running' && existing.status !== 'failed') return null;
   if (existing.retryCount >= existing.maxRetries) return null;
 
   const timestamp = now();
@@ -468,6 +564,9 @@ function persistTaskResultMemory(
   if (!task.project || !trimmedResult) {
     return null;
   }
+  if (task.context?.skipResultMemory === true) {
+    return null;
+  }
 
   const memoryType = getTaskResultMemoryType(task);
   const relatedItemIds = extractTaskRelatedItemIds(task);
@@ -478,21 +577,58 @@ function persistTaskResultMemory(
       title: getTaskResultMemoryTitle(task, memoryType),
       project: task.project,
       memoryType,
-      subject: `Delegated ${task.taskType} result`,
-      summary: buildTaskResultSummary(trimmedResult),
+      subject: getTaskResultSubject(task),
+      summary: buildTaskResultSummary(stripExecutorAnnotations(trimmedResult)),
       content: buildTaskResultContent(task, trimmedResult, resultMetadata),
       sourceApp: 'other',
-      routineType: 'implementation',
+      routineType: getTaskResultRoutineType(task),
       status: 'active',
       priority: task.priority === 'urgent' ? 'high' : 'normal',
       keywords: normalizeTaskKeywords(task),
-      tags: ['task-result', 'delegated', task.taskType],
+      tags: buildTaskResultTags(task),
       relatedItemIds,
       relatedFiles,
     });
   } catch {
     return null;
   }
+}
+
+/**
+ * Subject drives the strongest recall signals (SUBJECT_EXACT / query-text
+ * subject matching), so it must be the task's actual topic — never a
+ * generic boilerplate string shared by every task result.
+ */
+function getTaskResultSubject(task: VaultTask): string {
+  const contextSubject = task.context?.subject;
+  if (typeof contextSubject === 'string' && contextSubject.trim()) {
+    return contextSubject.trim();
+  }
+  return task.title;
+}
+
+/** Executor boundary annotations are metadata for the task result view; they
+ * must never leak into the 280-char memory summary used for recall matching. */
+function stripExecutorAnnotations(resultText: string): string {
+  return resultText.replace(/^\s*Executor note:[^\n]*\n+/i, '').trim() || resultText;
+}
+
+const TASK_ROUTINE_TYPE_MAP: Partial<Record<TaskType, RoutineType>> = {
+  coding: 'implementation',
+  analysis: 'review',
+  research: 'planning',
+  summarize: 'review',
+  organize: 'refactor',
+  enrich: 'refactor',
+};
+
+function getTaskResultRoutineType(task: VaultTask): RoutineType {
+  return TASK_ROUTINE_TYPE_MAP[task.taskType] ?? 'implementation';
+}
+
+function buildTaskResultTags(task: VaultTask): string[] {
+  const contextTags = extractStringArray(task.context?.tags).slice(0, 5);
+  return Array.from(new Set(['task-result', 'delegated', task.taskType, ...contextTags]));
 }
 
 function getTaskResultMemoryType(task: VaultTask): MemoryType {
@@ -629,18 +765,41 @@ function extractStringArray(value: unknown): string[] {
     : [];
 }
 
+/** Common words that carry no recall signal — keyword slots are scarce (8)
+ * and keyword overlap is scored per hit, so filler words dilute recall. */
+const KEYWORD_STOPWORDS = new Set([
+  'the', 'and', 'for', 'with', 'from', 'this', 'that', 'these', 'those',
+  'into', 'onto', 'over', 'under', 'about', 'after', 'before', 'between',
+  'then', 'than', 'when', 'what', 'which', 'while', 'where', 'their',
+  'have', 'has', 'had', 'was', 'were', 'will', 'been', 'being', 'are',
+  'not', 'you', 'your', 'all', 'any', 'can', 'could', 'should', 'would',
+  'out', 'new', 'use', 'using', 'used', 'also', 'each', 'per', 'via',
+  'please', 'make', 'give', 'take', 'get', 'set', 'run', 'its', 'our',
+]);
+
+function extractMeaningfulWords(text: string, limit: number): string[] {
+  return Array.from(new Set(
+    text
+      .toLowerCase()
+      .split(/[^a-z0-9]+/i)
+      .filter((word) => word.length > 2 && !KEYWORD_STOPWORDS.has(word)),
+  )).slice(0, limit);
+}
+
 function normalizeTaskKeywords(task: VaultTask): string[] {
-  const titleWords = task.title
-    .toLowerCase()
-    .split(/[^a-z0-9]+/i)
-    .filter((word) => word.length > 2)
+  const contextKeywords = extractStringArray(task.context?.keywords)
+    .map((keyword) => keyword.toLowerCase())
     .slice(0, 5);
+  const titleWords = extractMeaningfulWords(task.title, 5);
+  const promptWords = extractMeaningfulWords(task.prompt, 4);
 
   return Array.from(
     new Set([
       task.taskType,
       'task-result',
+      ...contextKeywords,
       ...titleWords,
+      ...promptWords,
     ]),
   ).slice(0, 8);
 }

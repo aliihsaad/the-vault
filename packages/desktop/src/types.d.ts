@@ -357,6 +357,8 @@ declare global {
 
   interface VaultSettings {
     vault_root: string;
+    ai_provider?: 'openrouter' | 'llm-hub';
+    llm_hub_base_url?: string;
     enrichment_model: string;
     enrichment_enabled: boolean;
     recall_max_results: number;
@@ -439,8 +441,13 @@ declare global {
     isFreeTier: boolean;
   }
 
+  interface LlmHubConnectionTestResult {
+    label: string;
+    modelCount: number;
+  }
+
   interface VaultApiAgentExecutionResult {
-    provider: 'openrouter';
+    provider: string;
     model: string;
     durationMs: number;
     output: string;
@@ -708,6 +715,8 @@ declare global {
     setModelRoutingTable: (overrides: Partial<ModelRoutingTable>) => Promise<VaultResponse<ModelRoutingTable>>;
     getOpenRouterModels: (apiKey: string) => Promise<VaultResponse<OpenRouterModelSummary[]>>;
     testOpenRouterApiKey: (apiKey: string) => Promise<VaultResponse<OpenRouterKeyTestResult>>;
+    getLlmHubModels: (baseUrl: string, apiKey: string) => Promise<VaultResponse<OpenRouterModelSummary[]>>;
+    testLlmHubConnection: (baseUrl: string, apiKey: string) => Promise<VaultResponse<LlmHubConnectionTestResult>>;
     executeVaultApiAgent: (input: VaultApiAgentExecutionInput) => Promise<VaultResponse<VaultApiAgentExecutionResult>>;
     getGraphifyRuntimeConfig: () => Promise<VaultResponse<GraphifyRuntimeConfig>>;
     saveGraphifyRuntimeConfig: (input: SaveGraphifyRuntimeConfigInput) => Promise<VaultResponse<GraphifyRuntimeConfig>>;

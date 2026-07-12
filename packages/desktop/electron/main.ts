@@ -21,9 +21,10 @@ let lazySpawnPty: NodePtySpawn | null = null;
 import {
   approveVaultCollabLaunchRequest,
   buildVaultCollabLaunchCommand,
+  createProviderClient,
   detectDuplicates,
   GraphifyBuildQueue,
-  OpenRouterClient,
+  OpenAICompatibleClient,
   executeVaultCollabAction,
   executeVaultCollabDashboardSessionRegistration,
   executeVaultCollabHandoffActions,
@@ -70,6 +71,7 @@ import type {
   VaultCollabPolicyPackSnapshot,
   VaultCollabRuntimeConfig,
   SaveVaultCollabRuntimeConfigInput,
+  AiProviderConfig,
 } from '@the-vault/core';
 
 // Recreate __dirname for ESM
@@ -84,10 +86,10 @@ vault.initialize();
 // The `enrichment_enabled` toggle in Settings is a user-facing kill switch only.
 function initializeEnrichment(): boolean {
   try {
-    const apiKey = resolveOpenRouterApiKey();
+    const config = getAiProviderConfig();
     const model = vault.getSetting('enrichment_model') as string;
 
-    if (!apiKey || !model) {
+    if (!config.apiKey || !model || (config.provider === 'llm-hub' && !config.baseUrl)) {
       vault.setEnrichmentClient(null);
       return false;
     }
@@ -95,12 +97,15 @@ function initializeEnrichment(): boolean {
     // Write a portably-encrypted copy so the MCP server can also read
     // the API key from the shared vault database (it can't use Electron safeStorage)
     const vaultRoot = vault.getVaultRoot();
-    vault.setSetting('openrouter_api_key_portable', portableEncrypt(apiKey, vaultRoot));
+    const portableKeyName = config.provider === 'llm-hub'
+      ? 'llm_hub_api_key_portable'
+      : 'openrouter_api_key_portable';
+    vault.setSetting(portableKeyName, portableEncrypt(config.apiKey, vaultRoot));
 
     // Auto-mark as enabled since we have valid credentials
     vault.setSetting('enrichment_enabled', true);
 
-    vault.setEnrichmentClient(new OpenRouterClient(apiKey, model));
+    vault.setEnrichmentClient(createProviderClient(config, model));
     return true;
   } catch (err) {
     console.error('[vault] initializeEnrichment failed:', err instanceof Error ? err.message : String(err));
@@ -327,6 +332,7 @@ const VITE_DEV_SERVER_URL = app.isPackaged ? undefined : process.env['VITE_DEV_S
 const taskExecutor = new TaskExecutor({
   vault,
   getApiKey: () => resolveOpenRouterApiKey(),
+  getProviderConfig: () => getAiProviderConfig(),
   emitEvent: (event) => {
     win?.webContents.send('vault:taskEvent', event);
   },
@@ -1221,28 +1227,28 @@ function decryptSecret(value: unknown): string {
 }
 
 /**
- * Resolve the OpenRouter API key with a fallback chain:
- *   1. VAULT_OPENROUTER_API_KEY env var
- *   2. electron-safe-storage / AES-GCM encrypted copy (openrouter_api_key)
- *   3. Portable AES-GCM encrypted copy (openrouter_api_key_portable)
+ * Resolve a provider API key with a fallback chain:
+ *   1. Env var override
+ *   2. electron-safe-storage / AES-GCM encrypted copy ({settingKey})
+ *   3. Portable AES-GCM encrypted copy ({settingKey}_portable)
  *
  * The portable blob is the cross-process share-line with the MCP server and
  * also the last-resort fallback if safeStorage can no longer decrypt (e.g.
  * DPAPI master key rotation on Windows).
  */
-function resolveOpenRouterApiKey(): string {
-  const envKey = (process.env.VAULT_OPENROUTER_API_KEY || '').trim();
+function resolveProviderApiKey(envVar: string, settingKey: string): string {
+  const envKey = (process.env[envVar] || '').trim();
   if (envKey) return envKey;
 
-  const primary = getSecretSetting('openrouter_api_key').trim();
+  const primary = getSecretSetting(settingKey).trim();
   if (primary) return primary;
 
-  const portableBlob = vault.getSetting('openrouter_api_key_portable');
+  const portableBlob = vault.getSetting(`${settingKey}_portable`);
   if (portableBlob) {
     try {
       const portable = portableDecrypt(portableBlob, vault.getVaultRoot()).trim();
       if (portable) {
-        console.warn('[vault] safeStorage decrypt failed or empty — using portable fallback for openrouter_api_key');
+        console.warn(`[vault] safeStorage decrypt failed or empty — using portable fallback for ${settingKey}`);
         return portable;
       }
     } catch (err) {
@@ -1253,6 +1259,32 @@ function resolveOpenRouterApiKey(): string {
   return '';
 }
 
+function resolveOpenRouterApiKey(): string {
+  return resolveProviderApiKey('VAULT_OPENROUTER_API_KEY', 'openrouter_api_key');
+}
+
+function resolveLlmHubApiKey(): string {
+  return resolveProviderApiKey('VAULT_LLM_HUB_API_KEY', 'llm_hub_api_key');
+}
+
+/**
+ * Resolve the active AI provider configuration for the executor and
+ * enrichment. Priority: env override > vault setting > OpenRouter default.
+ */
+function getAiProviderConfig(): AiProviderConfig {
+  const provider = (process.env.VAULT_AI_PROVIDER || String(vault.getSetting('ai_provider') || '')).trim();
+
+  if (provider === 'llm-hub') {
+    return {
+      provider: 'llm-hub',
+      apiKey: resolveLlmHubApiKey(),
+      baseUrl: (process.env.VAULT_LLM_HUB_BASE_URL || String(vault.getSetting('llm_hub_base_url') || '')).trim(),
+    };
+  }
+
+  return { provider: 'openrouter', apiKey: resolveOpenRouterApiKey() };
+}
+
 function getSecretSetting(key: string): string {
   const value = vault.getSetting(key);
   return decryptSecret(value);
@@ -1261,13 +1293,13 @@ function getSecretSetting(key: string): string {
 function setSecretSetting(key: string, value: string): void {
   vault.setSetting(key, encryptSecret(value));
 
-  // Mirror the OpenRouter key into the portable AES-GCM copy at save time,
-  // so the fallback chain always has something to decrypt even if safeStorage
-  // later fails (DPAPI rotation, packaging change, etc).
-  if (key === 'openrouter_api_key' && value) {
+  // Mirror provider API keys into a portable AES-GCM copy at save time, so
+  // the fallback chain (and the MCP server) always has something to decrypt
+  // even if safeStorage later fails (DPAPI rotation, packaging change, etc).
+  if ((key === 'openrouter_api_key' || key === 'llm_hub_api_key') && value) {
     try {
       vault.setSetting(
-        'openrouter_api_key_portable',
+        `${key}_portable`,
         portableEncrypt(value, vault.getVaultRoot()),
       );
     } catch (err) {
@@ -1350,7 +1382,7 @@ async function testOpenRouterApiKey(apiKey: string): Promise<{
 }
 
 async function executeVaultApiAgent(input: { prompt?: unknown; memoryContext?: unknown }): Promise<{
-  provider: 'openrouter';
+  provider: string;
   model: string;
   durationMs: number;
   output: string;
@@ -1364,12 +1396,15 @@ async function executeVaultApiAgent(input: { prompt?: unknown; memoryContext?: u
     throw new Error('Prompt is required.');
   }
 
-  const apiKey = resolveOpenRouterApiKey();
+  const providerConfig = getAiProviderConfig();
   const model = String(vault.getSetting('enrichment_model') || '').trim();
   const enrichmentEnabled = Boolean(vault.getSetting('enrichment_enabled'));
 
-  if (!apiKey || !model) {
-    throw new Error('Configure an OpenRouter API key and enrichment model in Settings first.');
+  if (!providerConfig.apiKey || !model) {
+    throw new Error('Configure an AI provider API key and enrichment model in Settings first.');
+  }
+  if (providerConfig.provider === 'llm-hub' && !providerConfig.baseUrl) {
+    throw new Error('Configure the LLM-Hub base URL in Settings first.');
   }
 
   if (!enrichmentEnabled) {
@@ -1377,7 +1412,7 @@ async function executeVaultApiAgent(input: { prompt?: unknown; memoryContext?: u
   }
 
   const memoryContext = typeof input?.memoryContext === 'string' ? input.memoryContext.trim() : '';
-  const client = new OpenRouterClient(apiKey, model);
+  const client = createProviderClient(providerConfig, model);
   const startedAt = Date.now();
   const result = await client.complete({
     systemPrompt: [
@@ -1396,11 +1431,38 @@ async function executeVaultApiAgent(input: { prompt?: unknown; memoryContext?: u
   });
 
   return {
-    provider: 'openrouter',
+    provider: providerConfig.provider,
     model: result.model || model,
     durationMs: Date.now() - startedAt,
     output: result.text,
     usage: result.usage,
+  };
+}
+
+/**
+ * List models from an LLM-Hub (OpenAI-compatible) endpoint, mapped to the
+ * same summary shape the OpenRouter model list uses so the Settings
+ * dropdowns work identically for both providers.
+ */
+async function getLlmHubModels(baseUrl: string, apiKey: string): Promise<OpenRouterModel[]> {
+  const client = new OpenAICompatibleClient({
+    baseUrl,
+    apiKey,
+    model: 'unused-for-listing',
+    providerLabel: 'LLM-Hub',
+  });
+
+  return client.listModels();
+}
+
+async function testLlmHubConnection(baseUrl: string, apiKey: string): Promise<{
+  label: string;
+  modelCount: number;
+}> {
+  const models = await getLlmHubModels(baseUrl, apiKey);
+  return {
+    label: 'LLM-Hub connected',
+    modelCount: models.length,
   };
 }
 
@@ -3202,6 +3264,22 @@ app.whenReady().then(() => {
   ipcMain.handle('vault:testOpenRouterApiKey', async (_, apiKey) => {
     try {
       return { success: true, data: await testOpenRouterApiKey(apiKey) };
+    } catch (e: any) {
+      return { success: false, error: e.message };
+    }
+  });
+
+  ipcMain.handle('vault:getLlmHubModels', async (_, baseUrl, apiKey) => {
+    try {
+      return { success: true, data: await getLlmHubModels(baseUrl, apiKey) };
+    } catch (e: any) {
+      return { success: false, error: e.message };
+    }
+  });
+
+  ipcMain.handle('vault:testLlmHubConnection', async (_, baseUrl, apiKey) => {
+    try {
+      return { success: true, data: await testLlmHubConnection(baseUrl, apiKey) };
     } catch (e: any) {
       return { success: false, error: e.message };
     }

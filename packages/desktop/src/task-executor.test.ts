@@ -548,6 +548,16 @@ function createVaultHarness(
       state.set(taskUid, updated);
       return updated;
     }),
+    recoverStaleRunningTasks: vi.fn(() => ({
+      requeuedTaskUids: [],
+      failedTaskUids: [],
+    })),
+    applyDutyTaskResult: vi.fn((taskUid: string) => ({
+      taskUid,
+      targetMemoryUid: null,
+      applied: false,
+      appliedFields: [],
+    })),
     executeStaleArchival: vi.fn(() => ({
       archivedItemUids: [],
       promotedItemUids: [],

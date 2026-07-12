@@ -1,6 +1,10 @@
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
-import { OpenRouterClient, type GeneratedImage } from './openrouter-client.js';
+import {
+  createProviderClient,
+  type AiProviderConfig,
+  type GeneratedImage,
+} from './openrouter-client.js';
 import { buildProjectContextPack } from './project-context-pack.service.js';
 import type { ModelRouteConfig, VaultTask } from '../types/index.js';
 import type { TaskType } from '../rules/controlled-values.js';
@@ -72,9 +76,15 @@ interface TaskExecutorClient {
 export interface TaskExecutorOptions {
   vault: Vault;
   getApiKey: () => string;
+  /**
+   * Optional provider resolution. When supplied, it takes precedence over
+   * getApiKey and selects which AI provider executes tasks (OpenRouter or an
+   * OpenAI-compatible hub like LLM-Hub with a configurable base URL).
+   */
+  getProviderConfig?: () => AiProviderConfig;
   emitEvent: (event: TaskExecutorEvent) => void;
   pollIntervalMs?: number;
-  createClient?: (apiKey: string, modelId: string) => TaskExecutorClient;
+  createClient?: (apiKey: string, modelId: string, providerConfig?: AiProviderConfig) => TaskExecutorClient;
 }
 
 interface TaskExecutionSuccess {
@@ -86,9 +96,10 @@ export class TaskExecutor {
   private static readonly MAINTENANCE_INTERVAL_MS = 60 * 60 * 1000;
   private readonly vault: Vault;
   private readonly getApiKey: () => string;
+  private readonly getProviderConfig?: () => AiProviderConfig;
   private readonly emitEvent: (event: TaskExecutorEvent) => void;
   private readonly pollIntervalMs: number;
-  private readonly createClient: (apiKey: string, modelId: string) => TaskExecutorClient;
+  private readonly createClient: (apiKey: string, modelId: string, providerConfig?: AiProviderConfig) => TaskExecutorClient;
   private timer: NodeJS.Timeout | null = null;
   private running = false;
   private processing = false;
@@ -103,9 +114,20 @@ export class TaskExecutor {
   constructor(options: TaskExecutorOptions) {
     this.vault = options.vault;
     this.getApiKey = options.getApiKey;
+    this.getProviderConfig = options.getProviderConfig;
     this.emitEvent = options.emitEvent;
     this.pollIntervalMs = options.pollIntervalMs ?? 5000;
-    this.createClient = options.createClient ?? ((apiKey, modelId) => new OpenRouterClient(apiKey, modelId));
+    this.createClient = options.createClient
+      ?? ((apiKey, modelId, providerConfig) =>
+        createProviderClient(providerConfig ?? { provider: 'openrouter', apiKey }, modelId));
+  }
+
+  private resolveProviderConfig(): AiProviderConfig {
+    const config = this.getProviderConfig?.();
+    if (config) {
+      return config;
+    }
+    return { provider: 'openrouter', apiKey: this.getApiKey() };
   }
 
   start(): TaskExecutorStatus {
@@ -158,6 +180,7 @@ export class TaskExecutor {
     this.lastTickAt = new Date().toISOString();
 
     try {
+      this.recoverStaleTasks();
       this.runMaintenanceIfDue();
 
       const task = this.vault.claimNextTask();
@@ -170,10 +193,26 @@ export class TaskExecutor {
 
       const execution = await this.executeTask(task);
       const completedTask = this.vault.completeTask(task.taskUid, execution.text, execution.metadata);
+
+      if (!completedTask) {
+        // The task left pending/running state mid-flight (e.g. user cancelled
+        // it while the model call was running) — its final state must win.
+        const currentTask = this.vault.getTask(task.taskUid);
+        this.emit('task-cancelled', currentTask, `Task no longer completable: ${task.title}`, {
+          status: currentTask?.status ?? 'unknown',
+        });
+        return;
+      }
+
       this.processedCount += 1;
       this.lastCompletedAt = new Date().toISOString();
       this.lastError = null;
-      this.emit('task-completed', completedTask, `Completed task: ${task.title}`, execution.metadata);
+
+      const dutyApply = this.applyDutyResultIfNeeded(completedTask);
+      this.emit('task-completed', completedTask, `Completed task: ${task.title}`, {
+        ...execution.metadata,
+        ...(dutyApply ? { dutyApplied: dutyApply.applied, dutyAppliedFields: dutyApply.appliedFields } : {}),
+      });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       this.lastError = message;
@@ -181,7 +220,9 @@ export class TaskExecutor {
 
       if (this.activeTaskUid) {
         const failedTask = this.vault.getTask(this.activeTaskUid);
-        if (failedTask && failedTask.retryCount < failedTask.maxRetries) {
+        if (failedTask && failedTask.status === 'cancelled') {
+          this.emit('task-cancelled', failedTask, `Task was cancelled during execution: ${failedTask.title}`);
+        } else if (failedTask && failedTask.retryCount < failedTask.maxRetries) {
           const retriedTask = this.vault.retryTask(failedTask.taskUid);
           this.emit('task-retried', retriedTask, `Retrying task: ${failedTask.title}`, {
             error: message,
@@ -198,6 +239,52 @@ export class TaskExecutor {
     } finally {
       this.activeTaskUid = null;
       this.processing = false;
+    }
+  }
+
+  private applyDutyResultIfNeeded(task: VaultTask): { applied: boolean; appliedFields: string[] } | null {
+    const dutyType = task.context?.dutyType;
+    if (dutyType !== 'post_save_enrich' && dutyType !== 'post_save_organize') {
+      return null;
+    }
+
+    try {
+      const result = this.vault.applyDutyTaskResult(task.taskUid);
+      return { applied: result.applied, appliedFields: result.appliedFields };
+    } catch {
+      // Applying suggestions is best-effort; the raw result stays on the
+      // task either way.
+      return { applied: false, appliedFields: [] };
+    }
+  }
+
+  private recoverStaleTasks(): void {
+    // Heal tasks orphaned in 'running' by a crashed/quit executor process so
+    // queue stats never show phantom running tasks. Cheap (one indexed read),
+    // so it runs every tick; the staleness threshold protects tasks a live
+    // executor in another process is still working on.
+    try {
+      const recovery = this.vault.recoverStaleRunningTasks();
+      for (const taskUid of recovery.requeuedTaskUids) {
+        this.emitEvent({
+          type: 'task-retried',
+          taskUid,
+          task: this.vault.getTask(taskUid),
+          timestamp: new Date().toISOString(),
+          message: 'Requeued task abandoned by an interrupted executor.',
+        });
+      }
+      for (const taskUid of recovery.failedTaskUids) {
+        this.emitEvent({
+          type: 'task-failed',
+          taskUid,
+          task: this.vault.getTask(taskUid),
+          timestamp: new Date().toISOString(),
+          message: 'Failed task abandoned by an interrupted executor.',
+        });
+      }
+    } catch {
+      // Recovery is best-effort; it must never block normal task processing.
     }
   }
 
@@ -218,14 +305,22 @@ export class TaskExecutor {
     }
 
     const route = this.getEffectiveRoute(task);
-    const apiKey = this.getApiKey().trim();
+    const providerConfig = this.resolveProviderConfig();
+    providerConfig.apiKey = providerConfig.apiKey.trim();
 
-    if (!apiKey) {
-      throw new Error('OpenRouter API key is not configured.');
+    if (!providerConfig.apiKey) {
+      throw new Error(
+        providerConfig.provider === 'llm-hub'
+          ? 'LLM-Hub API key is not configured.'
+          : 'OpenRouter API key is not configured.',
+      );
+    }
+    if (providerConfig.provider === 'llm-hub' && !providerConfig.baseUrl?.trim()) {
+      throw new Error('LLM-Hub base URL is not configured.');
     }
 
     if (task.taskType === 'image' || /dall-e|image/i.test(route.modelId)) {
-      return this.executeImageTask(task, route, apiKey);
+      return this.executeImageTask(task, route, providerConfig);
     }
 
     const projectContext = await this.buildProjectContextBlock(task);
@@ -243,7 +338,7 @@ export class TaskExecutor {
       const startedAt = Date.now();
 
       try {
-        const client = this.createClient(apiKey, modelId);
+        const client = this.createClient(providerConfig.apiKey, modelId, providerConfig);
         const result = await client.complete({
           systemPrompt,
           userPrompt: prompt,
@@ -277,7 +372,7 @@ export class TaskExecutor {
   private async executeImageTask(
     task: VaultTask,
     route: ModelRouteConfig,
-    apiKey: string,
+    providerConfig: AiProviderConfig,
   ): Promise<TaskExecutionSuccess> {
     const prompt = buildImagePrompt(task);
     const aspectRatio = getStringTaskContextValue(task, 'aspectRatio')
@@ -298,7 +393,7 @@ export class TaskExecutor {
 
     for (let index = 0; index < modelsToTry.length; index += 1) {
       const modelId = modelsToTry[index];
-      const client = this.createClient(apiKey, modelId);
+      const client = this.createClient(providerConfig.apiKey, modelId, providerConfig);
 
       for (const modalities of modalityVariants) {
         const startedAt = Date.now();
@@ -460,7 +555,7 @@ function stripInternalContextKeys(context: Record<string, unknown> | undefined):
   if (!context) {
     return {};
   }
-  const { skipProjectContext: _skip, ...rest } = context;
+  const { skipProjectContext: _skip, skipResultMemory: _skipMemory, ...rest } = context;
   return rest;
 }
 

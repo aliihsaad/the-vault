@@ -454,7 +454,19 @@ export { DEFAULT_VAULT_ROOT } from './config/vault-root.js';
 
 // Enrichment
 export { detectDuplicates } from './services/enrichment.service.js';
-export { OpenRouterClient, EnrichmentError } from './services/openrouter-client.js';
+export {
+  OpenRouterClient,
+  OpenAICompatibleClient,
+  EnrichmentError,
+  createProviderClient,
+  normalizeProviderBaseUrl,
+} from './services/openrouter-client.js';
+export type {
+  AiProviderId,
+  AiProviderConfig,
+  OpenAICompatibleClientOptions,
+  ProviderModelSummary,
+} from './services/openrouter-client.js';
 export { TaskExecutor } from './services/task-executor.js';
 export type {
   TaskExecutorEvent,
@@ -462,6 +474,9 @@ export type {
   TaskExecutorOptions,
   TaskExecutorStatus,
 } from './services/task-executor.js';
+export type { StaleTaskRecoveryResult } from './services/task.service.js';
+export { applyDutyTaskResult, parseDutySuggestion } from './services/duty-apply.service.js';
+export type { DutyApplyResult } from './services/duty-apply.service.js';
 export type {
   EnrichmentClient,
   CompletionParams,

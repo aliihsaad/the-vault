@@ -44,8 +44,14 @@ import {
   failTask as failTaskService,
   cancelTask as cancelTaskService,
   retryTask as retryTaskService,
+  recoverStaleRunningTasks as recoverStaleRunningTasksService,
   getTaskQueueStats as getTaskQueueStatsService,
+  type StaleTaskRecoveryResult,
 } from './services/task.service.js';
+import {
+  applyDutyTaskResult as applyDutyTaskResultService,
+  type DutyApplyResult,
+} from './services/duty-apply.service.js';
 import {
   schedulePostSaveDuties as schedulePostSaveDutiesService,
   executeDuplicateDetection as executeDuplicateDetectionService,
@@ -1078,6 +1084,24 @@ export class Vault {
   retryTask(taskUid: string): VaultTask | null {
     this.ensureInitialized();
     return retryTaskService(this.db, taskUid);
+  }
+
+  /**
+   * Apply the structured suggestions from a completed enrich/organize duty
+   * task back to its source memory (validated, additive, never destructive).
+   */
+  applyDutyTaskResult(taskUid: string): DutyApplyResult {
+    this.ensureInitialized();
+    return applyDutyTaskResultService(this.db, this.vaultRoot, this.logsPath, taskUid);
+  }
+
+  /**
+   * Recover tasks orphaned in 'running' status by an interrupted executor.
+   * Requeues recently abandoned tasks with retries left; fails the rest.
+   */
+  recoverStaleRunningTasks(options?: { staleAfterMs?: number; retryWindowMs?: number }): StaleTaskRecoveryResult {
+    this.ensureInitialized();
+    return recoverStaleRunningTasksService(this.db, this.logsPath, options);
   }
 
   /**

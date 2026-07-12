@@ -17,7 +17,12 @@ type DB = BetterSQLite3Database<typeof schema>;
  */
 const DEFAULT_SETTINGS: Record<string, unknown> = {
   vault_root: DEFAULT_VAULT_ROOT,
+  // AI provider selection: 'openrouter' (fixed base URL) or 'llm-hub'
+  // (OpenAI-compatible, user-configured base URL + API key).
+  ai_provider: 'openrouter',
   openrouter_api_key: '',
+  llm_hub_api_key: '',
+  llm_hub_base_url: '',
   enrichment_model: '',
   enrichment_enabled: false,
   recall_max_results: 10,

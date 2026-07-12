@@ -47,6 +47,8 @@ contextBridge.exposeInMainWorld('vaultAPI', {
   setModelRoutingTable: (overrides: unknown) => ipcRenderer.invoke('vault:setModelRoutingTable', overrides),
   getOpenRouterModels: (apiKey: string) => ipcRenderer.invoke('vault:getOpenRouterModels', apiKey),
   testOpenRouterApiKey: (apiKey: string) => ipcRenderer.invoke('vault:testOpenRouterApiKey', apiKey),
+  getLlmHubModels: (baseUrl: string, apiKey: string) => ipcRenderer.invoke('vault:getLlmHubModels', baseUrl, apiKey),
+  testLlmHubConnection: (baseUrl: string, apiKey: string) => ipcRenderer.invoke('vault:testLlmHubConnection', baseUrl, apiKey),
   executeVaultApiAgent: (input: unknown) => ipcRenderer.invoke('vault:executeVaultApiAgent', input),
   getGraphifyRuntimeConfig: () => ipcRenderer.invoke('vault:getGraphifyRuntimeConfig'),
   saveGraphifyRuntimeConfig: (input: unknown) => ipcRenderer.invoke('vault:saveGraphifyRuntimeConfig', input),

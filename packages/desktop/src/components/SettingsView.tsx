@@ -45,7 +45,7 @@ type EditableSettings = Pick<
   | 'auto_log'
 >;
 
-type SettingsTabId = 'overview' | 'extensions' | 'connections' | 'skills' | 'prompts';
+type SettingsTabId = 'overview' | 'ai' | 'memory' | 'extensions' | 'connections' | 'skills' | 'prompts';
 
 type AgentDutiesState = {
   projectMaintenanceEnabled: boolean;
@@ -211,7 +211,9 @@ const SETTINGS_TABS: Array<{
   group: string;
   icon: typeof Bot;
 }> = [
-  { id: 'overview', label: 'Runtime', description: 'Runtime behavior and enrichment defaults', group: 'Operate', icon: Gauge },
+  { id: 'overview', label: 'Overview', description: 'Vault status, runtime root, and product orientation', group: 'Operate', icon: Gauge },
+  { id: 'ai', label: 'AI & Models', description: 'Provider, API keys, enrichment model, and task routing', group: 'Operate', icon: Sparkles },
+  { id: 'memory', label: 'Memory & Recall', description: 'Recall sizing and background agent duties', group: 'Operate', icon: Bot },
   { id: 'extensions', label: 'Extensions', description: 'Graphify runtime and project graph controls', group: 'Operate', icon: Network },
   { id: 'connections', label: 'Client setup', description: 'Connect Codex, Claude Desktop, or another MCP client', group: 'Install', icon: Wifi },
   { id: 'skills', label: 'Install guides', description: 'Copy or download the full client guidance files', group: 'Reference', icon: BookCopy },
@@ -389,6 +391,10 @@ export function SettingsView({ vaultStatus }: { vaultStatus: VaultStatus | null 
   const [settings, setSettings] = useState<VaultSettings>(DEFAULT_SETTINGS);
   const [routingTable, setRoutingTable] = useState<ModelRoutingTable>(DEFAULT_ROUTING_TABLE);
   const [apiKey, setApiKey] = useState('');
+  const [aiProvider, setAiProvider] = useState<'openrouter' | 'llm-hub'>('openrouter');
+  const [llmHubBaseUrl, setLlmHubBaseUrl] = useState('');
+  const [llmHubApiKey, setLlmHubApiKey] = useState('');
+  const [llmHubTestResult, setLlmHubTestResult] = useState<LlmHubConnectionTestResult | null>(null);
   const [models, setModels] = useState<OpenRouterModelSummary[]>(FALLBACK_MODELS);
   const [testingKey, setTestingKey] = useState(false);
   const [loadingModels, setLoadingModels] = useState(false);
@@ -426,9 +432,10 @@ export function SettingsView({ vaultStatus }: { vaultStatus: VaultStatus | null 
     setMessage(null);
 
     try {
-      const [response, secretResponse, routingResponse] = await Promise.all([
+      const [response, secretResponse, llmHubSecretResponse, routingResponse] = await Promise.all([
         window.vaultAPI.getAllSettings(),
         window.vaultAPI.getSecretSetting('openrouter_api_key'),
+        window.vaultAPI.getSecretSetting('llm_hub_api_key'),
         window.vaultAPI.getModelRoutingTable(),
       ]);
 
@@ -449,10 +456,16 @@ export function SettingsView({ vaultStatus }: { vaultStatus: VaultStatus | null 
         ...response.data,
       };
       const nextRoutingTable = routingResponse.data;
+      const nextProvider = nextSettings.ai_provider === 'llm-hub' ? 'llm-hub' : 'openrouter';
+      const nextLlmHubBaseUrl = typeof nextSettings.llm_hub_base_url === 'string' ? nextSettings.llm_hub_base_url : '';
+      const nextLlmHubApiKey = llmHubSecretResponse.success ? (llmHubSecretResponse.data || '') : '';
 
       setSettings(nextSettings);
       setRoutingTable(nextRoutingTable);
       setApiKey(secretResponse.data || '');
+      setAiProvider(nextProvider);
+      setLlmHubBaseUrl(nextLlmHubBaseUrl);
+      setLlmHubApiKey(nextLlmHubApiKey);
 
       const raw = response.data as Record<string, unknown>;
       const num = (key: string, fallback: number): number => {
@@ -474,10 +487,17 @@ export function SettingsView({ vaultStatus }: { vaultStatus: VaultStatus | null 
         staleArchivedToPendingDeleteDays: num('agent.stale_archival.archived_to_pending_delete_days', DEFAULT_AGENT_DUTIES.staleArchivedToPendingDeleteDays),
       });
 
-      if (secretResponse.data) {
-        await loadModels(secretResponse.data, collectSelectedTextModels(nextSettings.enrichment_model, nextRoutingTable));
+      const selectedModels = collectSelectedTextModels(nextSettings.enrichment_model, nextRoutingTable);
+      if (nextProvider === 'llm-hub') {
+        if (nextLlmHubBaseUrl && nextLlmHubApiKey) {
+          await loadLlmHubModels(nextLlmHubBaseUrl, nextLlmHubApiKey, selectedModels);
+        } else {
+          setModels(ensureSelectedModels([], selectedModels));
+        }
+      } else if (secretResponse.data) {
+        await loadModels(secretResponse.data, selectedModels);
       } else {
-        setModels(ensureSelectedModels(FALLBACK_MODELS, collectSelectedTextModels(nextSettings.enrichment_model, nextRoutingTable)));
+        setModels(ensureSelectedModels(FALLBACK_MODELS, selectedModels));
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load settings');
@@ -683,6 +703,84 @@ export function SettingsView({ vaultStatus }: { vaultStatus: VaultStatus | null 
     }
   }
 
+  async function loadLlmHubModels(baseUrl: string, key: string, selectedModels: string[]) {
+    if (!baseUrl.trim() || !key.trim()) {
+      setModels(ensureSelectedModels([], selectedModels));
+      return;
+    }
+
+    setLoadingModels(true);
+
+    try {
+      const response = await window.vaultAPI.getLlmHubModels(baseUrl.trim(), key.trim());
+      if (!response.success || !response.data) {
+        throw new Error(response.error || 'Failed to load LLM-Hub model list');
+      }
+
+      setModels(ensureSelectedModels(response.data, selectedModels));
+    } catch (err) {
+      setModels(ensureSelectedModels([], selectedModels));
+      setError(err instanceof Error ? err.message : 'Failed to load LLM-Hub model list');
+    } finally {
+      setLoadingModels(false);
+    }
+  }
+
+  async function handleTestLlmHubConnection() {
+    if (!llmHubBaseUrl.trim() || !llmHubApiKey.trim()) {
+      setError('Enter the LLM-Hub base URL and API key before testing.');
+      setLlmHubTestResult(null);
+      return;
+    }
+
+    setTestingKey(true);
+    setError(null);
+    setMessage(null);
+
+    try {
+      const [testResponse] = await Promise.all([
+        window.vaultAPI.testLlmHubConnection(llmHubBaseUrl.trim(), llmHubApiKey.trim()),
+        loadLlmHubModels(llmHubBaseUrl, llmHubApiKey, collectSelectedTextModels(settings.enrichment_model, routingTable)),
+      ]);
+
+      if (!testResponse.success || !testResponse.data) {
+        throw new Error(testResponse.error || 'LLM-Hub connection test failed');
+      }
+
+      setLlmHubTestResult(testResponse.data);
+      setMessage(`LLM-Hub connected — ${testResponse.data.modelCount} models available.`);
+    } catch (err) {
+      setLlmHubTestResult(null);
+      setError(err instanceof Error ? err.message : 'LLM-Hub connection test failed');
+    } finally {
+      setTestingKey(false);
+    }
+  }
+
+  function refreshActiveProviderModels() {
+    const selectedModels = collectSelectedTextModels(settings.enrichment_model, routingTable);
+    if (aiProvider === 'llm-hub') {
+      void loadLlmHubModels(llmHubBaseUrl, llmHubApiKey, selectedModels);
+    } else {
+      void loadModels(apiKey.trim(), selectedModels);
+    }
+  }
+
+  function switchAiProvider(nextProvider: 'openrouter' | 'llm-hub') {
+    setAiProvider(nextProvider);
+    setTestResult(null);
+    setLlmHubTestResult(null);
+
+    const selectedModels = collectSelectedTextModels(settings.enrichment_model, routingTable);
+    if (nextProvider === 'llm-hub') {
+      void loadLlmHubModels(llmHubBaseUrl, llmHubApiKey, selectedModels);
+    } else if (apiKey.trim()) {
+      void loadModels(apiKey.trim(), selectedModels);
+    } else {
+      setModels(ensureSelectedModels(FALLBACK_MODELS, selectedModels));
+    }
+  }
+
   async function handleTestApiKey() {
     if (!apiKey.trim()) {
       setError('Enter an OpenRouter API key before testing.');
@@ -756,9 +854,24 @@ export function SettingsView({ vaultStatus }: { vaultStatus: VaultStatus | null 
         }
       }
 
+      const providerResponse = await window.vaultAPI.setSetting('ai_provider', aiProvider);
+      if (!providerResponse.success) {
+        throw new Error(providerResponse.error || 'Failed to save AI provider');
+      }
+
+      const baseUrlResponse = await window.vaultAPI.setSetting('llm_hub_base_url', llmHubBaseUrl.trim());
+      if (!baseUrlResponse.success) {
+        throw new Error(baseUrlResponse.error || 'Failed to save LLM-Hub base URL');
+      }
+
       const secretResponse = await window.vaultAPI.setSecretSetting('openrouter_api_key', apiKey.trim());
       if (!secretResponse.success) {
         throw new Error(secretResponse.error || 'Failed to save API key');
+      }
+
+      const llmHubSecretResponse = await window.vaultAPI.setSecretSetting('llm_hub_api_key', llmHubApiKey.trim());
+      if (!llmHubSecretResponse.success) {
+        throw new Error(llmHubSecretResponse.error || 'Failed to save LLM-Hub API key');
       }
 
       const routingResponse = await window.vaultAPI.setModelRoutingTable(routingTable);
@@ -982,13 +1095,12 @@ export function SettingsView({ vaultStatus }: { vaultStatus: VaultStatus | null 
         <section className="section-intro">
           <div className="section-intro-copy">
             <span className="section-intro-eyebrow">Settings</span>
-            <div className="section-intro-title">Set the operating posture first, then refine the advanced behavior</div>
-            <p className="section-intro-text">The overview tab now separates “how Vault runs” from “how much recall it returns” and “how delegated tasks are routed”, so you can tune the product in the same order you think about it.</p>
+            <div className="section-intro-title">Where this vault runs and how it is meant to be used</div>
+            <p className="section-intro-text">This tab shows the live runtime and product orientation. Configure the AI provider and model routing under “AI &amp; Models”, and recall sizing plus agent duties under “Memory &amp; Recall”.</p>
           </div>
           <div className="section-intro-meta">
             <span className="section-intro-chip">runtime</span>
-            <span className="section-intro-chip">recall packing</span>
-            <span className="section-intro-chip">task routing</span>
+            <span className="section-intro-chip">status</span>
           </div>
         </section>
 
@@ -1086,6 +1198,42 @@ export function SettingsView({ vaultStatus }: { vaultStatus: VaultStatus | null 
             </div>
           </section>
 
+          <section className="panel settings-section">
+            <div className="panel-header">
+              <div>
+                <div className="panel-title">Current product focus</div>
+                <div className="panel-subtitle">What is meant to feel solid now versus what is still secondary.</div>
+              </div>
+              <ShieldCheck size={18} className="panel-icon" />
+            </div>
+
+            <div className="note-card">
+              <p>This desktop UI writes settings to the local vault store and reloads them on refresh.</p>
+              <p>Provider API keys are stored encrypted at rest. On Windows and macOS Vault uses Electron safe storage when available; otherwise it falls back to AES-256-GCM local encryption.</p>
+              <p>Core memory, structured save, recall ranking, similarity checks, and file-backed persistence are the product center. The multi-agent control plane is still secondary to this memory workflow.</p>
+            </div>
+          </section>
+        </div>
+      </div>
+    );
+  }
+
+  function renderMemoryTab() {
+    return (
+      <div className="settings-tab-panel">
+        <section className="section-intro">
+          <div className="section-intro-copy">
+            <span className="section-intro-eyebrow">Memory &amp; Recall</span>
+            <div className="section-intro-title">Tune the recall context budget and background maintenance</div>
+            <p className="section-intro-text">Recall sizing controls how much context comes back per query. Agent duties are the opt-in background passes that keep the registry clean — they only produce reviewable proposals.</p>
+          </div>
+          <div className="section-intro-meta">
+            <span className="section-intro-chip">recall packing</span>
+            <span className="section-intro-chip">agent duties</span>
+          </div>
+        </section>
+
+        <div className="settings-grid">
           <section className="panel settings-section">
             <div className="panel-header">
               <div>
@@ -1319,12 +1467,34 @@ export function SettingsView({ vaultStatus }: { vaultStatus: VaultStatus | null 
           </section>
         </div>
 
+      </div>
+    );
+  }
+
+  function renderAiModelsTab() {
+    const selectedPresetId = getSelectedRoutingPreset();
+
+    return (
+      <div className="settings-tab-panel">
+        <section className="section-intro">
+          <div className="section-intro-copy">
+            <span className="section-intro-eyebrow">AI &amp; Models</span>
+            <div className="section-intro-title">One provider, one model list, one routing table</div>
+            <p className="section-intro-text">Pick the AI provider and credentials first — the model dropdowns load from it. Then choose the enrichment model and route each delegated task type to a cheaper or stronger model.</p>
+          </div>
+          <div className="section-intro-meta">
+            <span className="section-intro-chip">provider</span>
+            <span className="section-intro-chip">enrichment</span>
+            <span className="section-intro-chip">task routing</span>
+          </div>
+        </section>
+
         <div className="settings-grid">
           <section className="panel settings-section">
             <div className="panel-header">
               <div>
-                <div className="panel-title">Enrichment pipeline</div>
-                <div className="panel-subtitle">Optional model-backed metadata generation and enrichment settings.</div>
+                <div className="panel-title">AI provider &amp; enrichment</div>
+                <div className="panel-subtitle">Credentials, model source, and the enrichment model used for metadata generation.</div>
               </div>
               <Sparkles size={18} className="panel-icon" />
             </div>
@@ -1343,6 +1513,21 @@ export function SettingsView({ vaultStatus }: { vaultStatus: VaultStatus | null 
               </label>
 
               <label className="field-row">
+                <span className="field-label">AI provider</span>
+                <select
+                  className="text-input"
+                  value={aiProvider}
+                  onChange={(event) => switchAiProvider(event.target.value === 'llm-hub' ? 'llm-hub' : 'openrouter')}
+                >
+                  <option value="openrouter">OpenRouter</option>
+                  <option value="llm-hub">LLM-Hub (OpenAI-compatible)</option>
+                </select>
+                <span className="field-help">
+                  Drives the task executor, enrichment, and the Vault API backend. OpenRouter uses its fixed endpoint; LLM-Hub uses your own base URL.
+                </span>
+              </label>
+
+              <label className="field-row">
                 <span className="field-label">Enrichment model</span>
                 <select
                   className="text-input"
@@ -1357,43 +1542,95 @@ export function SettingsView({ vaultStatus }: { vaultStatus: VaultStatus | null 
                   ))}
                 </select>
                 <span className="field-help">
-                  {loadingModels ? 'Refreshing model list...' : 'Model list comes from OpenRouter when available, otherwise Vault falls back to a safe built-in list.'}
+                  {loadingModels
+                    ? 'Refreshing model list...'
+                    : aiProvider === 'llm-hub'
+                      ? 'Model list comes from your LLM-Hub /models endpoint. Test the connection to load it.'
+                      : 'Model list comes from OpenRouter when available, otherwise Vault falls back to a safe built-in list.'}
                 </span>
               </label>
 
-              <label className="field-row">
-                <span className="field-label">OpenRouter API key</span>
-                <input
-                  className="text-input"
-                  type="password"
-                  value={apiKey}
-                  onChange={(event) => setApiKey(event.target.value)}
-                  placeholder="Stored locally in encrypted form"
-                />
-                <div className="inline-actions">
-                  <button
-                    type="button"
-                    className="header-button"
-                    onClick={() => void handleTestApiKey()}
-                    disabled={testingKey || loading}
-                  >
-                    <Wifi size={16} />
-                    <span>{testingKey ? 'Testing...' : 'Test API key'}</span>
-                  </button>
-                  <button
-                    type="button"
-                    className="header-button"
-                    onClick={() => void loadModels(apiKey.trim(), collectSelectedTextModels(settings.enrichment_model, routingTable))}
-                    disabled={loadingModels || !apiKey.trim()}
-                  >
-                    <Sparkles size={16} />
-                    <span>{loadingModels ? 'Loading models...' : 'Refresh models'}</span>
-                  </button>
-                </div>
-                <span className="field-help">The key is saved locally in encrypted form and tested against OpenRouter before use.</span>
-              </label>
+              {aiProvider === 'openrouter' ? (
+                <label className="field-row">
+                  <span className="field-label">OpenRouter API key</span>
+                  <input
+                    className="text-input"
+                    type="password"
+                    value={apiKey}
+                    onChange={(event) => setApiKey(event.target.value)}
+                    placeholder="Stored locally in encrypted form"
+                  />
+                  <div className="inline-actions">
+                    <button
+                      type="button"
+                      className="header-button"
+                      onClick={() => void handleTestApiKey()}
+                      disabled={testingKey || loading}
+                    >
+                      <Wifi size={16} />
+                      <span>{testingKey ? 'Testing...' : 'Test API key'}</span>
+                    </button>
+                    <button
+                      type="button"
+                      className="header-button"
+                      onClick={refreshActiveProviderModels}
+                      disabled={loadingModels || !apiKey.trim()}
+                    >
+                      <Sparkles size={16} />
+                      <span>{loadingModels ? 'Loading models...' : 'Refresh models'}</span>
+                    </button>
+                  </div>
+                  <span className="field-help">The key is saved locally in encrypted form and tested against OpenRouter before use.</span>
+                </label>
+              ) : (
+                <>
+                  <label className="field-row">
+                    <span className="field-label">LLM-Hub base URL</span>
+                    <input
+                      className="text-input"
+                      type="text"
+                      value={llmHubBaseUrl}
+                      onChange={(event) => setLlmHubBaseUrl(event.target.value)}
+                      placeholder="http://localhost:3000/v1"
+                    />
+                    <span className="field-help">OpenAI-compatible API root of your LLM-Hub instance (the /v1 path).</span>
+                  </label>
 
-              {testResult ? (
+                  <label className="field-row">
+                    <span className="field-label">LLM-Hub API key</span>
+                    <input
+                      className="text-input"
+                      type="password"
+                      value={llmHubApiKey}
+                      onChange={(event) => setLlmHubApiKey(event.target.value)}
+                      placeholder="Stored locally in encrypted form"
+                    />
+                    <div className="inline-actions">
+                      <button
+                        type="button"
+                        className="header-button"
+                        onClick={() => void handleTestLlmHubConnection()}
+                        disabled={testingKey || loading}
+                      >
+                        <Wifi size={16} />
+                        <span>{testingKey ? 'Testing...' : 'Test connection'}</span>
+                      </button>
+                      <button
+                        type="button"
+                        className="header-button"
+                        onClick={refreshActiveProviderModels}
+                        disabled={loadingModels || !llmHubBaseUrl.trim() || !llmHubApiKey.trim()}
+                      >
+                        <Sparkles size={16} />
+                        <span>{loadingModels ? 'Loading models...' : 'Refresh models'}</span>
+                      </button>
+                    </div>
+                    <span className="field-help">The key is saved locally in encrypted form. Testing fetches the model list from your hub.</span>
+                  </label>
+                </>
+              )}
+
+              {aiProvider === 'openrouter' && testResult ? (
                 <div className="note-card">
                   <div className="detail-section-title">
                     <KeyRound size={16} />
@@ -1403,6 +1640,17 @@ export function SettingsView({ vaultStatus }: { vaultStatus: VaultStatus | null 
                   <p>Remaining limit: {testResult.limitRemaining ?? 'unknown'}</p>
                   <p>Total usage: {testResult.usage ?? 'unknown'}</p>
                   <p>Free tier: {testResult.isFreeTier ? 'yes' : 'no'}</p>
+                </div>
+              ) : null}
+
+              {aiProvider === 'llm-hub' && llmHubTestResult ? (
+                <div className="note-card">
+                  <div className="detail-section-title">
+                    <KeyRound size={16} />
+                    <span>Last connection test</span>
+                  </div>
+                  <p>Status: {llmHubTestResult.label}</p>
+                  <p>Models available: {llmHubTestResult.modelCount}</p>
                 </div>
               ) : null}
             </div>
@@ -1524,23 +1772,7 @@ export function SettingsView({ vaultStatus }: { vaultStatus: VaultStatus | null 
 
             <div className="note-card">
               <p>For cost control, keep lightweight flows like organize, enrich, and summarize on cheaper models. Reserve the heavier models for coding and analysis only when the quality difference is worth it.</p>
-              <p>The desktop model still comes from the enrichment/OpenRouter selector above. This routing section is specifically for delegated tasks and the background executor.</p>
-            </div>
-          </section>
-
-          <section className="panel settings-section">
-            <div className="panel-header">
-              <div>
-                <div className="panel-title">Current product focus</div>
-                <div className="panel-subtitle">What is meant to feel solid now versus what is still secondary.</div>
-              </div>
-              <ShieldCheck size={18} className="panel-icon" />
-            </div>
-
-            <div className="note-card">
-              <p>This desktop UI writes settings to the local vault store and reloads them on refresh.</p>
-              <p>The OpenRouter API key is stored encrypted at rest. On Windows and macOS Vault uses Electron safe storage when available; otherwise it falls back to AES-256-GCM local encryption.</p>
-              <p>Core memory, structured save, recall ranking, similarity checks, and file-backed persistence are the product center. The multi-agent control plane is still secondary to this memory workflow.</p>
+              <p>The desktop model still comes from the provider selector above. This routing section is specifically for delegated tasks and the background executor.</p>
             </div>
           </section>
         </div>
@@ -2129,6 +2361,10 @@ export function SettingsView({ vaultStatus }: { vaultStatus: VaultStatus | null 
     switch (activeTab) {
       case 'overview':
         return renderOverviewTab();
+      case 'ai':
+        return renderAiModelsTab();
+      case 'memory':
+        return renderMemoryTab();
       case 'extensions':
         return renderExtensionsTab();
       case 'connections':
@@ -2261,10 +2497,10 @@ export function SettingsView({ vaultStatus }: { vaultStatus: VaultStatus | null 
             <div className="settings-active-actions">
               {message ? <span className="success-text">{message}</span> : null}
               {error ? <span className="error-text">{error}</span> : null}
-              {activeTab === 'overview' ? (
+              {activeTab === 'overview' || activeTab === 'ai' || activeTab === 'memory' ? (
                 <button type="button" className="primary-button" onClick={() => void saveSettings()} disabled={loading || saving}>
                   <Save size={16} />
-                  <span>{saving ? 'Saving...' : 'Save runtime settings'}</span>
+                  <span>{saving ? 'Saving...' : 'Save settings'}</span>
                 </button>
               ) : (
                 <span className="settings-save-hint">No runtime save needed on this tab</span>
