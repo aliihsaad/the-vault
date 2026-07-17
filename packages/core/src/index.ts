@@ -267,8 +267,13 @@ export {
 } from './services/graphify-project.service.js';
 
 export {
+  checkGraphifyUpdate,
+  compareGraphifyVersions,
   detectGraphifyRuntime,
+  fetchLatestGraphifyVersion,
+  parseGraphifyVersionOutput,
   planGraphifyInstall,
+  planGraphifyUpdate,
   resolveGraphifyCommandForRuntimeConfig,
 } from './services/graphify-runtime.service.js';
 
@@ -317,6 +322,8 @@ export {
 
 export {
   buildGraphifyProjectGraph,
+  hasActiveGraphifyBuilds,
+  isGraphifyBuildActive,
 } from './services/graphify-build.service.js';
 
 export type {
@@ -414,17 +421,24 @@ export type {
 } from './services/graphify-instruction-sync.service.js';
 
 export type {
+  CheckGraphifyUpdateInput,
   DetectGraphifyRuntimeInput,
+  FetchLatestGraphifyVersionInput,
   GraphifyAvailableTools,
   GraphifyCommandResult,
   GraphifyCommandRunner,
   GraphifyDetectedCli,
   GraphifyDetectedTool,
+  GraphifyFetchLike,
   GraphifyInstallCommandPreview,
   GraphifyInstallPlan,
   GraphifyInstaller,
+  GraphifyLatestVersionResult,
   GraphifyRuntimeStatus,
+  GraphifyUpdateCheck,
+  GraphifyUpdatePlan,
   PlanGraphifyInstallInput,
+  PlanGraphifyUpdateInput,
 } from './services/graphify-runtime.service.js';
 
 // Validation schemas (useful for MCP server)

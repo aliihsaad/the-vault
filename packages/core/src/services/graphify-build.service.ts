@@ -3,11 +3,14 @@ import { chmod, cp, lstat, mkdir, readdir, rm } from 'node:fs/promises';
 import { dirname, join, relative, resolve } from 'node:path';
 import { now } from '../utils/datetime.js';
 import { slugify } from '../rules/naming.js';
-import { isGraphifyExcludedSourcePath } from '../rules/graphify.js';
+import { GRAPHIFY_BUILD_STALE_MS, isGraphifyExcludedSourcePath } from '../rules/graphify.js';
 import { exportGraphifyProjectCorpus } from './graphify-corpus.service.js';
 import { getGraphifyRuntimeConfig } from './graphify-config.service.js';
 import { assertGraphifySemanticBuildAllowed } from './graphify-quality.service.js';
-import { resolveGraphifyCommandForRuntimeConfig } from './graphify-runtime.service.js';
+import {
+  parseGraphifyVersionOutput,
+  resolveGraphifyCommandForRuntimeConfig,
+} from './graphify-runtime.service.js';
 import { getGraphifyProjectStatus, recordGraphifyBuild } from './graphify-project.service.js';
 import { getGraphifyProjectPaths } from './graphify-paths.service.js';
 import { discoverGraphifyArtifacts } from './graphify-artifact.service.js';
@@ -77,7 +80,17 @@ const activeProjectBuilds = new Set<string>();
 
 // A build that crashes the process can leave its lock file behind; treat locks older
 // than this (comfortably above the desktop build timeout) as stale and reclaim them.
-const GRAPHIFY_BUILD_LOCK_STALE_MS = 35 * 60 * 1000;
+const GRAPHIFY_BUILD_LOCK_STALE_MS = GRAPHIFY_BUILD_STALE_MS;
+
+/** True while any Graphify build is running in this process (build/queue/MCP path). */
+export function hasActiveGraphifyBuilds(): boolean {
+  return activeProjectBuilds.size > 0;
+}
+
+/** True while a Graphify build for this specific project is running in this process. */
+export function isGraphifyBuildActive(project: string): boolean {
+  return activeProjectBuilds.has(slugify(project));
+}
 
 /**
  * Single-flight guard around the build pipeline. Two concurrent builds for the same
@@ -201,6 +214,20 @@ async function runBuildGraphifyProjectGraph(
     'update',
     graphifyInputRoot,
   ];
+  const processOptions: GraphifyBuildProcessOptions = {
+    cwd: graphifyInputRoot,
+    logPath,
+    artifactRoot: paths.artifactRoot,
+    corpusRoot: paths.corpusRoot,
+    memoryExportRoot: paths.memoryExportRoot,
+    sourceRoot,
+    env: vizEnv,
+  };
+  // Stamp the CLI version that actually produces this graph; fall back to the last
+  // known version when `--version` fails so a flaky detect never blanks history.
+  const detectedGraphifyVersion = await detectGraphifyVersionForBuild(input.commandRunner, command, processOptions)
+    ?? status.state?.detectedGraphifyVersion
+    ?? null;
 
   recordGraphifyBuild(db, {
     buildId,
@@ -211,7 +238,7 @@ async function runBuildGraphifyProjectGraph(
     completedAt: null,
     artifactPaths: null,
     graphStats: null,
-    detectedGraphifyVersion: status.state?.detectedGraphifyVersion ?? null,
+    detectedGraphifyVersion,
     logPath,
     errorMessage: null,
   });
@@ -219,15 +246,7 @@ async function runBuildGraphifyProjectGraph(
   let processResult: GraphifyBuildProcessResult;
   let runnerError: unknown = null;
   try {
-    processResult = await input.commandRunner(command, args, {
-      cwd: graphifyInputRoot,
-      logPath,
-      artifactRoot: paths.artifactRoot,
-      corpusRoot: paths.corpusRoot,
-      memoryExportRoot: paths.memoryExportRoot,
-      sourceRoot,
-      env: vizEnv,
-    });
+    processResult = await input.commandRunner(command, args, processOptions);
   } catch (error) {
     runnerError = error;
     processResult = {
@@ -265,7 +284,7 @@ async function runBuildGraphifyProjectGraph(
       logPath,
       artifactPaths: null,
       graphStats: null,
-      detectedGraphifyVersion: status.state?.detectedGraphifyVersion ?? null,
+      detectedGraphifyVersion,
       errorMessage,
     });
   }
@@ -320,7 +339,7 @@ async function runBuildGraphifyProjectGraph(
       logPath,
       artifactPaths: null,
       graphStats: null,
-      detectedGraphifyVersion: status.state?.detectedGraphifyVersion ?? null,
+      detectedGraphifyVersion,
       errorMessage,
     });
   }
@@ -348,9 +367,25 @@ async function runBuildGraphifyProjectGraph(
     logPath,
     artifactPaths: discovery.artifactPaths,
     graphStats: discovery.graphStats,
-    detectedGraphifyVersion: status.state?.detectedGraphifyVersion ?? null,
+    detectedGraphifyVersion,
     errorMessage: null,
   });
+}
+
+async function detectGraphifyVersionForBuild(
+  commandRunner: GraphifyBuildProcessRunner,
+  command: string,
+  options: GraphifyBuildProcessOptions,
+): Promise<string | null> {
+  try {
+    const result = await commandRunner(command, ['--version'], options);
+    if (result.exitCode !== 0) {
+      return null;
+    }
+    return parseGraphifyVersionOutput(`${result.stdout ?? ''}\n${result.stderr ?? ''}`);
+  } catch {
+    return null;
+  }
 }
 
 function finishBuild(

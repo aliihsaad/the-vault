@@ -54,6 +54,8 @@ contextBridge.exposeInMainWorld('vaultAPI', {
   saveGraphifyRuntimeConfig: (input: unknown) => ipcRenderer.invoke('vault:saveGraphifyRuntimeConfig', input),
   detectGraphifyRuntime: () => ipcRenderer.invoke('vault:detectGraphifyRuntime'),
   planGraphifyInstall: (input: unknown) => ipcRenderer.invoke('vault:planGraphifyInstall', input),
+  checkGraphifyUpdate: () => ipcRenderer.invoke('vault:checkGraphifyUpdate'),
+  updateGraphifyRuntime: () => ipcRenderer.invoke('vault:updateGraphifyRuntime'),
   getGraphifyProjectStatus: (project: string) => ipcRenderer.invoke('vault:getGraphifyProjectStatus', project),
   setGraphifyProjectSourceRoot: (project: string, sourceRoot: string) => ipcRenderer.invoke('vault:setGraphifyProjectSourceRoot', project, sourceRoot),
   chooseGraphifyProjectSourceRoot: (project: string) => ipcRenderer.invoke('vault:chooseGraphifyProjectSourceRoot', project),

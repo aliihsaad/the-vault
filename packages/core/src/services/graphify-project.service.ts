@@ -1,8 +1,11 @@
 import { and, desc, eq } from 'drizzle-orm';
-import { resolve } from 'node:path';
+import { existsSync, statSync } from 'node:fs';
+import { join, resolve } from 'node:path';
 import { graphifyBuilds, graphifyProjectState } from '../database/schema.js';
 import { now } from '../utils/datetime.js';
 import { slugify } from '../rules/naming.js';
+import { GRAPHIFY_BUILD_STALE_MS } from '../rules/graphify.js';
+import { getGraphifyProjectPaths } from './graphify-paths.service.js';
 import {
   getProjectWorkspace,
   normalizeWorkspaceProject,
@@ -82,13 +85,27 @@ export function upsertGraphifyProjectState(
   return mapProjectStateRow(saved);
 }
 
+export interface GraphifyProjectStatusOptions {
+  /** Enables the interrupted-build lock check under `<vaultRoot>/extensions/graphify`. */
+  vaultRoot?: string;
+  /** In-process guard: true while a build for the project is actually running. */
+  isBuildActive?: (project: string) => boolean;
+  /** Test hook for the current time in epoch milliseconds. */
+  nowMs?: number;
+}
+
 export function getGraphifyProjectStatus(
   db: DB,
   project: string,
   workspaceRegistry?: ProjectWorkspaceRegistry | null,
+  options?: GraphifyProjectStatusOptions,
 ): GraphifyProjectStatus {
   const normalizedProject = requireProject(project);
-  const state = getGraphifyProjectState(db, normalizedProject);
+  const state = reconcileInterruptedGraphifyBuild(
+    db,
+    getGraphifyProjectState(db, normalizedProject),
+    options,
+  );
   const enabled = state?.enabled ?? true;
   const sourceRoot = state?.sourceRoot ?? null;
   const freshness = state?.freshness ?? 'missing';
@@ -306,6 +323,101 @@ export function getGraphifyBuildHistory(
     .limit(limit)
     .all()
     .map(mapBuildRow);
+}
+
+/**
+ * Self-healing for builds that died with their process: a state stuck in
+ * 'building'/'queued' longer than the stale window, with no live in-process build and
+ * no fresh build lock, is reconciled on the next status read — 'stale' when a usable
+ * graph.json still exists on disk, 'failed' for an interrupted build without
+ * artifacts, 'missing' for an abandoned queue entry. The dangling build record (if
+ * any) is closed as failed so history stops showing a forever-running build.
+ */
+function reconcileInterruptedGraphifyBuild(
+  db: DB,
+  state: GraphifyProjectState | null,
+  options?: GraphifyProjectStatusOptions,
+): GraphifyProjectState | null {
+  if (!state || (state.freshness !== 'building' && state.freshness !== 'queued')) {
+    return state;
+  }
+
+  // 'queued' rows keep the previous build's start time, so their age is measured from
+  // the moment the queued freshness was written instead.
+  const referenceTimestamp = state.freshness === 'building'
+    ? state.lastBuildStartedAt ?? state.updatedAt
+    : state.updatedAt;
+  const referenceMs = Date.parse(referenceTimestamp ?? '');
+  const nowMs = options?.nowMs ?? Date.now();
+  if (!Number.isFinite(referenceMs) || nowMs - referenceMs < GRAPHIFY_BUILD_STALE_MS) {
+    return state;
+  }
+  if (options?.isBuildActive?.(state.project)) {
+    return state;
+  }
+  if (options?.vaultRoot && hasFreshGraphifyBuildLock(options.vaultRoot, state.project, nowMs)) {
+    return state;
+  }
+
+  const interruptedMessage = 'Graphify build was interrupted before completion (app quit or crash); Vault recovered the project state automatically.';
+  const artifactsUsable = Boolean(
+    state.artifactPaths.graphJson && existsSync(state.artifactPaths.graphJson),
+  );
+
+  if (state.freshness === 'building' && state.latestBuildId) {
+    const danglingBuild = db
+      .select()
+      .from(graphifyBuilds)
+      .where(eq(graphifyBuilds.buildId, state.latestBuildId))
+      .get();
+    if (danglingBuild && (danglingBuild.status === 'building' || danglingBuild.status === 'queued')) {
+      recordGraphifyBuild(db, {
+        buildId: danglingBuild.buildId,
+        project: state.project,
+        status: 'failed',
+        buildMode: danglingBuild.buildMode as GraphifyProjectState['buildMode'],
+        startedAt: danglingBuild.startedAt,
+        completedAt: now(),
+        artifactPaths: null,
+        graphStats: null,
+        detectedGraphifyVersion: state.detectedGraphifyVersion,
+        logPath: danglingBuild.logPath,
+        errorMessage: interruptedMessage,
+      });
+    }
+  }
+
+  const finalFreshness = artifactsUsable
+    ? 'stale'
+    : state.freshness === 'building'
+      ? 'failed'
+      : 'missing';
+  const refreshed = getGraphifyProjectState(db, state.project) ?? state;
+
+  return upsertGraphifyProjectState(db, {
+    project: refreshed.project,
+    enabled: refreshed.enabled,
+    sourceRoot: refreshed.sourceRoot,
+    freshness: finalFreshness,
+    buildMode: refreshed.buildMode,
+    latestBuildId: refreshed.latestBuildId,
+    artifactPaths: refreshed.artifactPaths,
+    graphStats: refreshed.graphStats,
+    detectedGraphifyVersion: refreshed.detectedGraphifyVersion,
+    failureCount: refreshed.failureCount,
+    lastError: finalFreshness === 'failed' ? interruptedMessage : refreshed.lastError,
+    lastBuildStartedAt: refreshed.lastBuildStartedAt,
+    lastBuildCompletedAt: refreshed.lastBuildCompletedAt,
+  });
+}
+
+function hasFreshGraphifyBuildLock(vaultRoot: string, project: string, nowMs: number): boolean {
+  try {
+    const lockPath = join(getGraphifyProjectPaths(vaultRoot, project).projectRoot, 'build.lock');
+    return nowMs - statSync(lockPath).mtimeMs < GRAPHIFY_BUILD_STALE_MS;
+  } catch {
+    return false;
+  }
 }
 
 function applyBuildToProjectState(

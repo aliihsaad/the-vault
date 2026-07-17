@@ -25,6 +25,7 @@ import type {
   GraphifyInstallPlan,
   GraphifyRuntimeConfig,
   GraphifyRuntimeStatus,
+  GraphifyUpdateCheck,
   VaultCollabInstallPlan,
   VaultCollabRuntimeConfig,
   VaultCollabRuntimeStatus,
@@ -429,6 +430,9 @@ export function SettingsView({ vaultStatus }: { vaultStatus: VaultStatus | null 
   const [graphifyInstallPlan, setGraphifyInstallPlan] = useState<GraphifyInstallPlan | null>(null);
   const [graphifyError, setGraphifyError] = useState<string | null>(null);
   const [loadingGraphify, setLoadingGraphify] = useState(false);
+  const [graphifyUpdateCheck, setGraphifyUpdateCheck] = useState<GraphifyUpdateCheck | null>(null);
+  const [graphifyUpdating, setGraphifyUpdating] = useState(false);
+  const [graphifyUpdateResult, setGraphifyUpdateResult] = useState<{ ok: boolean; message: string } | null>(null);
   const [vaultCollabConfig, setVaultCollabConfig] = useState<VaultCollabRuntimeConfig | null>(null);
   const [vaultCollabRuntimeStatus, setVaultCollabRuntimeStatus] = useState<VaultCollabRuntimeStatus | null>(null);
   const [vaultCollabInstallPlan, setVaultCollabInstallPlan] = useState<VaultCollabInstallPlan | null>(null);
@@ -577,12 +581,52 @@ export function SettingsView({ vaultStatus }: { vaultStatus: VaultStatus | null 
       if (installPlanResponse.success && installPlanResponse.data) {
         setGraphifyInstallPlan(installPlanResponse.data);
       }
+
+      // Automatic update check: installed version vs latest PyPI release. Offline or
+      // failed checks degrade to a disabled update action, never to an error state.
+      if (runtimeStatus?.graphify.available) {
+        const updateCheckResponse = await window.vaultAPI.checkGraphifyUpdate();
+        setGraphifyUpdateCheck(updateCheckResponse.success && updateCheckResponse.data
+          ? updateCheckResponse.data
+          : null);
+      } else {
+        setGraphifyUpdateCheck(null);
+      }
     } catch (err) {
       setGraphifyError(err instanceof Error ? err.message : 'Failed to load Graphify extension');
       setGraphifyRuntimeStatus(null);
       setGraphifyInstallPlan(null);
+      setGraphifyUpdateCheck(null);
     } finally {
       setLoadingGraphify(false);
+    }
+  }
+
+  async function runGraphifyUpdate() {
+    setGraphifyUpdating(true);
+    setGraphifyUpdateResult(null);
+    try {
+      const response = await window.vaultAPI.updateGraphifyRuntime();
+      if (!response.success || !response.data) {
+        throw new Error(response.error || 'Graphify update failed.');
+      }
+      const rebuilds = response.data.rebuildsQueued;
+      setGraphifyUpdateResult({
+        ok: true,
+        message: `Graphify updated to ${response.data.installedVersion ?? 'an unknown version'}${
+          rebuilds.length > 0
+            ? `. Graph rebuilds queued for: ${rebuilds.join(', ')}.`
+            : '.'
+        }`,
+      });
+      await loadGraphifyExtension();
+    } catch (err) {
+      setGraphifyUpdateResult({
+        ok: false,
+        message: err instanceof Error ? err.message : 'Graphify update failed.',
+      });
+    } finally {
+      setGraphifyUpdating(false);
     }
   }
 
@@ -1895,6 +1939,8 @@ export function SettingsView({ vaultStatus }: { vaultStatus: VaultStatus | null 
           runtimeStatus: graphifyRuntimeStatus,
           installPlan: graphifyInstallPlan,
           detectionError: graphifyError,
+          updateCheck: graphifyUpdateCheck,
+          updating: graphifyUpdating,
         })
       : null;
     const GraphifyStateIcon = graphifyModel?.state === 'installed'
@@ -1987,6 +2033,9 @@ export function SettingsView({ vaultStatus }: { vaultStatus: VaultStatus | null 
                 <div className="graphify-status-meta">
                   <span>{graphifyConfig.runtimeMode}</span>
                   <strong>{graphifyModel.installedVersion || 'not installed'}</strong>
+                  {graphifyModel.latestVersion ? (
+                    <span>{graphifyModel.updateAvailable ? `update ${graphifyModel.latestVersion}` : `latest ${graphifyModel.latestVersion}`}</span>
+                  ) : null}
                 </div>
               </div>
 
@@ -2035,6 +2084,38 @@ export function SettingsView({ vaultStatus }: { vaultStatus: VaultStatus | null 
                   </div>
                 </div>
               </div>
+
+              {graphifyModel.state === 'installed' ? (
+                <div className="snippet-card">
+                  <div className="snippet-head">
+                    <div>
+                      <div className="field-label">Runtime updates</div>
+                      <div className="field-help">
+                        {graphifyModel.updateAvailable && graphifyModel.latestVersion
+                          ? `Graphify ${graphifyModel.latestVersion} is published on PyPI (installed: ${graphifyModel.installedVersion ?? 'unknown'}). Updating upgrades the managed runtime and queues project graph rebuilds so new features (like named communities) appear.`
+                          : graphifyModel.updateCheckError
+                            ? `Update check failed: ${graphifyModel.updateCheckError}`
+                            : graphifyModel.actions.update.reason || 'Vault checks PyPI for newer Graphify releases on every detect.'}
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      className="header-button"
+                      onClick={() => void runGraphifyUpdate()}
+                      disabled={!graphifyModel.actions.update.enabled}
+                      title={graphifyModel.actions.update.reason || graphifyModel.actions.update.label}
+                    >
+                      <RefreshCw size={16} />
+                      <span>{graphifyModel.actions.update.label}</span>
+                    </button>
+                  </div>
+                  {graphifyUpdateResult ? (
+                    <div className={`note-card${graphifyUpdateResult.ok ? '' : ' note-card-warning'}`}>
+                      <p>{graphifyUpdateResult.message}</p>
+                    </div>
+                  ) : null}
+                </div>
+              ) : null}
 
               {graphifyModel.state !== 'installed' ? (
                 <div className="snippet-card">

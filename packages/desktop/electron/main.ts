@@ -33,6 +33,7 @@ import {
   executeVaultCollabHandoffActions,
   portableDecrypt,
   portableEncrypt,
+  getGraphifyExtensionPaths,
   getVaultCollabExtensionPaths,
   resolveGraphifyCommandForRuntimeConfig,
   resolveVaultCollabCliPath,
@@ -1018,6 +1019,128 @@ function getGraphifyArtifactPathByName(
 
 function runGraphifyVersionCommand(command: string, args: string[]): Promise<GraphifyCommandResult> {
   return runProcess(command, args, { timeoutMs: 8000 });
+}
+
+const GRAPHIFY_UPDATE_TIMEOUT_MS = 10 * 60 * 1000;
+const GRAPHIFY_UPDATE_LOG_TAIL_CHARS = 4000;
+
+interface GraphifyRuntimeUpdateResult {
+  updated: boolean;
+  previousVersion: string | null;
+  installedVersion: string | null;
+  latestVersion: string | null;
+  commands: string[];
+  logTail: string;
+  logPath: string;
+  rebuildsQueued: string[];
+}
+
+/**
+ * One-click Graphify runtime update, triggered from Settings. Executes the exact
+ * upgrade commands from the update plan (spawn, shell:false), logs everything to
+ * extensions/graphify/logs/update-latest.log, refuses to run while a build is active,
+ * and afterwards marks previously built project graphs stale + queues debounced
+ * rebuilds so artifacts regenerate with the new Graphify version.
+ */
+async function updateGraphifyRuntime(): Promise<GraphifyRuntimeUpdateResult> {
+  if (vault.hasActiveGraphifyBuilds()) {
+    throw new Error('A Graphify build is currently running. Try the update again after it completes.');
+  }
+
+  const config = vault.getGraphifyRuntimeConfig();
+  const graphifyCommand = resolveGraphifyCommandForRuntimeConfig(config);
+  const detectBefore = await vault.detectGraphifyRuntime({
+    commandRunner: runGraphifyVersionCommand,
+    graphifyCommand,
+  });
+  const plan = vault.planGraphifyUpdate({
+    runtimeMode: config.runtimeMode,
+    availableTools: {
+      uv: detectBefore.uv.available,
+      pipx: detectBefore.pipx.available,
+      python: detectBefore.python.available,
+    },
+    extras: config.installExtras,
+  });
+  if (!plan.supported || plan.commands.length === 0) {
+    throw new Error(plan.reason || 'Graphify update is not supported for the current runtime configuration.');
+  }
+
+  const logLines: string[] = [
+    `Graphify runtime update started ${new Date().toISOString()}`,
+    `Installed before: ${detectBefore.graphify.version ?? 'unknown'}`,
+  ];
+  try {
+    for (const command of plan.commands) {
+      logLines.push('', `$ ${command.preview}`);
+      const result = await runProcess(command.command, command.args, {
+        timeoutMs: GRAPHIFY_UPDATE_TIMEOUT_MS,
+        env: command.env,
+      });
+      if (result.stdout?.trim()) {
+        logLines.push(result.stdout.trimEnd());
+      }
+      if (result.stderr?.trim()) {
+        logLines.push(result.stderr.trimEnd());
+      }
+      if (result.exitCode !== 0) {
+        logLines.push(`Command failed with exit code ${result.exitCode}.`);
+        throw new Error(`Graphify update failed: ${command.label} exited with code ${result.exitCode}. See update-latest.log for details.`);
+      }
+    }
+  } catch (error) {
+    logLines.push('', `Update aborted: ${error instanceof Error ? error.message : String(error)}`);
+    await writeGraphifyUpdateLog(logLines);
+    throw error;
+  }
+
+  const detectAfter = await vault.detectGraphifyRuntime({
+    commandRunner: runGraphifyVersionCommand,
+    graphifyCommand,
+  });
+  const updateCheck = await vault.checkGraphifyUpdate({ commandRunner: runGraphifyVersionCommand });
+  logLines.push('', `Installed after: ${detectAfter.graphify.version ?? 'unknown'}`);
+  const logPath = await writeGraphifyUpdateLog(logLines);
+
+  // Rebuild graphs that were built with the old runtime so artifacts (community
+  // labels, report layout) match the upgraded version. Debounced by the queue; only
+  // projects that already have a build are touched.
+  const rebuildsQueued: string[] = [];
+  for (const project of vault.listProjects()) {
+    try {
+      const status = vault.getGraphifyProjectStatus(project.name);
+      if (!status.buildEligible || !status.state?.latestBuildId) {
+        continue;
+      }
+      graphifyBuildQueue.markProjectStale(project.name, { reason: 'runtimeUpdated' });
+      const trigger = graphifyBuildQueue.triggerAutoBuild(project.name, { reason: 'runtimeUpdated' });
+      if (trigger.status === 'queued' || trigger.status === 'coalesced') {
+        rebuildsQueued.push(status.project);
+      }
+    } catch {
+      // Best effort per project; a failed queue trigger must not fail the update.
+    }
+  }
+
+  const logText = logLines.join('\n');
+  return {
+    updated: true,
+    previousVersion: detectBefore.graphify.version,
+    installedVersion: detectAfter.graphify.version,
+    latestVersion: updateCheck.latestVersion,
+    commands: plan.commands.map((command) => command.preview),
+    logTail: logText.slice(-GRAPHIFY_UPDATE_LOG_TAIL_CHARS),
+    logPath,
+    rebuildsQueued,
+  };
+}
+
+async function writeGraphifyUpdateLog(lines: string[]): Promise<string> {
+  const logsRoot = join(getGraphifyExtensionPaths(vault.getVaultRoot()).root, 'logs');
+  const logPath = join(logsRoot, 'update-latest.log');
+  await mkdir(logsRoot, { recursive: true });
+  await writeFile(logPath, `${lines.join('\n')}\n`, 'utf8');
+  return logPath;
 }
 
 function runGraphifyBuildProcess(
@@ -2479,6 +2602,25 @@ app.whenReady().then(() => {
           localSourcePath: typeof raw.localSourcePath === 'string' ? raw.localSourcePath : config.localSourceCheckoutPath,
         }),
       };
+    } catch (e: any) {
+      return { success: false, error: e.message };
+    }
+  });
+
+  ipcMain.handle('vault:checkGraphifyUpdate', async () => {
+    try {
+      return {
+        success: true,
+        data: await vault.checkGraphifyUpdate({ commandRunner: runGraphifyVersionCommand }),
+      };
+    } catch (e: any) {
+      return { success: false, error: e.message };
+    }
+  });
+
+  ipcMain.handle('vault:updateGraphifyRuntime', async () => {
+    try {
+      return { success: true, data: await updateGraphifyRuntime() };
     } catch (e: any) {
       return { success: false, error: e.message };
     }

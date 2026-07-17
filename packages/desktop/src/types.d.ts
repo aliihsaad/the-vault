@@ -12,6 +12,7 @@ import type {
   GraphifyProjectStatus,
   GraphifyRuntimeConfig,
   GraphifyRuntimeStatus,
+  GraphifyUpdateCheck,
   SaveGraphifyRuntimeConfigInput,
   SaveVaultCollabRuntimeConfigInput,
   VaultCollabActionResult,
@@ -35,6 +36,17 @@ import type {
 } from './graphify-artifact-url.js';
 
 declare global {
+  interface GraphifyRuntimeUpdateResult {
+    updated: boolean;
+    previousVersion: string | null;
+    installedVersion: string | null;
+    latestVersion: string | null;
+    commands: string[];
+    logTail: string;
+    logPath: string;
+    rebuildsQueued: string[];
+  }
+
   interface VaultResponse<T> {
     success: boolean;
     data?: T;
@@ -736,6 +748,8 @@ declare global {
       extras?: string[];
       localSourcePath?: string | null;
     }) => Promise<VaultResponse<GraphifyInstallPlan>>;
+    checkGraphifyUpdate: () => Promise<VaultResponse<GraphifyUpdateCheck>>;
+    updateGraphifyRuntime: () => Promise<VaultResponse<GraphifyRuntimeUpdateResult>>;
     getGraphifyProjectStatus: (project: string) => Promise<VaultResponse<GraphifyProjectStatus>>;
     setGraphifyProjectSourceRoot: (project: string, sourceRoot: string) => Promise<VaultResponse<GraphifyProjectState>>;
     chooseGraphifyProjectSourceRoot: (project: string) => Promise<VaultResponse<GraphifyProjectState | null>>;

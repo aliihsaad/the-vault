@@ -33,7 +33,8 @@ export type GraphifyBuildQueueReason =
   | 'memorySaved'
   | 'projectChanged'
   | 'manualRebuild'
-  | 'openLoopChanged';
+  | 'openLoopChanged'
+  | 'runtimeUpdated';
 
 export interface GraphifyQueuedBuildRequest {
   project: string;

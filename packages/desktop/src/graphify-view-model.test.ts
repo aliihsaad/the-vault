@@ -12,6 +12,7 @@ import type {
   GraphifyProjectStatus,
   GraphifyRuntimeConfig,
   GraphifyRuntimeStatus,
+  GraphifyUpdateCheck,
 } from '@the-vault/core';
 
 const timestamp = '2026-05-24T20:00:00.000Z';
@@ -226,6 +227,101 @@ describe('graphify settings view model', () => {
       enabled: false,
       label: 'Already installed',
       reason: 'Graphify is already available.',
+    });
+  });
+
+  it('drives the runtime update action from the persisted update check', () => {
+    const installedRuntime = runtimeStatus({
+      graphify: { available: true, version: '0.8.18', command: 'graphify' },
+    });
+    const check = (overrides: Partial<GraphifyUpdateCheck> = {}): GraphifyUpdateCheck => ({
+      installedVersion: '0.8.18',
+      latestVersion: '0.9.17',
+      updateAvailable: true,
+      checkedAt: timestamp,
+      source: 'pypi',
+      error: null,
+      ...overrides,
+    });
+
+    expect(buildGraphifySettingsViewModel({
+      config: runtimeConfig(),
+      runtimeStatus: installedRuntime,
+      installPlan: installPlan(0),
+      updateCheck: check(),
+    })).toMatchObject({
+      state: 'installed',
+      primaryLabel: 'Graphify update available',
+      latestVersion: '0.9.17',
+      updateAvailable: true,
+      actions: {
+        update: { enabled: true, label: 'Update to 0.9.17' },
+      },
+    });
+
+    expect(buildGraphifySettingsViewModel({
+      config: runtimeConfig(),
+      runtimeStatus: installedRuntime,
+      installPlan: installPlan(0),
+      updateCheck: check({ latestVersion: '0.8.18', updateAvailable: false }),
+    })).toMatchObject({
+      primaryLabel: 'Graphify installed',
+      updateAvailable: false,
+      actions: {
+        update: { enabled: false, label: 'Up to date' },
+      },
+    });
+
+    expect(buildGraphifySettingsViewModel({
+      config: runtimeConfig(),
+      runtimeStatus: installedRuntime,
+      installPlan: installPlan(0),
+      updateCheck: check(),
+      updating: true,
+    })).toMatchObject({
+      actions: {
+        update: { enabled: false, label: 'Updating Graphify...' },
+      },
+    });
+
+    expect(buildGraphifySettingsViewModel({
+      config: runtimeConfig(),
+      runtimeStatus: installedRuntime,
+      installPlan: installPlan(0),
+    })).toMatchObject({
+      actions: {
+        update: { enabled: false, label: 'Update Graphify', reason: 'No update check has run yet.' },
+      },
+    });
+
+    expect(buildGraphifySettingsViewModel({
+      config: runtimeConfig(),
+      runtimeStatus: installedRuntime,
+      installPlan: installPlan(0),
+      updateCheck: check({ latestVersion: null, updateAvailable: false, error: 'PyPI version check timed out after 8000ms.' }),
+    }).actions.update).toMatchObject({
+      enabled: false,
+      reason: expect.stringContaining('Update check failed'),
+    });
+
+    expect(buildGraphifySettingsViewModel({
+      config: runtimeConfig({ runtimeMode: 'path' }),
+      runtimeStatus: installedRuntime,
+      installPlan: installPlan(0),
+      updateCheck: check(),
+    }).actions.update).toMatchObject({
+      enabled: false,
+      reason: expect.stringContaining('managed runtime'),
+    });
+
+    expect(buildGraphifySettingsViewModel({
+      config: runtimeConfig(),
+      runtimeStatus: runtimeStatus(),
+      installPlan: installPlan(0),
+      updateCheck: check(),
+    }).actions.update).toMatchObject({
+      enabled: false,
+      reason: 'Install Graphify first.',
     });
   });
 

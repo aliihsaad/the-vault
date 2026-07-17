@@ -42,6 +42,12 @@ export const GRAPHIFY_INSTALL_PROFILES = [
 export type GraphifyInstallProfile = (typeof GRAPHIFY_INSTALL_PROFILES)[number];
 export const GraphifyInstallProfileSchema = z.enum(GRAPHIFY_INSTALL_PROFILES);
 
+// A Graphify build that dies with its process (app quit, crash, power loss) leaves the
+// lock file and the DB 'building'/'queued' freshness behind. Anything older than this
+// (comfortably above the 30-minute desktop build timeout) is treated as interrupted
+// and reclaimed/reconciled. Shared by the build lock and the project-status recovery.
+export const GRAPHIFY_BUILD_STALE_MS = 35 * 60 * 1000;
+
 // Directory names that are never useful (and often harmful) to feed into Graphify:
 // VCS metadata, dependency/build output, and packaged Electron bundles. Copying a
 // packaged `app.asar` in particular breaks staging, because Electron's main process

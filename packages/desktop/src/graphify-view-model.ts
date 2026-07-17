@@ -7,6 +7,7 @@ import type {
   GraphifyProjectStatus,
   GraphifyRuntimeConfig,
   GraphifyRuntimeStatus,
+  GraphifyUpdateCheck,
 } from '@the-vault/core';
 
 export type GraphifySettingsState =
@@ -37,6 +38,8 @@ export interface GraphifySettingsViewModelInput {
   runtimeStatus: GraphifyRuntimeStatus | null;
   installPlan: GraphifyInstallPlan | null;
   detectionError?: string | null;
+  updateCheck?: GraphifyUpdateCheck | null;
+  updating?: boolean;
 }
 
 export interface GraphifySettingsViewModel {
@@ -44,12 +47,16 @@ export interface GraphifySettingsViewModel {
   primaryLabel: string;
   detail: string;
   installedVersion: string | null;
+  latestVersion: string | null;
+  updateAvailable: boolean;
+  updateCheckError: string | null;
   developerSourcePath: string | null;
   errorMessage: string | null;
   installCommands: string[];
   actions: {
     detect: GraphifyActionModel;
     install: GraphifyActionModel;
+    update: GraphifyActionModel;
   };
 }
 
@@ -104,6 +111,10 @@ export function buildGraphifySettingsViewModel(
   const hasInstaller = installCommandCount > 0;
   const detectionError = normalizeOptionalText(input.detectionError);
   const developerSourcePath = input.config.localSourceCheckoutPath;
+  const updateCheck = input.updateCheck ?? null;
+  const latestVersion = updateCheck?.latestVersion ?? null;
+  const updateCheckError = normalizeOptionalText(updateCheck?.error);
+  const notInstalledUpdateAction = disabledAction('Update Graphify', 'Install Graphify first.');
 
   if (detectionError) {
     return {
@@ -111,6 +122,9 @@ export function buildGraphifySettingsViewModel(
       primaryLabel: 'Graphify detection failed',
       detail: 'Vault could not inspect the local Graphify runtime. Core Vault memory features remain available.',
       installedVersion: null,
+      latestVersion,
+      updateAvailable: false,
+      updateCheckError,
       developerSourcePath: null,
       errorMessage: detectionError,
       installCommands,
@@ -119,6 +133,7 @@ export function buildGraphifySettingsViewModel(
         install: hasInstaller
           ? enabledAction('Copy install commands')
           : disabledAction('Install Graphify', 'No supported installer was detected.'),
+        update: disabledAction('Update Graphify', 'Resolve the detection error first.'),
       },
     };
   }
@@ -131,6 +146,9 @@ export function buildGraphifySettingsViewModel(
         ? `Vault will use the local Graphify checkout at ${developerSourcePath}.`
         : 'Choose a local Graphify checkout before installing developer mode.',
       installedVersion: input.runtimeStatus?.graphify.version ?? null,
+      latestVersion,
+      updateAvailable: false,
+      updateCheckError,
       developerSourcePath,
       errorMessage: null,
       installCommands,
@@ -139,25 +157,39 @@ export function buildGraphifySettingsViewModel(
         install: hasInstaller
           ? enabledAction('Copy developer install commands')
           : disabledAction('Install developer checkout', 'No supported installer was detected.'),
+        update: disabledAction('Update Graphify', 'Developer checkouts update through git; reinstall the editable checkout after pulling.'),
       },
     };
   }
 
   if (input.runtimeStatus?.graphify.available) {
     const version = input.runtimeStatus.graphify.version;
+    const updateAvailable = Boolean(updateCheck?.updateAvailable && latestVersion);
     return {
       state: 'installed',
-      primaryLabel: 'Graphify installed',
+      primaryLabel: updateAvailable ? 'Graphify update available' : 'Graphify installed',
       detail: version
         ? `Graphify ${version} is available through ${input.runtimeStatus.graphify.command}.`
         : `Graphify is available through ${input.runtimeStatus.graphify.command}.`,
       installedVersion: version,
+      latestVersion,
+      updateAvailable,
+      updateCheckError,
       developerSourcePath: null,
       errorMessage: null,
       installCommands: [],
       actions: {
         detect: enabledAction('Detect runtime'),
         install: disabledAction('Already installed', 'Graphify is already available.'),
+        update: buildInstalledUpdateAction({
+          runtimeMode: input.config.runtimeMode,
+          updating: Boolean(input.updating),
+          updateAvailable,
+          latestVersion,
+          installedVersion: version,
+          updateCheckError,
+          hasCheck: Boolean(updateCheck),
+        }),
       },
     };
   }
@@ -174,6 +206,9 @@ export function buildGraphifySettingsViewModel(
       primaryLabel: 'Ready to install Graphify',
       detail: 'Vault found a supported local installer or Python runtime but not the Graphify CLI.',
       installedVersion: null,
+      latestVersion,
+      updateAvailable: false,
+      updateCheckError,
       developerSourcePath: null,
       errorMessage: null,
       installCommands,
@@ -182,6 +217,7 @@ export function buildGraphifySettingsViewModel(
         install: hasInstaller
           ? enabledAction('Copy install commands')
           : disabledAction('Install Graphify', 'No install command is available.'),
+        update: notInstalledUpdateAction,
       },
     };
   }
@@ -191,6 +227,9 @@ export function buildGraphifySettingsViewModel(
     primaryLabel: 'Graphify missing',
     detail: 'Vault has not detected Graphify or a supported installer. Memory, recall, and MCP flows continue normally.',
     installedVersion: null,
+    latestVersion,
+    updateAvailable: false,
+    updateCheckError,
     developerSourcePath: null,
     errorMessage: null,
     installCommands,
@@ -199,8 +238,49 @@ export function buildGraphifySettingsViewModel(
       install: hasInstaller
         ? enabledAction('Copy install commands')
         : disabledAction('Install Graphify', 'No supported installer was detected.'),
+      update: notInstalledUpdateAction,
     },
   };
+}
+
+function buildInstalledUpdateAction(input: {
+  runtimeMode: GraphifyRuntimeConfig['runtimeMode'];
+  updating: boolean;
+  updateAvailable: boolean;
+  latestVersion: string | null;
+  installedVersion: string | null;
+  updateCheckError: string | null;
+  hasCheck: boolean;
+}): GraphifyActionModel {
+  if (input.updating) {
+    return disabledAction('Updating Graphify...', 'The Graphify update is running.');
+  }
+
+  if (input.runtimeMode === 'path') {
+    return disabledAction(
+      'Update Graphify',
+      'Vault only updates the managed runtime. Update the PATH installation with the package manager that installed it.',
+    );
+  }
+
+  if (input.updateAvailable && input.latestVersion) {
+    return enabledAction(`Update to ${input.latestVersion}`);
+  }
+
+  if (input.updateCheckError) {
+    return disabledAction('Update Graphify', `Update check failed: ${input.updateCheckError}`);
+  }
+
+  if (!input.hasCheck) {
+    return disabledAction('Update Graphify', 'No update check has run yet.');
+  }
+
+  return disabledAction(
+    'Up to date',
+    input.installedVersion
+      ? `Graphify ${input.installedVersion} is the latest published version.`
+      : 'Graphify is already at the latest published version.',
+  );
 }
 
 export function buildGraphifyProjectGraphViewModel(

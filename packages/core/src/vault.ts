@@ -111,8 +111,10 @@ import {
   upsertGraphifyProjectState,
 } from './services/graphify-project.service.js';
 import {
+  checkGraphifyUpdate,
   detectGraphifyRuntime,
   planGraphifyInstall,
+  planGraphifyUpdate,
 } from './services/graphify-runtime.service.js';
 import {
   detectVaultCollabRuntime,
@@ -120,7 +122,11 @@ import {
 } from './services/vault-collab-runtime.service.js';
 import { getVaultCollabDashboardSnapshot } from './services/vault-collab-dashboard.service.js';
 import { exportGraphifyProjectCorpus } from './services/graphify-corpus.service.js';
-import { buildGraphifyProjectGraph } from './services/graphify-build.service.js';
+import {
+  buildGraphifyProjectGraph,
+  hasActiveGraphifyBuilds,
+  isGraphifyBuildActive,
+} from './services/graphify-build.service.js';
 import {
   discoverGraphifyArtifacts,
   getGraphifyHtmlArtifact,
@@ -239,10 +245,14 @@ import type {
   VaultCollabRuntimeConfig,
 } from './types/vault-collab.js';
 import type {
+  CheckGraphifyUpdateInput,
   DetectGraphifyRuntimeInput,
   GraphifyInstallPlan,
   GraphifyRuntimeStatus,
+  GraphifyUpdateCheck,
+  GraphifyUpdatePlan,
   PlanGraphifyInstallInput,
+  PlanGraphifyUpdateInput,
 } from './services/graphify-runtime.service.js';
 import type {
   VaultCollabInstallPlan,
@@ -628,6 +638,10 @@ export class Vault {
       this.db,
       project,
       this.getSetting('project_workspace_registry') as ProjectWorkspaceRegistry | undefined,
+      {
+        vaultRoot: this.vaultRoot,
+        isBuildActive: isGraphifyBuildActive,
+      },
     );
   }
 
@@ -667,6 +681,44 @@ export class Vault {
       vaultRoot: this.vaultRoot,
       ...input,
     });
+  }
+
+  planGraphifyUpdate(input: Omit<PlanGraphifyUpdateInput, 'vaultRoot'>): GraphifyUpdatePlan {
+    this.ensureInitialized();
+    return planGraphifyUpdate({
+      vaultRoot: this.vaultRoot,
+      ...input,
+    });
+  }
+
+  /**
+   * Detect the installed Graphify version, compare it against the latest PyPI release,
+   * persist the result (so MCP status can report runtime drift without network), and
+   * return it.
+   */
+  async checkGraphifyUpdate(
+    input: Omit<CheckGraphifyUpdateInput, 'config'> & { config?: CheckGraphifyUpdateInput['config'] },
+  ): Promise<GraphifyUpdateCheck> {
+    this.ensureInitialized();
+    const check = await checkGraphifyUpdate({
+      ...input,
+      config: input.config ?? this.getGraphifyRuntimeConfig(),
+    });
+    this.setSetting('graphify_update_check', check);
+    return check;
+  }
+
+  getGraphifyUpdateCheck(): GraphifyUpdateCheck | null {
+    this.ensureInitialized();
+    const stored = this.getSetting('graphify_update_check') as GraphifyUpdateCheck | null | undefined;
+    return stored && typeof stored === 'object' && typeof stored.checkedAt === 'string'
+      ? stored
+      : null;
+  }
+
+  hasActiveGraphifyBuilds(): boolean {
+    this.ensureInitialized();
+    return hasActiveGraphifyBuilds();
   }
 
   // =========================================================================

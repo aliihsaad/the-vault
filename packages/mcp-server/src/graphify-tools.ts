@@ -31,6 +31,7 @@ export type GraphifyMcpServerLike = object;
 export interface GraphifyMcpVaultLike {
   recordGraphifyToolActivity?(input: GraphifyMcpActivityInput): void;
   getGraphifyRuntimeConfig(): unknown;
+  getGraphifyUpdateCheck?(): unknown;
   getGraphifyProjectStatus(project: string): unknown;
   getGraphifyArtifacts(project: string): unknown;
   getGraphifyBuildHistory(project: string, limit?: number): unknown;
@@ -122,6 +123,9 @@ export function registerGraphifyMcpTools(
       const project = readOptionalString(args.project);
       return jsonResult(() => ({
           runtime: vault.getGraphifyRuntimeConfig(),
+          // Last persisted installed-vs-PyPI check (written by the desktop Settings
+          // panel); lets agents see runtime drift without any network call here.
+          update_check: vault.getGraphifyUpdateCheck?.() ?? null,
           project: project ? vault.getGraphifyProjectStatus(project) : null,
           artifacts: project ? vault.getGraphifyArtifacts(project) : null,
           build_history: project ? vault.getGraphifyBuildHistory(project, readOptionalNumber(args.history_limit) ?? 5) : [],

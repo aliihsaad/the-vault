@@ -76,6 +76,9 @@ describe('Graphify manual build pipeline', () => {
       expect(options.logPath).toBe(join(paths.logsRoot, 'gb_success_manual.log'));
       expect(options.cwd).toBe(managedInputRoot);
       expect(options.env?.GRAPHIFY_VIZ_NODE_LIMIT).toBe('20000');
+      if (args[0] === '--version') {
+        return { exitCode: 0, stdout: 'graphify 0.9.17\n', stderr: '' };
+      }
       expect(args).toEqual(['update', managedInputRoot]);
       expect(existsSync(join(managedInputRoot, 'source', 'src', 'index.ts'))).toBe(true);
       expect(existsSync(join(managedInputRoot, 'vault-memory-export', 'memories.ndjson'))).toBe(true);
@@ -103,15 +106,22 @@ describe('Graphify manual build pipeline', () => {
     const buildLog = await readFile(join(paths.logsRoot, 'gb_success_manual.log'), 'utf8');
     const latestLog = await readFile(paths.latestLog, 'utf8');
 
-    expect(calls).toEqual([{
-      command: managedCommand,
-      args: [
-        'update',
-        managedInputRoot,
-      ],
-      cwd: managedInputRoot,
-    }]);
-    expect(observedStates).toEqual(['building']);
+    expect(calls).toEqual([
+      {
+        command: managedCommand,
+        args: ['--version'],
+        cwd: managedInputRoot,
+      },
+      {
+        command: managedCommand,
+        args: [
+          'update',
+          managedInputRoot,
+        ],
+        cwd: managedInputRoot,
+      },
+    ]);
+    expect(observedStates).toEqual(['missing', 'building']);
     expect(result).toEqual(expect.objectContaining({
       buildId: 'gb_success_manual',
       project: 'The Vault',
@@ -139,7 +149,9 @@ describe('Graphify manual build pipeline', () => {
       svgPath: paths.graphSvg,
       failureCount: 0,
       lastError: null,
+      detectedGraphifyVersion: '0.9.17',
     }));
+    expect(vault.getGraphifyBuildHistory('The Vault')[0]?.detectedGraphifyVersion).toBe('0.9.17');
     expect(state?.graphStats).toEqual({ nodeCount: 2, edgeCount: 1, communityCount: 1 });
     expect(buildLog).toContain('Graphify build complete');
     expect(latestLog).toBe(buildLog);
@@ -153,6 +165,9 @@ describe('Graphify manual build pipeline', () => {
     const runner: GraphifyBuildProcessRunner = async (_command, args, options) => {
       commands.push({ args, cwd: options.cwd });
       expect(options.env?.GRAPHIFY_VIZ_NODE_LIMIT).toBe('20000');
+      if (args[0] === '--version') {
+        return { exitCode: 0, stdout: 'graphify 0.9.17\n', stderr: '' };
+      }
       await mkdir(stagedOutputRoot, { recursive: true });
       if (args[0] === 'update') {
         // Large graph: update writes graph.json + report but skips graph.html.
@@ -175,6 +190,7 @@ describe('Graphify manual build pipeline', () => {
     });
 
     expect(commands).toEqual([
+      { args: ['--version'], cwd: managedInputRoot },
       { args: ['update', managedInputRoot], cwd: managedInputRoot },
       { args: ['cluster-only', paths.projectSlug], cwd: paths.corpusRoot },
     ]);
@@ -187,7 +203,10 @@ describe('Graphify manual build pipeline', () => {
     let releaseFirst: () => void = () => {};
     let markStarted: () => void = () => {};
     const firstStarted = new Promise<void>((resolveStarted) => { markStarted = resolveStarted; });
-    const blockingRunner: GraphifyBuildProcessRunner = async (_command, _args, options) => {
+    const blockingRunner: GraphifyBuildProcessRunner = async (_command, args, options) => {
+      if (args[0] === '--version') {
+        return { exitCode: 0, stdout: 'graphify 0.9.17\n', stderr: '' };
+      }
       markStarted();
       await new Promise<void>((release) => { releaseFirst = release; });
       const stagedOutputRoot = join(options.cwd, 'graphify-out');
@@ -295,7 +314,10 @@ describe('Graphify manual build pipeline', () => {
       }));
       return { exitCode: 0, stdout: 'ok\n', stderr: '' };
     };
-    const failingRunner: GraphifyBuildProcessRunner = async (_command, _args, options) => {
+    const failingRunner: GraphifyBuildProcessRunner = async (_command, args, options) => {
+      if (args[0] === '--version') {
+        return { exitCode: 0, stdout: 'graphify 0.9.17\n', stderr: '' };
+      }
       expect(vault.getGraphifyProjectState('The Vault')?.freshness).toBe('building');
       expect(options.logPath).toBe(join(paths.logsRoot, 'gb_failed_manual.log'));
       return { exitCode: 2, stdout: '', stderr: 'Graphify failed loudly\n' };
