@@ -195,6 +195,7 @@ The Vault is:
 | Task executor | A Vault runtime that can process queued tasks, store results, and expose task status through MCP and desktop surfaces. |
 | Project hygiene | Naming, relationship, duplicate, and canonical-decision workflows that keep project memory organized. |
 | Lifecycle states | Reversible memory states such as `active`, `stale`, `archived`, and `pending_delete` before final deletion. |
+| Project types | Every new project is created explicitly as a Work Project (may own dedicated open loops) or a Brain / Memory-Context project (permanent zero-loop invariant). Legacy projects stay `unclassified` until governed classification; names never determine type. |
 
 ## Feature Overview
 
@@ -215,6 +216,8 @@ The Vault is:
 | Project momentum | Per-project week-over-week activity delta (↑/↓/inactive) shown on the Overview to make stagnating projects visible. |
 | Open loops panel | Aggregated unfinished work — items with non-empty `next_steps` plus stale debugging routines — bucketed by derived priority (high/medium/low) with snooze support via `snoozed_until`. |
 | Close-the-loop on recall | `vault_recall_context` returns a capped, pressure-ranked `open_loops` field so agents surface unfinished work back to the user. Dedicated MCP tools support single-loop resolution plus exhaustive loop audits and batch resolution. |
+| Open-loops v2 lifecycle (shadow) | Dedicated loop records with strict admission and dedupe, an explicit state machine, evidence-backed outcome-specific resolution, governed owner/role/quorum/external snooze approvals with exact-state resume, governed recovery, append-only event/approval audit trails, and a deterministic per-project gate — currently in shadow mode with legacy-vs-dedicated telemetry, additive idempotent migration, and pre-migration backups. Enforcement is a later per-project governed cutover. |
+| Provider failover observability | Primary/fallback AI provider roles with truthful cockpit labels, per-provider enrichment models, and recorded failover reasons (`primaryProviderError`, `providerAttempts`) in task results and executor events. |
 | Local privacy | SQLite database and memory files stay on the user's machine unless the user explicitly pushes or exports them. |
 
 ## Interfaces
@@ -235,7 +238,7 @@ The desktop app currently includes:
 - **Projects**: searchable project directory with memory counts, descriptions, workspace signals, momentum, and delete/merge controls.
 - **Handoffs**: filtered workspace for transfer notes and preserved next actions.
 - **Decisions**: promoted project choices and rationale.
-- **Loops**: open-loop control surface with project/routine/tag filtering, snooze, open, and resolve actions.
+- **Loops**: open-loop control surface with project/routine/tag filtering, snooze, open, and resolve actions, plus v2 shadow telemetry comparing legacy-derived and dedicated loop counts while enforcement stays off.
 - **Recall**: inspect recall activity, candidate pruning, prompt packing efficiency, and compact recall logs.
 - **Analytics**: operational charts from logs, memory state, and task queue counters.
 - **Graphify**: choose a project source folder, build or rebuild Graphify artifacts, inspect graph freshness, open reports, and view the real Graphify graph.
