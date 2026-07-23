@@ -17,6 +17,7 @@ import {
 } from './file.service.js';
 import {
   ensureProject,
+  getProject,
   inferProjectNameFromRelatedFiles,
   relatedFilesContainProjectSlug,
 } from './project.service.js';
@@ -83,6 +84,10 @@ export function saveMemory(
   const normalizedKeywords = normalizeTagLikeValues(validated.keywords || []);
   const normalizedNextSteps = normalizeOrderedValues(validated.nextSteps || []);
   const normalizedRelatedItemIds = normalizeOrderedValues(validated.relatedItemIds || []);
+  const owningProject = getProject(db, normalizedProject);
+  if (owningProject?.projectType === 'brain_context' && normalizedNextSteps.length > 0) {
+    throw new Error('Brain contexts cannot store non-empty next_steps; keep recommendations in the memory body or route executable work to a Work Project');
+  }
 
   // 4. Generate vault path
   const timestamp = now();

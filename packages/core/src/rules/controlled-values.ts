@@ -192,6 +192,168 @@ export type OutcomeValue = (typeof OUTCOME_VALUES)[number];
 export const OutcomeSchema = z.enum(OUTCOME_VALUES);
 
 // ---------------------------------------------------------------------------
+// Open-Loops v2 — project typing, lifecycle, governance, and loop controls
+// ---------------------------------------------------------------------------
+export const PROJECT_TYPES = [
+  'work_project',
+  'brain_context',
+  'unclassified',
+] as const;
+
+export type ProjectType = (typeof PROJECT_TYPES)[number];
+export const ProjectTypeSchema = z.enum(PROJECT_TYPES);
+
+export const PROJECT_LIFECYCLE_STATES = [
+  'legacy_cleanup',
+  'shadow',
+  'gate_ready',
+  'gate_active',
+  'suspended',
+] as const;
+
+export type ProjectLifecycleState = (typeof PROJECT_LIFECYCLE_STATES)[number];
+export const ProjectLifecycleStateSchema = z.enum(PROJECT_LIFECYCLE_STATES);
+
+export const AUTHORIZATION_POLICY_MODES = [
+  'owner',
+  'role',
+  'quorum',
+  'external',
+] as const;
+
+export type AuthorizationPolicyMode = (typeof AUTHORIZATION_POLICY_MODES)[number];
+export const AuthorizationPolicyModeSchema = z.enum(AUTHORIZATION_POLICY_MODES);
+
+export const AUTHORIZATION_ACTIONS = [
+  'classify_project',
+  'convert_project_type',
+  'create_open_loop',
+  'request_loop_snooze',
+  'decide_loop_snooze',
+  'recover_open_loop',
+  'urgent_safety_bypass',
+] as const;
+
+export type AuthorizationAction = (typeof AUTHORIZATION_ACTIONS)[number];
+export const AuthorizationActionSchema = z.enum(AUTHORIZATION_ACTIONS);
+
+export const ACTOR_KINDS = [
+  'installation',
+  'user',
+  'agent',
+  'service',
+  'external',
+] as const;
+
+export type ActorKind = (typeof ACTOR_KINDS)[number];
+export const ActorKindSchema = z.enum(ACTOR_KINDS);
+
+export const LOOP_STATES = [
+  'open',
+  'verification_needed',
+  'awaiting_approval',
+  'awaiting_user',
+  'externally_blocked',
+  'snoozed',
+  'resolved',
+] as const;
+
+export type LoopState = (typeof LOOP_STATES)[number];
+export const LoopStateSchema = z.enum(LOOP_STATES);
+
+export const NONTERMINAL_LOOP_STATES = LOOP_STATES.filter(
+  (state): state is Exclude<LoopState, 'resolved'> => state !== 'resolved',
+);
+
+export const LOOP_OUTCOMES = [
+  'fixed',
+  'obsolete',
+  'duplicate',
+  'wont_fix',
+] as const;
+
+export type LoopOutcome = (typeof LOOP_OUTCOMES)[number];
+export const LoopOutcomeSchema = z.enum(LOOP_OUTCOMES);
+
+export const LOOP_PRIORITIES = [
+  'low',
+  'normal',
+  'high',
+  'critical',
+] as const;
+
+export type LoopPriority = (typeof LOOP_PRIORITIES)[number];
+export const LoopPrioritySchema = z.enum(LOOP_PRIORITIES);
+
+export const LOOP_BLOCKING_SCOPES = ['project'] as const;
+export type LoopBlockingScope = (typeof LOOP_BLOCKING_SCOPES)[number];
+export const LoopBlockingScopeSchema = z.enum(LOOP_BLOCKING_SCOPES);
+
+export const LOOP_TRIGGER_KINDS = [
+  'deadline',
+  'review_date',
+  'dependency',
+  'checkpoint',
+] as const;
+
+export type LoopTriggerKind = (typeof LOOP_TRIGGER_KINDS)[number];
+export const LoopTriggerKindSchema = z.enum(LOOP_TRIGGER_KINDS);
+
+export const LOOP_EVENT_TYPES = [
+  'created',
+  'state_changed',
+  'evidence_added',
+  'snooze_requested',
+  'snooze_decided',
+  'snooze_expired',
+  'resolved',
+  'recovered',
+  'migrated',
+] as const;
+
+export type LoopEventType = (typeof LOOP_EVENT_TYPES)[number];
+export const LoopEventTypeSchema = z.enum(LOOP_EVENT_TYPES);
+
+export const WORK_INTENTS = [
+  'normal_work',
+  'close_loop',
+  'gather_evidence',
+  'request_decision',
+  'request_snooze',
+  'urgent_safety',
+  'memory_maintenance',
+] as const;
+
+export type WorkIntent = (typeof WORK_INTENTS)[number];
+export const WorkIntentSchema = z.enum(WORK_INTENTS);
+
+export const EVIDENCE_KINDS = [
+  'source',
+  'commit',
+  'test',
+  'deployment',
+  'reproduction',
+  'artifact',
+  'url',
+  'read_back',
+  'approval',
+  'decision',
+  'canonical_loop',
+  'hash',
+] as const;
+
+export type EvidenceKind = (typeof EVIDENCE_KINDS)[number];
+export const EvidenceKindSchema = z.enum(EVIDENCE_KINDS);
+
+export const APPROVAL_DECISIONS = [
+  'approved',
+  'denied',
+] as const;
+
+export type ApprovalDecision = (typeof APPROVAL_DECISIONS)[number];
+export const ApprovalDecisionSchema = z.enum(APPROVAL_DECISIONS);
+
+// ---------------------------------------------------------------------------
 // Action Types (for activity_logs)
 // ---------------------------------------------------------------------------
 export const ACTION_TYPES = [

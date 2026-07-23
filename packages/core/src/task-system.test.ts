@@ -464,8 +464,8 @@ describe('task delegation system', () => {
   });
 
   it('routes saves to the project inferred from absolute related file paths', () => {
-    vault.createProject('the-vault');
-    vault.createProject('Social-Media-Manager-AI-Tool');
+    vault.createProject({ name: 'the-vault', projectType: 'work_project', description: 'Vault test project', canonicalRoot: vaultRoot });
+    vault.createProject({ name: 'Social-Media-Manager-AI-Tool', projectType: 'work_project', description: 'Social test project', canonicalRoot: vaultRoot });
 
     const result = vault.saveMemory({
       title: 'Rewrote The Vault README',
@@ -482,8 +482,8 @@ describe('task delegation system', () => {
   });
 
   it('keeps the requested project when related file paths do not identify one project', () => {
-    vault.createProject('the-vault');
-    vault.createProject('Social-Media-Manager-AI-Tool');
+    vault.createProject({ name: 'the-vault', projectType: 'work_project', description: 'Vault test project', canonicalRoot: vaultRoot });
+    vault.createProject({ name: 'Social-Media-Manager-AI-Tool', projectType: 'work_project', description: 'Social test project', canonicalRoot: vaultRoot });
 
     const result = vault.saveMemory({
       title: 'Cross-project integration note',

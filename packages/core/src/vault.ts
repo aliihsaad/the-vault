@@ -5,6 +5,37 @@
 
 import { getDatabase, initializeSchema, closeDatabase, resetConnection, type VaultDB } from './database/connection.js';
 import {
+  getOpenLoopInstallationDefaults,
+  seedOpenLoopPolicies,
+} from './services/open-loop-policy.service.js';
+import {
+  createAuthorizationPolicy,
+  type CreateAuthorizationPolicyInput,
+} from './services/authorization.service.js';
+import {
+  buildProjectClassificationDryRun,
+  classifyProject,
+  convertProjectType,
+} from './services/project-classification.service.js';
+import {
+  addLoopEvidence,
+  countDedicatedOpenLoops,
+  createOpenLoop,
+  expireDueSnoozes,
+  getOpenLoop as getDedicatedOpenLoop,
+  listDedicatedOpenLoops,
+  recoverOpenLoop,
+  resolveOpenLoop,
+  resumeDependencySnooze,
+  transitionOpenLoop,
+} from './services/open-loop.service.js';
+import { decideLoopSnooze, requestLoopSnooze } from './services/loop-snooze.service.js';
+import { evaluateProjectGate } from './services/project-gate.service.js';
+import {
+  getOpenLoopShadowTelemetry,
+  inventoryLegacyLoopCandidates,
+} from './services/open-loop-migration.service.js';
+import {
   initializeVaultRoot,
   getDatabasePath,
   getLogsPath,
@@ -170,6 +201,33 @@ import type {
   MemoryPack,
   OpenLoop,
   Project,
+  CreateProjectInput,
+  OpenLoopInstallationDefaults,
+  ClassifyProjectInput,
+  ConvertProjectTypeInput,
+  ProjectClassificationReport,
+  ProjectClassificationResult,
+  CreateOpenLoopInput,
+  CreateOpenLoopResult,
+  DedicatedOpenLoop,
+  ListDedicatedOpenLoopsInput,
+  ListDedicatedOpenLoopsResult,
+  CountDedicatedOpenLoopsInput,
+  CountDedicatedOpenLoopsResult,
+  TransitionOpenLoopInput,
+  AddLoopEvidenceInput,
+  OpenLoopMutationResult,
+  ResolveOpenLoopInput,
+  ResolveOpenLoopResult,
+  RecoverOpenLoopInput,
+  RequestLoopSnoozeInput,
+  RequestLoopSnoozeResult,
+  DecideLoopSnoozeInput,
+  SnoozeDecisionResult,
+  EvaluateProjectGateInput,
+  ProjectGateResult,
+  LegacyLoopCandidateReport,
+  OpenLoopShadowTelemetry,
   ProjectMomentum,
   ProjectWorkspaceConfig,
   ProjectWorkspaceRegistry,
@@ -293,6 +351,7 @@ export class Vault {
 
     // 3. Seed default settings
     seedDefaultSettings(this.db);
+    seedOpenLoopPolicies(this.db);
 
     this.initialized = true;
   }
@@ -962,9 +1021,116 @@ export class Vault {
     return getProjectsMomentum(this.db);
   }
 
-  createProject(name: string, description?: string): Project {
+  createProject(input: CreateProjectInput): Project {
     this.ensureInitialized();
-    return createProject(this.db, this.vaultRoot, name, description);
+    return createProject(this.db, this.vaultRoot, input);
+  }
+
+  getOpenLoopInstallationDefaults(): OpenLoopInstallationDefaults {
+    this.ensureInitialized();
+    return getOpenLoopInstallationDefaults(this.db);
+  }
+
+  createAuthorizationPolicy(input: CreateAuthorizationPolicyInput) {
+    this.ensureInitialized();
+    return createAuthorizationPolicy(this.db, input);
+  }
+
+  buildProjectClassificationDryRun(
+    input: ClassifyProjectInput | ConvertProjectTypeInput,
+  ): ProjectClassificationReport {
+    this.ensureInitialized();
+    return buildProjectClassificationDryRun(this.db, input);
+  }
+
+  classifyProject(input: ClassifyProjectInput): ProjectClassificationResult {
+    this.ensureInitialized();
+    return classifyProject(this.db, input);
+  }
+
+  convertProjectType(input: ConvertProjectTypeInput): ProjectClassificationResult {
+    this.ensureInitialized();
+    return convertProjectType(this.db, input);
+  }
+
+  inventoryLegacyLoopCandidates(project?: string): LegacyLoopCandidateReport {
+    this.ensureInitialized();
+    return inventoryLegacyLoopCandidates(this.db, project);
+  }
+
+  getOpenLoopShadowTelemetry(project?: string): OpenLoopShadowTelemetry {
+    this.ensureInitialized();
+    return getOpenLoopShadowTelemetry(this.db, project);
+  }
+
+  createOpenLoop(input: CreateOpenLoopInput): CreateOpenLoopResult {
+    this.ensureInitialized();
+    return createOpenLoop(this.db, input);
+  }
+
+  getDedicatedOpenLoop(loopUid: string): DedicatedOpenLoop | null {
+    this.ensureInitialized();
+    return getDedicatedOpenLoop(this.db, loopUid);
+  }
+
+  listDedicatedOpenLoops(input?: ListDedicatedOpenLoopsInput): ListDedicatedOpenLoopsResult {
+    this.ensureInitialized();
+    return listDedicatedOpenLoops(this.db, input);
+  }
+
+  countDedicatedOpenLoops(input?: CountDedicatedOpenLoopsInput): CountDedicatedOpenLoopsResult {
+    this.ensureInitialized();
+    return countDedicatedOpenLoops(this.db, input);
+  }
+
+  transitionOpenLoop(input: TransitionOpenLoopInput): OpenLoopMutationResult {
+    this.ensureInitialized();
+    return transitionOpenLoop(this.db, input);
+  }
+
+  addLoopEvidence(input: AddLoopEvidenceInput): OpenLoopMutationResult {
+    this.ensureInitialized();
+    return addLoopEvidence(this.db, input);
+  }
+
+  evaluateProjectGate(input: EvaluateProjectGateInput): ProjectGateResult {
+    this.ensureInitialized();
+    return evaluateProjectGate(this.db, input);
+  }
+
+  requestLoopSnooze(input: RequestLoopSnoozeInput): RequestLoopSnoozeResult {
+    this.ensureInitialized();
+    return requestLoopSnooze(this.db, input);
+  }
+
+  decideLoopSnooze(input: DecideLoopSnoozeInput): SnoozeDecisionResult {
+    this.ensureInitialized();
+    return decideLoopSnooze(this.db, input);
+  }
+
+  expireDueSnoozes(referenceTime?: string): number {
+    this.ensureInitialized();
+    return expireDueSnoozes(this.db, referenceTime);
+  }
+
+  resumeDependencySnooze(
+    loopUid: string,
+    dependencyTrigger: string,
+    actorUid: string,
+    idempotencyKey: string,
+  ): OpenLoopMutationResult {
+    this.ensureInitialized();
+    return resumeDependencySnooze(this.db, loopUid, dependencyTrigger, actorUid, idempotencyKey);
+  }
+
+  resolveOpenLoop(input: ResolveOpenLoopInput): ResolveOpenLoopResult {
+    this.ensureInitialized();
+    return resolveOpenLoop(this.db, input);
+  }
+
+  recoverOpenLoop(input: RecoverOpenLoopInput): OpenLoopMutationResult {
+    this.ensureInitialized();
+    return recoverOpenLoop(this.db, input);
   }
 
   getProject(name: string): Project | null {

@@ -25,7 +25,7 @@ import {
   writeMemoryFile,
 } from './file.service.js';
 import { logActivity } from './log.service.js';
-import { resolveCanonicalProjectName } from './project.service.js';
+import { getProject, resolveCanonicalProjectName } from './project.service.js';
 import { isEnrichmentAvailable, reRankWithLLM, generateContextSummary } from './enrichment.service.js';
 import { expandRecallWithRelated, surfaceProactiveContext } from './agent-duties.service.js';
 import { now } from '../utils/datetime.js';
@@ -503,6 +503,14 @@ export function updateMemory(
 
   if (!row) return null;
 
+  if (updates.nextSteps !== undefined) {
+    const normalizedNextSteps = normalizeOrderedValues(updates.nextSteps);
+    const project = getProject(db, row.project);
+    if (project?.projectType === 'brain_context' && normalizedNextSteps.length > 0) {
+      throw new Error('Brain contexts cannot store non-empty next_steps; route executable work to a Work Project');
+    }
+  }
+
   const setValues: Record<string, unknown> = {
     updatedAt: now(),
   };
@@ -921,6 +929,7 @@ export function listOpenLoops(
   const page = items.slice(validated.offset, validated.offset + validated.limit);
 
   return {
+    source: 'legacy_memory_items',
     total: items.length,
     limit: validated.limit,
     offset: validated.offset,
@@ -937,6 +946,7 @@ export function countOpenLoops(
   const validated = CountOpenLoopsInputSchema.parse(input);
   const items = getExplicitOpenLoopItems(db, validated);
   const result: CountOpenLoopsResult = {
+    source: 'legacy_memory_items',
     total: items.length,
     generatedAt: now(),
   };

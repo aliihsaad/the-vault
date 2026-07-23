@@ -11,15 +11,24 @@ import {
   projectRelationships,
   projectProposals,
   memoryItems,
+  openLoops,
   tasks,
 } from '../database/schema.js';
 import { now } from '../utils/datetime.js';
+import { generateProjectUid } from '../utils/uid.js';
 import { ensureProjectDirs } from '../config/vault-root.js';
 import { slugify } from '../rules/naming.js';
 import { PROJECT_LINK_TYPES, type ProjectLinkType } from '../rules/controlled-values.js';
+import { CreateProjectInputSchema } from '../rules/validation.js';
+import {
+  getAuthorizationPolicy,
+  getEvidencePolicy,
+  getOpenLoopInstallationDefaults,
+} from './open-loop-policy.service.js';
 import { logActivity } from './log.service.js';
 import type {
   AddProjectRelationshipInput,
+  CreateProjectInput,
   MergeProjectResult,
   Project,
   ProjectMomentum,
@@ -108,21 +117,56 @@ function isAbsoluteRelatedFilePath(filePath: string): boolean {
 export function createProject(
   db: DB,
   vaultRoot: string,
-  name: string,
-  description?: string,
+  input: CreateProjectInput,
 ): Project {
+  const validated = CreateProjectInputSchema.parse(input);
   const timestamp = now();
+  const name = validated.name;
 
   const existing = findProjectBySlug(db, name);
   if (existing) {
     ensureProjectDirs(vaultRoot, slugify(existing.name));
+    const mapped = mapProjectRow(existing);
+    if (mapped.projectType === 'unclassified') {
+      throw new Error(`Project "${mapped.name}" is legacy-unclassified; use classify_project before typed work`);
+    }
+    if (mapped.projectType !== validated.projectType) {
+      throw new Error(`Project "${mapped.name}" already exists as ${mapped.projectType}`);
+    }
     return mapProjectRow(existing);
+  }
+
+  const defaults = getOpenLoopInstallationDefaults(db);
+  const ownerActorUid = validated.ownerActorUid || defaults.actor.actorUid;
+  const authorizationPolicyId = validated.authorizationPolicyId || defaults.authorizationPolicyUid;
+  const evidencePolicyId = validated.evidencePolicyId || defaults.evidencePolicyUid;
+  if (!getAuthorizationPolicy(db, authorizationPolicyId)) {
+    throw new Error(`Authorization policy not found: ${authorizationPolicyId}`);
+  }
+  if (!getEvidencePolicy(db, evidencePolicyId)) {
+    throw new Error(`Evidence policy not found: ${evidencePolicyId}`);
   }
 
   db.insert(projects)
     .values({
       name,
-      description: description || null,
+      description: validated.description || null,
+      projectUid: generateProjectUid(),
+      projectType: validated.projectType,
+      lifecycleState: 'shadow',
+      authorizationPolicyId,
+      evidencePolicyId,
+      classificationVersion: 1,
+      classifiedByActorUid: ownerActorUid,
+      classifiedAt: timestamp,
+      version: 1,
+      canonicalRoot: validated.projectType === 'work_project' ? validated.canonicalRoot! : null,
+      repositoryUrl: validated.repositoryUrl || null,
+      defaultBranch: validated.defaultBranch || null,
+      ownerActorUid,
+      ownerRole: validated.ownerRole || null,
+      memoryPurpose: validated.projectType === 'brain_context' ? validated.memoryPurpose! : null,
+      typeConfigJson: JSON.stringify(validated.typeConfig),
       createdAt: timestamp,
       updatedAt: timestamp,
     })
@@ -151,8 +195,44 @@ export function ensureProject(
     return existing.name;
   }
 
-  createProject(db, vaultRoot, name);
+  createLegacyUnclassifiedProject(db, vaultRoot, name);
   return name;
+}
+
+function createLegacyUnclassifiedProject(
+  db: DB,
+  vaultRoot: string,
+  name: string,
+): Project {
+  const timestamp = now();
+  db.insert(projects)
+    .values({
+      name,
+      description: null,
+      projectUid: null,
+      projectType: null,
+      lifecycleState: null,
+      authorizationPolicyId: null,
+      evidencePolicyId: null,
+      classificationVersion: 0,
+      classifiedByActorUid: null,
+      classifiedAt: null,
+      version: 0,
+      canonicalRoot: null,
+      repositoryUrl: null,
+      defaultBranch: null,
+      ownerActorUid: null,
+      ownerRole: null,
+      memoryPurpose: null,
+      typeConfigJson: '{}',
+      createdAt: timestamp,
+      updatedAt: timestamp,
+    })
+    .onConflictDoNothing()
+    .run();
+  ensureProjectDirs(vaultRoot, slugify(name));
+  const row = db.select().from(projects).where(eq(projects.name, name)).get();
+  return mapProjectRow(row!);
 }
 
 /**
@@ -403,12 +483,39 @@ export function mergeProject(
 
   // Ensure target exists and resolve to its canonical name.
   const targetCanonicalName = ensureProject(db, vaultRoot, targetName);
+  const targetRow = findProjectBySlug(db, targetCanonicalName)!;
   const targetSlug = slugify(targetCanonicalName);
   ensureProjectDirs(vaultRoot, targetSlug);
 
   const sourceCanonicalName = sourceRow.name;
   const sourceSlug = slugify(sourceCanonicalName);
   const timestamp = now();
+
+  // Dedicated loops are keyed by immutable project UIDs rather than project
+  // names. Validate the move before touching files or legacy rows so a merge
+  // cannot strand a loop or violate active-loop deduplication.
+  const sourceLoops = sourceRow.projectUid
+    ? db.select().from(openLoops).where(eq(openLoops.projectUid, sourceRow.projectUid)).all()
+    : [];
+  if (sourceLoops.length > 0) {
+    if (targetRow.projectType !== 'work_project' || !targetRow.projectUid) {
+      throw new Error('Projects with dedicated open loops can only merge into a typed Work Project');
+    }
+    const targetActiveKeys = new Set(
+      db.select({ dedupeKey: openLoops.dedupeKey, state: openLoops.state })
+        .from(openLoops)
+        .where(eq(openLoops.projectUid, targetRow.projectUid))
+        .all()
+        .filter((loop) => loop.state !== 'resolved')
+        .map((loop) => loop.dedupeKey),
+    );
+    const conflict = sourceLoops.find(
+      (loop) => loop.state !== 'resolved' && targetActiveKeys.has(loop.dedupeKey),
+    );
+    if (conflict) {
+      throw new Error(`Cannot merge projects with duplicate active loop dedupe key: ${conflict.dedupeKey}`);
+    }
+  }
 
   // -------- memory_items --------
   const sourceItems = db
@@ -529,6 +636,15 @@ export function mergeProject(
     rewrittenProposalUids.push(prop.proposalUid);
   }
 
+  // -------- open_loops.project_uid --------
+  const movedLoopUids = sourceLoops.map((loop) => loop.loopUid);
+  if (movedLoopUids.length > 0) {
+    db.update(openLoops)
+      .set({ projectUid: targetRow.projectUid!, updatedAt: timestamp })
+      .where(eq(openLoops.projectUid, sourceRow.projectUid!))
+      .run();
+  }
+
   // -------- delete source project row --------
   db.delete(projects).where(eq(projects.id, sourceRow.id)).run();
 
@@ -551,6 +667,7 @@ export function mergeProject(
       removedRelationships: removedRelationshipIds.length,
       rewrittenTasks: rewrittenTaskUids.length,
       rewrittenProposals: rewrittenProposalUids.length,
+      movedLoops: movedLoopUids.length,
     },
   });
 
@@ -564,6 +681,7 @@ export function mergeProject(
     removedRelationshipIds,
     rewrittenTaskUids,
     rewrittenProposalUids,
+    movedLoopUids,
     sourceProjectDeleted: true,
   };
 }
@@ -623,9 +741,48 @@ function mapProjectRow(row: typeof projects.$inferSelect): Project {
     name: row.name,
     slug: slugify(row.name),
     description: row.description,
+    projectUid: row.projectUid,
+    projectType: row.projectType === 'work_project' || row.projectType === 'brain_context'
+      ? row.projectType
+      : 'unclassified',
+    lifecycleState: isProjectLifecycleState(row.lifecycleState) ? row.lifecycleState : null,
+    authorizationPolicyId: row.authorizationPolicyId,
+    evidencePolicyId: row.evidencePolicyId,
+    classificationVersion: row.classificationVersion,
+    classifiedByActorUid: row.classifiedByActorUid,
+    classifiedAt: row.classifiedAt,
+    version: row.version,
+    canonicalRoot: row.canonicalRoot,
+    repositoryUrl: row.repositoryUrl,
+    defaultBranch: row.defaultBranch,
+    ownerActorUid: row.ownerActorUid,
+    ownerRole: row.ownerRole,
+    memoryPurpose: row.memoryPurpose,
+    typeConfig: parseProjectTypeConfig(row.typeConfigJson),
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
   };
+}
+
+function isProjectLifecycleState(
+  value: string | null,
+): value is NonNullable<Project['lifecycleState']> {
+  return value === 'legacy_cleanup'
+    || value === 'shadow'
+    || value === 'gate_ready'
+    || value === 'gate_active'
+    || value === 'suspended';
+}
+
+function parseProjectTypeConfig(value: string): Record<string, unknown> {
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+      ? parsed as Record<string, unknown>
+      : {};
+  } catch {
+    return {};
+  }
 }
 
 function mapRelationshipRow(row: typeof projectRelationships.$inferSelect): ProjectRelationship {

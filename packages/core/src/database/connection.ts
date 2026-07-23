@@ -6,8 +6,9 @@
 import Database from 'better-sqlite3';
 import { drizzle, type BetterSQLite3Database } from 'drizzle-orm/better-sqlite3';
 import * as schema from './schema.js';
-import { existsSync, mkdirSync } from 'node:fs';
-import { dirname } from 'node:path';
+import { createHash } from 'node:crypto';
+import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync } from 'node:fs';
+import { dirname, join, relative, resolve, sep } from 'node:path';
 
 /** Shared database type used across all services. */
 export type VaultDB = BetterSQLite3Database<typeof schema>;
@@ -59,6 +60,9 @@ export function initializeSchema(dbPath: string): void {
   const raw = getRawDatabase();
   if (!raw) throw new Error('Database not initialized');
 
+  const preMigrationState = captureOpenLoopsPreMigrationState(raw, dbPath);
+  createOpenLoopsPreMigrationBackup(raw, dbPath);
+
   // Create tables using raw SQL for reliability
   raw.exec(`
     CREATE TABLE IF NOT EXISTS memory_items (
@@ -101,6 +105,22 @@ export function initializeSchema(dbPath: string): void {
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       name TEXT UNIQUE NOT NULL,
       description TEXT,
+      project_uid TEXT,
+      project_type TEXT,
+      lifecycle_state TEXT,
+      authorization_policy_id TEXT,
+      evidence_policy_id TEXT,
+      classification_version INTEGER NOT NULL DEFAULT 0,
+      classified_by_actor_uid TEXT,
+      classified_at TEXT,
+      version INTEGER NOT NULL DEFAULT 0,
+      canonical_root TEXT,
+      repository_url TEXT,
+      default_branch TEXT,
+      owner_actor_uid TEXT,
+      owner_role TEXT,
+      memory_purpose TEXT,
+      type_config_json TEXT NOT NULL DEFAULT '{}',
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
     );
@@ -274,6 +294,8 @@ export function initializeSchema(dbPath: string): void {
   // PRAGMA and only run when missing. Existing databases pick up the column
   // on next start; new databases match the CREATE TABLE definition.
   applyAdditiveMigrations(raw);
+  createOpenLoopsSchema(raw);
+  recordOpenLoopsMigration(raw, preMigrationState);
 }
 
 function applyAdditiveMigrations(raw: Database.Database): void {
@@ -307,6 +329,478 @@ function applyAdditiveMigrations(raw: Database.Database): void {
     'outcome TEXT',
     'CREATE INDEX IF NOT EXISTS idx_memory_items_outcome ON memory_items(outcome);',
   );
+
+  ensureColumn('projects', 'project_uid', 'project_uid TEXT');
+  ensureColumn('projects', 'project_type', 'project_type TEXT');
+  ensureColumn('projects', 'lifecycle_state', 'lifecycle_state TEXT');
+  ensureColumn('projects', 'authorization_policy_id', 'authorization_policy_id TEXT');
+  ensureColumn('projects', 'evidence_policy_id', 'evidence_policy_id TEXT');
+  ensureColumn('projects', 'classification_version', 'classification_version INTEGER NOT NULL DEFAULT 0');
+  ensureColumn('projects', 'classified_by_actor_uid', 'classified_by_actor_uid TEXT');
+  ensureColumn('projects', 'classified_at', 'classified_at TEXT');
+  ensureColumn('projects', 'version', 'version INTEGER NOT NULL DEFAULT 0');
+  ensureColumn('projects', 'canonical_root', 'canonical_root TEXT');
+  ensureColumn('projects', 'repository_url', 'repository_url TEXT');
+  ensureColumn('projects', 'default_branch', 'default_branch TEXT');
+  ensureColumn('projects', 'owner_actor_uid', 'owner_actor_uid TEXT');
+  ensureColumn('projects', 'owner_role', 'owner_role TEXT');
+  ensureColumn('projects', 'memory_purpose', 'memory_purpose TEXT');
+  ensureColumn('projects', 'type_config_json', "type_config_json TEXT NOT NULL DEFAULT '{}'");
+
+  raw.exec(`
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_projects_project_uid ON projects(project_uid);
+    CREATE INDEX IF NOT EXISTS idx_projects_project_type ON projects(project_type);
+    CREATE INDEX IF NOT EXISTS idx_projects_lifecycle_state ON projects(lifecycle_state);
+    CREATE INDEX IF NOT EXISTS idx_projects_authorization_policy ON projects(authorization_policy_id);
+  `);
+}
+
+function createOpenLoopsSchema(raw: Database.Database): void {
+  raw.exec(`
+    CREATE TABLE IF NOT EXISTS authorization_policies (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      policy_uid TEXT UNIQUE NOT NULL,
+      name TEXT NOT NULL,
+      mode TEXT NOT NULL CHECK (mode IN ('owner', 'role', 'quorum', 'external')),
+      owner_actor_uid TEXT,
+      allowed_roles_json TEXT NOT NULL DEFAULT '[]',
+      quorum INTEGER NOT NULL DEFAULT 1 CHECK (quorum > 0),
+      external_provider TEXT,
+      actions_json TEXT NOT NULL DEFAULT '[]',
+      version INTEGER NOT NULL DEFAULT 1 CHECK (version > 0),
+      enabled INTEGER NOT NULL DEFAULT 1,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_authorization_policies_mode ON authorization_policies(mode);
+    CREATE INDEX IF NOT EXISTS idx_authorization_policies_enabled ON authorization_policies(enabled);
+
+    CREATE TABLE IF NOT EXISTS evidence_policies (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      policy_uid TEXT UNIQUE NOT NULL,
+      name TEXT NOT NULL,
+      requirements_json TEXT NOT NULL,
+      version INTEGER NOT NULL DEFAULT 1 CHECK (version > 0),
+      enabled INTEGER NOT NULL DEFAULT 1,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS open_loops (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      loop_uid TEXT UNIQUE NOT NULL,
+      project_uid TEXT NOT NULL REFERENCES projects(project_uid),
+      title TEXT NOT NULL,
+      commitment TEXT NOT NULL,
+      deferred_reason TEXT NOT NULL,
+      owner_kind TEXT NOT NULL,
+      owner_reference TEXT NOT NULL,
+      immediate_next_action TEXT NOT NULL,
+      trigger_kind TEXT NOT NULL CHECK (trigger_kind IN ('deadline', 'review_date', 'dependency', 'checkpoint')),
+      trigger_value TEXT NOT NULL,
+      current_evidence_summary TEXT NOT NULL,
+      closure_criteria TEXT NOT NULL,
+      evidence_json TEXT NOT NULL DEFAULT '[]',
+      state TEXT NOT NULL DEFAULT 'open' CHECK (state IN ('open', 'verification_needed', 'awaiting_approval', 'awaiting_user', 'externally_blocked', 'snoozed', 'resolved')),
+      terminal_outcome TEXT CHECK (terminal_outcome IS NULL OR terminal_outcome IN ('fixed', 'obsolete', 'duplicate', 'wont_fix')),
+      priority TEXT NOT NULL CHECK (priority IN ('low', 'normal', 'high', 'critical')),
+      blocking_scope TEXT NOT NULL DEFAULT 'project' CHECK (blocking_scope = 'project'),
+      dedupe_key TEXT NOT NULL,
+      source_memory_uid TEXT,
+      source_task_uid TEXT,
+      source_session_uid TEXT,
+      source_handoff_uid TEXT,
+      external_reference TEXT,
+      source_context_json TEXT NOT NULL,
+      creating_actor_uid TEXT NOT NULL,
+      creating_actor_kind TEXT NOT NULL,
+      resume_state TEXT,
+      snoozed_until TEXT,
+      dependency_trigger TEXT,
+      resolution_note TEXT,
+      resolved_at TEXT,
+      version INTEGER NOT NULL DEFAULT 1 CHECK (version > 0),
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      CHECK ((state = 'resolved' AND terminal_outcome IS NOT NULL) OR (state <> 'resolved' AND terminal_outcome IS NULL)),
+      CHECK (state = 'snoozed' OR (snoozed_until IS NULL AND dependency_trigger IS NULL))
+    );
+
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_open_loops_active_dedupe
+      ON open_loops(project_uid, dedupe_key) WHERE state <> 'resolved';
+    CREATE INDEX IF NOT EXISTS idx_open_loops_project_state ON open_loops(project_uid, state);
+    CREATE INDEX IF NOT EXISTS idx_open_loops_snooze_expiry ON open_loops(snoozed_until);
+    CREATE INDEX IF NOT EXISTS idx_open_loops_owner ON open_loops(owner_kind, owner_reference);
+    CREATE INDEX IF NOT EXISTS idx_open_loops_priority ON open_loops(priority);
+    CREATE INDEX IF NOT EXISTS idx_open_loops_trigger ON open_loops(trigger_kind, trigger_value);
+
+    CREATE TABLE IF NOT EXISTS loop_events (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      event_uid TEXT UNIQUE NOT NULL,
+      loop_uid TEXT NOT NULL REFERENCES open_loops(loop_uid),
+      idempotency_key TEXT UNIQUE NOT NULL,
+      event_type TEXT NOT NULL,
+      actor_uid TEXT NOT NULL,
+      actor_kind TEXT NOT NULL,
+      authorization_policy_uid TEXT,
+      authorization_policy_version INTEGER,
+      previous_state TEXT,
+      next_state TEXT,
+      payload_json TEXT NOT NULL DEFAULT '{}',
+      evidence_references_json TEXT NOT NULL DEFAULT '[]',
+      result_json TEXT NOT NULL,
+      correlation_uid TEXT,
+      created_at TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_loop_events_loop ON loop_events(loop_uid, created_at);
+    CREATE INDEX IF NOT EXISTS idx_loop_events_type ON loop_events(event_type);
+  `);
+
+  createOpenLoopsGovernanceSchema(raw);
+  createOpenLoopsTriggers(raw);
+}
+
+function createOpenLoopsGovernanceSchema(raw: Database.Database): void {
+  raw.exec(`
+    CREATE TABLE IF NOT EXISTS approval_requests (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      request_uid TEXT UNIQUE NOT NULL,
+      action TEXT NOT NULL,
+      target_uid TEXT NOT NULL,
+      policy_uid TEXT NOT NULL REFERENCES authorization_policies(policy_uid),
+      policy_version INTEGER NOT NULL,
+      requester_actor_uid TEXT NOT NULL,
+      requester_actor_kind TEXT NOT NULL,
+      scope_json TEXT NOT NULL DEFAULT '{}',
+      reason TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'approved', 'denied', 'expired')),
+      expires_at TEXT,
+      trigger_json TEXT,
+      idempotency_key TEXT UNIQUE NOT NULL,
+      created_at TEXT NOT NULL,
+      decided_at TEXT
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_approval_requests_target ON approval_requests(target_uid, action);
+    CREATE INDEX IF NOT EXISTS idx_approval_requests_status ON approval_requests(status);
+
+    CREATE TABLE IF NOT EXISTS approval_records (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      approval_uid TEXT UNIQUE NOT NULL,
+      request_uid TEXT NOT NULL REFERENCES approval_requests(request_uid),
+      action TEXT NOT NULL,
+      target_uid TEXT NOT NULL,
+      policy_uid TEXT NOT NULL REFERENCES authorization_policies(policy_uid),
+      policy_version INTEGER NOT NULL,
+      actor_uid TEXT NOT NULL,
+      actor_kind TEXT NOT NULL,
+      actor_roles_json TEXT NOT NULL DEFAULT '[]',
+      decision TEXT NOT NULL CHECK (decision IN ('approved', 'denied')),
+      scope_json TEXT NOT NULL DEFAULT '{}',
+      reason TEXT NOT NULL,
+      external_decision_id TEXT,
+      event_uid TEXT,
+      idempotency_key TEXT UNIQUE NOT NULL,
+      created_at TEXT NOT NULL,
+      UNIQUE(request_uid, actor_uid)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_approval_records_target ON approval_records(target_uid, action);
+
+    CREATE TABLE IF NOT EXISTS project_events (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      event_uid TEXT UNIQUE NOT NULL,
+      project_uid TEXT NOT NULL REFERENCES projects(project_uid),
+      idempotency_key TEXT UNIQUE NOT NULL,
+      event_type TEXT NOT NULL,
+      actor_uid TEXT NOT NULL,
+      actor_kind TEXT NOT NULL,
+      authorization_policy_uid TEXT NOT NULL,
+      authorization_policy_version INTEGER NOT NULL,
+      payload_json TEXT NOT NULL DEFAULT '{}',
+      result_json TEXT NOT NULL,
+      created_at TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_project_events_project ON project_events(project_uid, created_at);
+    CREATE INDEX IF NOT EXISTS idx_project_events_type ON project_events(event_type);
+
+    CREATE TABLE IF NOT EXISTS gate_events (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      event_uid TEXT UNIQUE NOT NULL,
+      project_uid TEXT NOT NULL REFERENCES projects(project_uid),
+      related_loop_uid TEXT,
+      idempotency_key TEXT UNIQUE NOT NULL,
+      work_intent TEXT NOT NULL,
+      actor_uid TEXT NOT NULL,
+      actor_kind TEXT NOT NULL,
+      decision TEXT NOT NULL CHECK (decision IN ('allow', 'deny')),
+      reason_code TEXT NOT NULL,
+      blocker_uids_json TEXT NOT NULL DEFAULT '[]',
+      result_json TEXT NOT NULL,
+      created_at TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_gate_events_project ON gate_events(project_uid, created_at);
+    CREATE INDEX IF NOT EXISTS idx_gate_events_decision ON gate_events(decision);
+
+    CREATE TABLE IF NOT EXISTS migration_ledger (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      migration_uid TEXT UNIQUE NOT NULL,
+      phase TEXT NOT NULL,
+      version INTEGER NOT NULL,
+      pre_state_json TEXT NOT NULL,
+      applied_at TEXT NOT NULL
+    );
+  `);
+}
+
+function createOpenLoopsTriggers(raw: Database.Database): void {
+  raw.exec(`
+    CREATE TRIGGER IF NOT EXISTS trg_open_loops_work_project_insert
+    BEFORE INSERT ON open_loops
+    WHEN COALESCE((SELECT project_type FROM projects WHERE project_uid = NEW.project_uid), 'invalid') <> 'work_project'
+    BEGIN
+      SELECT RAISE(ABORT, 'OPEN_LOOPS_BRAIN_OR_UNCLASSIFIED_PROJECT');
+    END;
+
+    CREATE TRIGGER IF NOT EXISTS trg_open_loops_work_project_update
+    BEFORE UPDATE OF project_uid ON open_loops
+    WHEN COALESCE((SELECT project_type FROM projects WHERE project_uid = NEW.project_uid), 'invalid') <> 'work_project'
+    BEGIN
+      SELECT RAISE(ABORT, 'OPEN_LOOPS_BRAIN_OR_UNCLASSIFIED_PROJECT');
+    END;
+
+    CREATE TRIGGER IF NOT EXISTS trg_projects_brain_zero_loops
+    BEFORE UPDATE OF project_type ON projects
+    WHEN NEW.project_type = 'brain_context'
+      AND EXISTS (
+        SELECT 1 FROM open_loops
+        WHERE project_uid = NEW.project_uid AND state <> 'resolved'
+      )
+    BEGIN
+      SELECT RAISE(ABORT, 'BRAIN_CONTEXT_HAS_OPEN_LOOPS');
+    END;
+
+    CREATE TRIGGER IF NOT EXISTS trg_projects_brain_zero_loop_rows
+    BEFORE UPDATE OF project_type ON projects
+    WHEN NEW.project_type = 'brain_context'
+      AND EXISTS (SELECT 1 FROM open_loops WHERE project_uid = NEW.project_uid)
+    BEGIN
+      SELECT RAISE(ABORT, 'BRAIN_CONTEXT_HAS_LOOP_HISTORY');
+    END;
+
+    CREATE TRIGGER IF NOT EXISTS trg_loop_events_append_only_update
+    BEFORE UPDATE ON loop_events
+    BEGIN
+      SELECT RAISE(ABORT, 'LOOP_EVENTS_APPEND_ONLY');
+    END;
+
+    CREATE TRIGGER IF NOT EXISTS trg_loop_events_append_only_delete
+    BEFORE DELETE ON loop_events
+    BEGIN
+      SELECT RAISE(ABORT, 'LOOP_EVENTS_APPEND_ONLY');
+    END;
+
+    CREATE TRIGGER IF NOT EXISTS trg_approval_records_append_only_update
+    BEFORE UPDATE ON approval_records
+    BEGIN
+      SELECT RAISE(ABORT, 'APPROVAL_RECORDS_APPEND_ONLY');
+    END;
+
+    CREATE TRIGGER IF NOT EXISTS trg_approval_records_append_only_delete
+    BEFORE DELETE ON approval_records
+    BEGIN
+      SELECT RAISE(ABORT, 'APPROVAL_RECORDS_APPEND_ONLY');
+    END;
+
+    CREATE TRIGGER IF NOT EXISTS trg_project_events_append_only_update
+    BEFORE UPDATE ON project_events
+    BEGIN
+      SELECT RAISE(ABORT, 'PROJECT_EVENTS_APPEND_ONLY');
+    END;
+
+    CREATE TRIGGER IF NOT EXISTS trg_project_events_append_only_delete
+    BEFORE DELETE ON project_events
+    BEGIN
+      SELECT RAISE(ABORT, 'PROJECT_EVENTS_APPEND_ONLY');
+    END;
+
+    CREATE TRIGGER IF NOT EXISTS trg_gate_events_append_only_update
+    BEFORE UPDATE ON gate_events
+    BEGIN
+      SELECT RAISE(ABORT, 'GATE_EVENTS_APPEND_ONLY');
+    END;
+
+    CREATE TRIGGER IF NOT EXISTS trg_gate_events_append_only_delete
+    BEFORE DELETE ON gate_events
+    BEGIN
+      SELECT RAISE(ABORT, 'GATE_EVENTS_APPEND_ONLY');
+    END;
+
+    CREATE TRIGGER IF NOT EXISTS trg_migration_ledger_append_only_update
+    BEFORE UPDATE ON migration_ledger
+    BEGIN
+      SELECT RAISE(ABORT, 'MIGRATION_LEDGER_APPEND_ONLY');
+    END;
+
+    CREATE TRIGGER IF NOT EXISTS trg_migration_ledger_append_only_delete
+    BEFORE DELETE ON migration_ledger
+    BEGIN
+      SELECT RAISE(ABORT, 'MIGRATION_LEDGER_APPEND_ONLY');
+    END;
+  `);
+}
+
+interface OpenLoopsPreMigrationState {
+  projects: number;
+  memoryItems: number;
+  legacyExplicitOpenLoops: number;
+  projectRowsHash: string;
+  memoryRowsHash: string;
+  memoryFileCount: number;
+  memoryFilesHash: string;
+  backupPath: string | null;
+  memoryFilesBackupPath: string | null;
+}
+
+function captureOpenLoopsPreMigrationState(
+  raw: Database.Database,
+  dbPath: string,
+): OpenLoopsPreMigrationState {
+  const hasProjects = hasSqliteTable(raw, 'projects');
+  const hasMemoryItems = hasSqliteTable(raw, 'memory_items');
+  const projectRows = hasProjects
+    ? raw.prepare('SELECT id, name, description, created_at, updated_at FROM projects ORDER BY id').all()
+    : [];
+  const memoryRows = hasMemoryItems
+    ? raw.prepare(`
+        SELECT id, item_uid, project, status, next_steps_json, updated_at
+        FROM memory_items ORDER BY id
+      `).all()
+    : [];
+  const vaultRoot = dirname(dirname(dbPath));
+  const files = collectMemoryFiles(vaultRoot);
+
+  return {
+    projects: projectRows.length,
+    memoryItems: memoryRows.length,
+    legacyExplicitOpenLoops: hasMemoryItems
+      ? Number((raw.prepare(`
+          SELECT COUNT(*) AS count
+          FROM memory_items
+          WHERE status = 'active' AND next_steps_json <> '[]'
+        `).get() as { count: number }).count)
+      : 0,
+    projectRowsHash: hashJson(projectRows),
+    memoryRowsHash: hashJson(memoryRows),
+    memoryFileCount: files.length,
+    memoryFilesHash: hashMemoryFiles(files),
+    backupPath: shouldRunOpenLoopsProjectMigration(raw)
+      ? `${dbPath}.open-loops-v2.pre-migration.bak`
+      : null,
+    memoryFilesBackupPath: shouldRunOpenLoopsProjectMigration(raw)
+      ? join(vaultRoot, 'migration-backups', 'open-loops-v2-phase-a-files')
+      : null,
+  };
+}
+
+function createOpenLoopsPreMigrationBackup(raw: Database.Database, dbPath: string): void {
+  if (!shouldRunOpenLoopsProjectMigration(raw)) {
+    return;
+  }
+
+  const backupPath = `${dbPath}.open-loops-v2.pre-migration.bak`;
+  if (!existsSync(backupPath)) {
+    raw.exec(`VACUUM INTO '${backupPath.replace(/'/g, "''")}';`);
+  }
+
+  const vaultRoot = dirname(dirname(dbPath));
+  const filesBackupRoot = resolve(vaultRoot, 'migration-backups', 'open-loops-v2-phase-a-files');
+  for (const sourcePath of collectMemoryFiles(vaultRoot)) {
+    const relativePath = relative(vaultRoot, sourcePath);
+    const targetPath = resolve(filesBackupRoot, relativePath);
+    if (targetPath !== filesBackupRoot && !targetPath.startsWith(`${filesBackupRoot}${sep}`)) {
+      throw new Error(`Refusing unsafe migration backup path: ${targetPath}`);
+    }
+    if (!existsSync(targetPath)) {
+      mkdirSync(dirname(targetPath), { recursive: true });
+      copyFileSync(sourcePath, targetPath);
+    }
+  }
+}
+
+function recordOpenLoopsMigration(
+  raw: Database.Database,
+  preState: OpenLoopsPreMigrationState,
+): void {
+  raw.prepare(`
+    INSERT OR IGNORE INTO migration_ledger (
+      migration_uid, phase, version, pre_state_json, applied_at
+    ) VALUES (?, ?, ?, ?, ?)
+  `).run(
+    'open_loops_v2_phase_a_v1',
+    'A',
+    1,
+    JSON.stringify(preState),
+    new Date().toISOString(),
+  );
+}
+
+function shouldRunOpenLoopsProjectMigration(raw: Database.Database): boolean {
+  return hasSqliteTable(raw, 'projects') && !hasSqliteColumn(raw, 'projects', 'project_type');
+}
+
+function hasSqliteTable(raw: Database.Database, table: string): boolean {
+  return Boolean(raw.prepare(
+    "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
+  ).get(table));
+}
+
+function hasSqliteColumn(raw: Database.Database, table: string, column: string): boolean {
+  const rows = raw.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>;
+  return rows.some((row) => row.name === column);
+}
+
+function hashJson(value: unknown): string {
+  return createHash('sha256').update(JSON.stringify(value)).digest('hex');
+}
+
+function collectMemoryFiles(vaultRoot: string): string[] {
+  const files: string[] = [];
+  for (const folder of ['projects', 'shared']) {
+    const root = `${vaultRoot}/${folder}`;
+    if (!existsSync(root)) {
+      continue;
+    }
+    walkMemoryFiles(root, files);
+  }
+  return files.sort((left, right) => left.localeCompare(right));
+}
+
+function walkMemoryFiles(directory: string, files: string[]): void {
+  for (const entry of readdirSync(directory)) {
+    const path = `${directory}/${entry}`;
+    const stat = statSync(path);
+    if (stat.isDirectory()) {
+      walkMemoryFiles(path, files);
+    } else if (entry.toLowerCase().endsWith('.md')) {
+      files.push(path);
+    }
+  }
+}
+
+function hashMemoryFiles(files: string[]): string {
+  const hash = createHash('sha256');
+  for (const file of files) {
+    hash.update(file.replace(/\\/g, '/'));
+    hash.update('\0');
+    hash.update(readFileSync(file));
+    hash.update('\0');
+  }
+  return hash.digest('hex');
 }
 
 /**

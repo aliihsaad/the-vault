@@ -18,6 +18,20 @@ import type {
   TaskStatus,
   TaskPriority,
   OutcomeValue,
+  ProjectType,
+  ProjectLifecycleState,
+  AuthorizationPolicyMode,
+  AuthorizationAction,
+  ActorKind,
+  LoopState,
+  LoopOutcome,
+  LoopPriority,
+  LoopBlockingScope,
+  LoopTriggerKind,
+  LoopEventType,
+  WorkIntent,
+  EvidenceKind,
+  ApprovalDecision,
 } from '../rules/controlled-values.js';
 
 // ---------------------------------------------------------------------------
@@ -195,6 +209,7 @@ export interface OpenLoopListItem {
 }
 
 export interface ListOpenLoopsResult {
+  source: 'legacy_memory_items';
   total: number;
   limit: number;
   offset: number;
@@ -213,6 +228,7 @@ export interface CountOpenLoopsInput {
 }
 
 export interface CountOpenLoopsResult {
+  source: 'legacy_memory_items';
   total: number;
   byProject?: Record<string, number>;
   generatedAt: string;
@@ -272,10 +288,130 @@ export interface Project {
   name: string;
   slug: string;
   description: string | null;
+  projectUid: string | null;
+  projectType: ProjectType;
+  lifecycleState: ProjectLifecycleState | null;
+  authorizationPolicyId: string | null;
+  evidencePolicyId: string | null;
+  classificationVersion: number;
+  classifiedByActorUid: string | null;
+  classifiedAt: string | null;
+  version: number;
+  canonicalRoot: string | null;
+  repositoryUrl: string | null;
+  defaultBranch: string | null;
+  ownerActorUid: string | null;
+  ownerRole: string | null;
+  memoryPurpose: string | null;
+  typeConfig: Record<string, unknown>;
   createdAt: string;
   updatedAt: string;
   memoryCount?: number;
   relationships?: ProjectRelationship[];
+}
+
+export interface ActorContext {
+  actorUid: string;
+  actorKind: ActorKind;
+  roles: string[];
+  externalProvider?: string;
+  externalDecisionId?: string;
+  externalApproved?: boolean;
+}
+
+export interface AuthorizationPolicy {
+  policyUid: string;
+  name: string;
+  mode: AuthorizationPolicyMode;
+  ownerActorUid: string | null;
+  allowedRoles: string[];
+  quorum: number;
+  externalProvider: string | null;
+  actions: AuthorizationAction[];
+  version: number;
+  enabled: boolean;
+}
+
+export interface EvidencePolicyRequirements {
+  minimumReferences: number;
+  fixedKinds: EvidenceKind[];
+  duplicateKinds: EvidenceKind[];
+  retirementKinds: EvidenceKind[];
+}
+
+export interface EvidencePolicy {
+  policyUid: string;
+  name: string;
+  requirements: EvidencePolicyRequirements;
+  version: number;
+  enabled: boolean;
+}
+
+export interface OpenLoopInstallationDefaults {
+  actor: ActorContext;
+  authorizationPolicyUid: string;
+  evidencePolicyUid: string;
+}
+
+export interface CreateProjectInput {
+  name: string;
+  projectType: Exclude<ProjectType, 'unclassified'>;
+  description?: string;
+  canonicalRoot?: string;
+  repositoryUrl?: string;
+  defaultBranch?: string;
+  ownerActorUid?: string;
+  ownerRole?: string;
+  memoryPurpose?: string;
+  authorizationPolicyId?: string;
+  evidencePolicyId?: string;
+  typeConfig?: Record<string, unknown>;
+}
+
+export interface ProjectClassificationConfig {
+  description?: string;
+  canonicalRoot?: string;
+  repositoryUrl?: string;
+  defaultBranch?: string;
+  ownerActorUid?: string;
+  ownerRole?: string;
+  memoryPurpose?: string;
+  authorizationPolicyId?: string;
+  evidencePolicyId?: string;
+  typeConfig?: Record<string, unknown>;
+}
+
+export interface ClassifyProjectInput {
+  project: string;
+  targetType: Exclude<ProjectType, 'unclassified'>;
+  config: ProjectClassificationConfig;
+  actor: ActorContext;
+  expectedVersion: number;
+  idempotencyKey: string;
+  authorizationRequestUid?: string;
+  dryRun?: boolean;
+}
+
+export interface ConvertProjectTypeInput extends ClassifyProjectInput {
+  reason: string;
+}
+
+export interface ProjectClassificationReport {
+  project: Project;
+  requestedType: Exclude<ProjectType, 'unclassified'>;
+  dryRun: boolean;
+  allowed: boolean;
+  reasonCodes: string[];
+  legacyCandidateCount: number;
+  dedicatedNonterminalLoopCount: number;
+  dedicatedLoopCount: number;
+  resultingLifecycleState: ProjectLifecycleState;
+}
+
+export interface ProjectClassificationResult extends ProjectClassificationReport {
+  project: Project;
+  idempotentReplay: boolean;
+  eventUid: string | null;
 }
 
 /**
@@ -382,6 +518,326 @@ export interface OpenLoop {
 }
 
 // ---------------------------------------------------------------------------
+// Open-Loops v2 dedicated lifecycle
+// ---------------------------------------------------------------------------
+export interface LoopEvidenceReference {
+  evidenceUid: string;
+  kind: EvidenceKind;
+  reference: string;
+  description: string;
+  immutableHash: string | null;
+  addedByActorUid: string;
+  addedByActorKind: ActorKind;
+  addedAt: string;
+}
+
+export interface AddLoopEvidenceReferenceInput {
+  kind: EvidenceKind;
+  reference: string;
+  description: string;
+  immutableHash?: string;
+}
+
+export interface DedicatedOpenLoop {
+  id: number;
+  loopUid: string;
+  projectUid: string;
+  projectName: string;
+  title: string;
+  commitment: string;
+  deferredReason: string;
+  ownerKind: ActorKind;
+  ownerReference: string;
+  immediateNextAction: string;
+  triggerKind: LoopTriggerKind;
+  triggerValue: string;
+  currentEvidenceSummary: string;
+  closureCriteria: string;
+  evidence: LoopEvidenceReference[];
+  state: LoopState;
+  terminalOutcome: LoopOutcome | null;
+  priority: LoopPriority;
+  blockingScope: LoopBlockingScope;
+  dedupeKey: string;
+  sourceMemoryUid: string | null;
+  sourceTaskUid: string | null;
+  sourceSessionUid: string | null;
+  sourceHandoffUid: string | null;
+  externalReference: string | null;
+  sourceContext: Record<string, unknown>;
+  creatingActorUid: string;
+  creatingActorKind: ActorKind;
+  resumeState: Exclude<LoopState, 'snoozed' | 'resolved'> | null;
+  snoozedUntil: string | null;
+  dependencyTrigger: string | null;
+  resolutionNote: string | null;
+  resolvedAt: string | null;
+  version: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface CreateOpenLoopInput {
+  projectUid: string;
+  title: string;
+  commitment: string;
+  deferredReason: string;
+  ownerKind: ActorKind;
+  ownerReference: string;
+  immediateNextAction: string;
+  triggerKind: LoopTriggerKind;
+  triggerValue: string;
+  currentEvidenceSummary: string;
+  closureCriteria: string;
+  priority: LoopPriority;
+  blockingScope?: LoopBlockingScope;
+  dedupeKey: string;
+  sourceMemoryUid?: string;
+  sourceTaskUid?: string;
+  sourceSessionUid?: string;
+  sourceHandoffUid?: string;
+  externalReference?: string;
+  sourceContext: Record<string, unknown>;
+  creatingActor: ActorContext;
+  idempotencyKey: string;
+  authorizationRequestUid?: string;
+  correlationUid?: string;
+}
+
+export interface CreateOpenLoopResult {
+  loop: DedicatedOpenLoop;
+  eventUid: string;
+  idempotentReplay: boolean;
+}
+
+export interface OpenLoopMutationResult {
+  loop: DedicatedOpenLoop;
+  eventUid: string;
+  idempotentReplay: boolean;
+}
+
+export interface ListDedicatedOpenLoopsInput {
+  projectUid?: string;
+  states?: LoopState[];
+  includeResolved?: boolean;
+  limit?: number;
+  offset?: number;
+}
+
+export interface ListDedicatedOpenLoopsResult {
+  source: 'dedicated_open_loops';
+  total: number;
+  limit: number;
+  offset: number;
+  hasMore: boolean;
+  generatedAt: string;
+  items: DedicatedOpenLoop[];
+}
+
+export interface CountDedicatedOpenLoopsInput {
+  projectUid?: string;
+  states?: LoopState[];
+  includeResolved?: boolean;
+  byProject?: boolean;
+}
+
+export interface CountDedicatedOpenLoopsResult {
+  source: 'dedicated_open_loops';
+  total: number;
+  byProject?: Record<string, number>;
+  generatedAt: string;
+}
+
+export interface TransitionOpenLoopInput {
+  loopUid: string;
+  nextState: Exclude<LoopState, 'snoozed' | 'resolved'>;
+  reason: string;
+  actor: ActorContext;
+  expectedVersion: number;
+  idempotencyKey: string;
+  correlationUid?: string;
+}
+
+export interface AddLoopEvidenceInput {
+  loopUid: string;
+  evidence: AddLoopEvidenceReferenceInput[];
+  currentEvidenceSummary: string;
+  actor: ActorContext;
+  expectedVersion: number;
+  idempotencyKey: string;
+  transitionToVerification?: boolean;
+  correlationUid?: string;
+}
+
+export interface ResolveOpenLoopInput {
+  loopUid: string;
+  outcome: LoopOutcome;
+  resolutionNote: string;
+  verifier: ActorContext;
+  expectedVersion: number;
+  idempotencyKey: string;
+  duplicateOfLoopUid?: string;
+  correlationUid?: string;
+}
+
+export interface ResolveOpenLoopResult {
+  loop: DedicatedOpenLoop;
+  gate: ProjectGateResult;
+  eventUid: string;
+  idempotentReplay: boolean;
+}
+
+export interface RecoverOpenLoopInput {
+  loopUid: string;
+  reason: string;
+  actor: ActorContext;
+  expectedVersion: number;
+  idempotencyKey: string;
+  authorizationRequestUid?: string;
+  recoveryState?: Exclude<LoopState, 'snoozed' | 'resolved'>;
+  correlationUid?: string;
+}
+
+export interface RequestLoopSnoozeInput {
+  loopUid: string;
+  reason: string;
+  snoozedUntil?: string;
+  dependencyTrigger?: string;
+  requester: ActorContext;
+  expectedVersion: number;
+  idempotencyKey: string;
+}
+
+export interface DecideLoopSnoozeInput {
+  requestUid: string;
+  loopUid: string;
+  decision: ApprovalDecision;
+  reason: string;
+  approver: ActorContext;
+  expectedVersion: number;
+  idempotencyKey: string;
+}
+
+export interface RequestLoopSnoozeResult {
+  request: ApprovalRequest;
+  loop: DedicatedOpenLoop;
+  eventUid: string;
+  idempotentReplay: boolean;
+}
+
+export interface ApprovalRequest {
+  requestUid: string;
+  action: AuthorizationAction;
+  targetUid: string;
+  policyUid: string;
+  policyVersion: number;
+  requesterActorUid: string;
+  requesterActorKind: ActorKind;
+  scope: Record<string, unknown>;
+  reason: string;
+  status: 'pending' | 'approved' | 'denied' | 'expired';
+  expiresAt: string | null;
+  trigger: Record<string, unknown> | null;
+  createdAt: string;
+  decidedAt: string | null;
+}
+
+export interface ApprovalRecord {
+  approvalUid: string;
+  requestUid: string;
+  action: AuthorizationAction;
+  targetUid: string;
+  policyUid: string;
+  policyVersion: number;
+  actorUid: string;
+  actorKind: ActorKind;
+  actorRoles: string[];
+  decision: ApprovalDecision;
+  scope: Record<string, unknown>;
+  reason: string;
+  externalDecisionId: string | null;
+  eventUid: string | null;
+  createdAt: string;
+}
+
+export interface SnoozeDecisionResult {
+  request: ApprovalRequest;
+  approval: ApprovalRecord | null;
+  loop: DedicatedOpenLoop;
+  policySatisfied: boolean;
+  idempotentReplay: boolean;
+}
+
+export type ProjectGateReasonCode =
+  | 'NO_BLOCKERS'
+  | 'SAME_PROJECT_BLOCKED'
+  | 'RELATED_LOOP_REQUIRED'
+  | 'RELATED_LOOP_NOT_BLOCKING'
+  | 'RELATED_LOOP_ALLOWED'
+  | 'MEMORY_MAINTENANCE_ALLOWED'
+  | 'BRAIN_MEMORY_ALLOWED'
+  | 'BRAIN_LOOP_OPERATION_DENIED'
+  | 'URGENT_SAFETY_AUTHORIZED'
+  | 'URGENT_SAFETY_UNAUTHORIZED'
+  | 'PROJECT_UNCLASSIFIED'
+  | 'PROJECT_NOT_FOUND';
+
+export interface EvaluateProjectGateInput {
+  projectUid: string;
+  workIntent: WorkIntent;
+  relatedLoopUid?: string;
+  actor: ActorContext;
+  idempotencyKey: string;
+  authorizationRequestUid?: string;
+}
+
+export interface ProjectGateResult {
+  allowed: boolean;
+  projectUid: string;
+  projectType: ProjectType;
+  policyVersion: number;
+  blockerUids: string[];
+  reasonCode: ProjectGateReasonCode;
+  allowedIntents: WorkIntent[];
+  evaluatedAt: string;
+  idempotentReplay: boolean;
+}
+
+export interface LegacyLoopCandidate {
+  itemUid: string;
+  project: string;
+  status: StatusValue;
+  routineType: RoutineType | null;
+  nextSteps: string[];
+  snoozedUntil: string | null;
+  outcome: OutcomeValue | null;
+  reasons: Array<'non_empty_next_steps' | 'snoozed' | 'active_debugging' | 'resolved'>;
+}
+
+export interface LegacyLoopCandidateReport {
+  generatedAt: string;
+  total: number;
+  byReason: Record<string, number>;
+  candidates: LegacyLoopCandidate[];
+  dedicatedLoopsCreated: 0;
+}
+
+export interface OpenLoopShadowTelemetry {
+  generatedAt: string;
+  projectUid: string | null;
+  projectName: string | null;
+  projectType: ProjectType | null;
+  lifecycleState: ProjectLifecycleState | null;
+  legacySource: 'legacy_memory_items';
+  dedicatedSource: 'dedicated_open_loops';
+  legacyCount: number;
+  dedicatedCount: number;
+  divergence: number;
+  brainInvariantSatisfied: boolean;
+  gateEnforced: false;
+}
+
+// ---------------------------------------------------------------------------
 // Project Relationship
 // ---------------------------------------------------------------------------
 export interface ProjectRelationship {
@@ -485,6 +941,7 @@ export interface MergeProjectResult {
   removedRelationshipIds: number[];
   rewrittenTaskUids: string[];
   rewrittenProposalUids: string[];
+  movedLoopUids: string[];
   sourceProjectDeleted: boolean;
 }
 

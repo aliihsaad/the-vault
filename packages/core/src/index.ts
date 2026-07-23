@@ -15,6 +15,17 @@ export type {
   MemoryItemDetail,
   RankedCandidate,
   Project,
+  CreateProjectInput,
+  ActorContext,
+  AuthorizationPolicy,
+  EvidencePolicy,
+  EvidencePolicyRequirements,
+  OpenLoopInstallationDefaults,
+  ProjectClassificationConfig,
+  ClassifyProjectInput,
+  ConvertProjectTypeInput,
+  ProjectClassificationReport,
+  ProjectClassificationResult,
   Tag,
   MemoryLink,
   ActivityLogEntry,
@@ -58,7 +69,88 @@ export type {
   ResolveLoopBatchFailure,
   ResolveLoopBatchFailureReason,
   ResolveLoopBatchResult,
+  DedicatedOpenLoop,
+  LoopEvidenceReference,
+  AddLoopEvidenceReferenceInput,
+  CreateOpenLoopInput,
+  CreateOpenLoopResult,
+  OpenLoopMutationResult,
+  ListDedicatedOpenLoopsInput,
+  ListDedicatedOpenLoopsResult,
+  CountDedicatedOpenLoopsInput,
+  CountDedicatedOpenLoopsResult,
+  TransitionOpenLoopInput,
+  AddLoopEvidenceInput,
+  ResolveOpenLoopInput,
+  ResolveOpenLoopResult,
+  RecoverOpenLoopInput,
+  RequestLoopSnoozeInput,
+  DecideLoopSnoozeInput,
+  RequestLoopSnoozeResult,
+  ApprovalRequest,
+  ApprovalRecord,
+  SnoozeDecisionResult,
+  ProjectGateReasonCode,
+  EvaluateProjectGateInput,
+  ProjectGateResult,
+  LegacyLoopCandidate,
+  LegacyLoopCandidateReport,
+  OpenLoopShadowTelemetry,
 } from './types/index.js';
+
+export {
+  OPEN_LOOP_REASON_CODES,
+  OpenLoopServiceError,
+  isOpenLoopServiceError,
+} from './services/open-loop-errors.js';
+export type { OpenLoopReasonCode } from './services/open-loop-errors.js';
+
+export {
+  assertAuthorized,
+  authorizeProjectAction,
+  createAuthorizationPolicy,
+  evaluateAuthorizationPolicy,
+  isActorEligible,
+} from './services/authorization.service.js';
+export type {
+  AuthorizationEvaluation,
+  CreateAuthorizationPolicyInput,
+} from './services/authorization.service.js';
+
+export {
+  buildProjectClassificationDryRun,
+  classifyProject,
+  convertProjectType,
+} from './services/project-classification.service.js';
+
+export {
+  addLoopEvidence,
+  countDedicatedOpenLoops,
+  createOpenLoop,
+  expireDueSnoozes,
+  getOpenLoop,
+  listDedicatedOpenLoops,
+  recoverOpenLoop,
+  resolveOpenLoop,
+  resumeDependencySnooze,
+  transitionOpenLoop,
+} from './services/open-loop.service.js';
+export type { OpenLoopMutationHooks } from './services/open-loop.service.js';
+
+export {
+  decideLoopSnooze,
+  requestLoopSnooze,
+} from './services/loop-snooze.service.js';
+
+export {
+  evaluateProjectGate,
+  evaluateProjectGateSnapshot,
+} from './services/project-gate.service.js';
+
+export {
+  getOpenLoopShadowTelemetry,
+  inventoryLegacyLoopCandidates,
+} from './services/open-loop-migration.service.js';
 
 // Controlled values
 export {
@@ -78,6 +170,21 @@ export {
   TASK_STATUSES,
   TASK_PRIORITIES,
   OUTCOME_VALUES,
+  PROJECT_TYPES,
+  PROJECT_LIFECYCLE_STATES,
+  AUTHORIZATION_POLICY_MODES,
+  AUTHORIZATION_ACTIONS,
+  ACTOR_KINDS,
+  LOOP_STATES,
+  NONTERMINAL_LOOP_STATES,
+  LOOP_OUTCOMES,
+  LOOP_PRIORITIES,
+  LOOP_BLOCKING_SCOPES,
+  LOOP_TRIGGER_KINDS,
+  LOOP_EVENT_TYPES,
+  WORK_INTENTS,
+  EVIDENCE_KINDS,
+  APPROVAL_DECISIONS,
 } from './rules/controlled-values.js';
 
 export {
@@ -111,6 +218,20 @@ export type {
   TaskStatus,
   TaskPriority,
   OutcomeValue,
+  ProjectType,
+  ProjectLifecycleState,
+  AuthorizationPolicyMode,
+  AuthorizationAction,
+  ActorKind,
+  LoopState,
+  LoopOutcome,
+  LoopPriority,
+  LoopBlockingScope,
+  LoopTriggerKind,
+  LoopEventType,
+  WorkIntent,
+  EvidenceKind,
+  ApprovalDecision,
 } from './rules/controlled-values.js';
 
 export type {
@@ -451,7 +572,32 @@ export {
   CreateTaskInputSchema,
   FindTaskQuerySchema,
   ResolveLoopInputSchema,
+  ActorContextSchema,
+  CreateProjectInputSchema,
+  ProjectClassificationConfigSchema,
+  ClassifyProjectInputSchema,
+  ConvertProjectTypeInputSchema,
+  CreateOpenLoopInputSchema,
+  ListDedicatedOpenLoopsInputSchema,
+  CountDedicatedOpenLoopsInputSchema,
+  TransitionOpenLoopInputSchema,
+  AddLoopEvidenceReferenceInputSchema,
+  AddLoopEvidenceInputSchema,
+  ResolveOpenLoopInputSchema,
+  RecoverOpenLoopInputSchema,
+  RequestLoopSnoozeInputSchema,
+  DecideLoopSnoozeInputSchema,
+  EvaluateProjectGateInputSchema,
 } from './rules/validation.js';
+
+export {
+  DEFAULT_AUTHORIZATION_POLICY_UID,
+  DEFAULT_EVIDENCE_POLICY_UID,
+  getAuthorizationPolicy,
+  getEvidencePolicy,
+  getOpenLoopInstallationDefaults,
+  seedOpenLoopPolicies,
+} from './services/open-loop-policy.service.js';
 
 // Model routing
 export {
