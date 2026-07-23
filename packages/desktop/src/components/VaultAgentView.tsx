@@ -107,6 +107,10 @@ export function VaultAgentView() {
   const [taskType, setTaskType] = useState<VaultTaskType>('research');
   const [taskProject, setTaskProject] = useState('Vault');
   const [taskProjectMode, setTaskProjectMode] = useState<'existing' | 'new'>('existing');
+  const [newProjectType, setNewProjectType] = useState<'work_project' | 'brain_context'>('work_project');
+  const [newProjectDescription, setNewProjectDescription] = useState('');
+  const [newProjectCanonicalRoot, setNewProjectCanonicalRoot] = useState('');
+  const [newProjectMemoryPurpose, setNewProjectMemoryPurpose] = useState('');
   const [taskPriority, setTaskPriority] = useState<VaultTaskPriority>('normal');
   const [taskPrompt, setTaskPrompt] = useState('');
   const [taskMaxRetries, setTaskMaxRetries] = useState(1);
@@ -163,6 +167,7 @@ export function VaultAgentView() {
       const nextSettings = settingsResponse.data;
       const nextLogs = logsResponse.data || [];
       const nextProjects = (statusResponse.projects || [])
+        .filter((project) => project.projectType !== 'brain_context')
         .map((project) => project.name)
         .filter(Boolean)
         .sort((left, right) => left.localeCompare(right));
@@ -277,9 +282,27 @@ export function VaultAgentView() {
 
     try {
       if (taskProjectMode === 'new' && !taskProjects.includes(normalizedProject)) {
-        const projectResponse = await window.vaultAPI.createProject(normalizedProject);
+        const projectResponse = await window.vaultAPI.createProject(newProjectType === 'work_project'
+          ? {
+            name: normalizedProject,
+            projectType: 'work_project',
+            description: newProjectDescription.trim(),
+            canonicalRoot: newProjectCanonicalRoot.trim(),
+          }
+          : {
+            name: normalizedProject,
+            projectType: 'brain_context',
+            memoryPurpose: newProjectMemoryPurpose.trim(),
+          });
         if (!projectResponse.success || !projectResponse.data) {
           throw new Error(projectResponse.error || 'Failed to create the new project');
+        }
+
+        if (newProjectType === 'brain_context') {
+          setMessage(`Brain context created: ${projectResponse.data.name}. It cannot host delegated work or open loops.`);
+          setTaskProject('');
+          setNewProjectMemoryPurpose('');
+          return;
         }
 
         setTaskProjects((current) => [...new Set([...current, projectResponse.data!.name])].sort((left, right) => left.localeCompare(right)));
@@ -758,12 +781,46 @@ export function VaultAgentView() {
                         <option value="__new__">+ New project</option>
                       </select>
                       {taskProjectMode === 'new' ? (
-                        <input
-                          className="text-input"
-                          value={taskProject}
-                          onChange={(event) => setTaskProject(event.target.value)}
-                          placeholder="New project name"
-                        />
+                        <>
+                          <input
+                            className="text-input"
+                            value={taskProject}
+                            onChange={(event) => setTaskProject(event.target.value)}
+                            placeholder="New project name"
+                          />
+                          <select
+                            className="text-input"
+                            aria-label="New project type"
+                            value={newProjectType}
+                            onChange={(event) => setNewProjectType(event.target.value as 'work_project' | 'brain_context')}
+                          >
+                            <option value="work_project">Work Project</option>
+                            <option value="brain_context">Brain Context</option>
+                          </select>
+                          {newProjectType === 'work_project' ? (
+                            <>
+                              <input
+                                className="text-input"
+                                value={newProjectDescription}
+                                onChange={(event) => setNewProjectDescription(event.target.value)}
+                                placeholder="Project description (required)"
+                              />
+                              <input
+                                className="text-input"
+                                value={newProjectCanonicalRoot}
+                                onChange={(event) => setNewProjectCanonicalRoot(event.target.value)}
+                                placeholder="Canonical source root (required)"
+                              />
+                            </>
+                          ) : (
+                            <input
+                              className="text-input"
+                              value={newProjectMemoryPurpose}
+                              onChange={(event) => setNewProjectMemoryPurpose(event.target.value)}
+                              placeholder="Memory purpose (required)"
+                            />
+                          )}
+                        </>
                       ) : null}
                     </label>
 

@@ -456,6 +456,7 @@ export function FilteredMemoryWorkspaceView({
 
 export function LoopsOperationsView({ onOpenMemory }: { onOpenMemory?: (itemUid: string) => void }) {
   const [loops, setLoops] = useState<VaultOpenLoop[]>([]);
+  const [shadowTelemetry, setShadowTelemetry] = useState<VaultOpenLoopShadowTelemetry | null>(null);
   const [projectFilter, setProjectFilter] = useState('all');
   const [bucketFilter, setBucketFilter] = useState<'all' | VaultOpenLoopBucket>('all');
   const [routineFilter, setRoutineFilter] = useState<LoopControlRoutineFilter>('all');
@@ -470,8 +471,12 @@ export function LoopsOperationsView({ onOpenMemory }: { onOpenMemory?: (itemUid:
   async function hydrate() {
     setLoading(true);
     try {
-      const response = await window.vaultAPI.getOpenLoops();
+      const [response, telemetryResponse] = await Promise.all([
+        window.vaultAPI.getOpenLoops(),
+        window.vaultAPI.getOpenLoopShadowTelemetry(),
+      ]);
       if (response.success) setLoops(response.data || []);
+      if (telemetryResponse.success) setShadowTelemetry(telemetryResponse.data || null);
     } finally {
       setLoading(false);
     }
@@ -481,7 +486,7 @@ export function LoopsOperationsView({ onOpenMemory }: { onOpenMemory?: (itemUid:
     const response = await window.vaultAPI.resolveLoop({
       itemUid: loop.itemUid,
       outcome: 'fixed',
-      resolutionNote: 'Resolved from the dedicated Loops control surface.',
+      resolutionNote: 'Resolved from the legacy memory-derived Loops control surface.',
     });
     if (response.success) void hydrate();
   }
@@ -520,6 +525,14 @@ export function LoopsOperationsView({ onOpenMemory }: { onOpenMemory?: (itemUid:
         onRefresh={() => void hydrate()}
         loading={loading}
       />
+
+      {shadowTelemetry ? (
+        <div className="note-card" role="status">
+          <p>
+            Shadow mode: legacy memory-derived loops {shadowTelemetry.legacyCount}, dedicated v2 loops {shadowTelemetry.dedicatedCount}, divergence {shadowTelemetry.divergence}. Gate enforcement is off.
+          </p>
+        </div>
+      ) : null}
 
       <section className="ops-loop-kpi-grid" aria-label="Loop pressure metrics">
         <LoopKpiCard icon={<Gauge size={18} />} label="Visible queue" value={model.metrics.visible} detail={`${model.metrics.total} active loops loaded`} tone="cyan" />

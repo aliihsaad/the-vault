@@ -28,6 +28,7 @@ import {
   GraphifyBuildQueue,
   isProviderConfigUsable,
   OpenAICompatibleClient,
+  OpenLoopServiceError,
   executeVaultCollabAction,
   executeVaultCollabDashboardSessionRegistration,
   executeVaultCollabHandoffActions,
@@ -86,6 +87,19 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 // Initialize Vault
 const vault = new Vault();
 vault.initialize();
+
+function runVaultOperation<T>(operation: () => T) {
+  try {
+    return { success: true, data: operation() };
+  } catch (error) {
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : String(error),
+      reasonCode: error instanceof OpenLoopServiceError ? error.code : undefined,
+      details: error instanceof OpenLoopServiceError ? error.details : undefined,
+    };
+  }
+}
 
 // Initialize AI enrichment from saved settings.
 // Enrichment activates automatically when API key + model are configured.
@@ -2112,13 +2126,24 @@ app.whenReady().then(() => {
     }
   });
 
-  ipcMain.handle('vault:createProject', (_, name, description) => {
-    try {
-      return { success: true, data: vault.createProject(String(name || '').trim(), typeof description === 'string' ? description : undefined) };
-    } catch (e: any) {
-      return { success: false, error: e.message };
-    }
-  });
+  ipcMain.handle('vault:createProject', (_, input) => runVaultOperation(() => vault.createProject(input)));
+
+  // Open-Loops v2 dedicated operations. These remain shadow-only: none of the
+  // task or memory handlers below consult the gate during phases A-D.
+  ipcMain.handle('vault:createOpenLoop', (_, input) => runVaultOperation(() => vault.createOpenLoop(input)));
+  ipcMain.handle('vault:getDedicatedOpenLoop', (_, loopUid) => runVaultOperation(() => vault.getDedicatedOpenLoop(loopUid)));
+  ipcMain.handle('vault:listDedicatedOpenLoops', (_, input) => runVaultOperation(() => vault.listDedicatedOpenLoops(input)));
+  ipcMain.handle('vault:countDedicatedOpenLoops', (_, input) => runVaultOperation(() => vault.countDedicatedOpenLoops(input)));
+  ipcMain.handle('vault:addLoopEvidence', (_, input) => runVaultOperation(() => vault.addLoopEvidence(input)));
+  ipcMain.handle('vault:evaluateProjectGate', (_, input) => runVaultOperation(() => vault.evaluateProjectGate(input)));
+  ipcMain.handle('vault:requestLoopSnooze', (_, input) => runVaultOperation(() => vault.requestLoopSnooze(input)));
+  ipcMain.handle('vault:decideLoopSnooze', (_, input) => runVaultOperation(() => vault.decideLoopSnooze(input)));
+  ipcMain.handle('vault:resolveOpenLoop', (_, input) => runVaultOperation(() => vault.resolveOpenLoop(input)));
+  ipcMain.handle('vault:recoverOpenLoop', (_, input) => runVaultOperation(() => vault.recoverOpenLoop(input)));
+  ipcMain.handle('vault:classifyProject', (_, input) => runVaultOperation(() => vault.classifyProject(input)));
+  ipcMain.handle('vault:convertProjectType', (_, input) => runVaultOperation(() => vault.convertProjectType(input)));
+  ipcMain.handle('vault:inventoryLegacyLoopCandidates', (_, project) => runVaultOperation(() => vault.inventoryLegacyLoopCandidates(project)));
+  ipcMain.handle('vault:getOpenLoopShadowTelemetry', (_, project) => runVaultOperation(() => vault.getOpenLoopShadowTelemetry(project)));
 
   ipcMain.handle('vault:saveMemory', (_, input) => {
     try {

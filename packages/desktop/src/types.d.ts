@@ -1,6 +1,17 @@
 /// <reference types="vite/client" />
 
 import type {
+  AddLoopEvidenceInput,
+  ClassifyProjectInput,
+  ConvertProjectTypeInput,
+  CountDedicatedOpenLoopsInput,
+  CountDedicatedOpenLoopsResult,
+  CreateOpenLoopInput,
+  CreateOpenLoopResult,
+  CreateProjectInput,
+  DecideLoopSnoozeInput,
+  DedicatedOpenLoop,
+  EvaluateProjectGateInput,
   GraphifyArtifactDiscoveryResult,
   GraphifyArtifactReportReadResult,
   GraphifyBuildMode,
@@ -13,6 +24,19 @@ import type {
   GraphifyRuntimeConfig,
   GraphifyRuntimeStatus,
   GraphifyUpdateCheck,
+  LegacyLoopCandidateReport,
+  ListDedicatedOpenLoopsInput,
+  ListDedicatedOpenLoopsResult,
+  OpenLoopMutationResult,
+  OpenLoopShadowTelemetry,
+  ProjectClassificationResult,
+  ProjectGateResult,
+  RecoverOpenLoopInput,
+  RequestLoopSnoozeInput,
+  RequestLoopSnoozeResult,
+  ResolveOpenLoopInput,
+  ResolveOpenLoopResult,
+  SnoozeDecisionResult,
   SaveGraphifyRuntimeConfigInput,
   SaveVaultCollabRuntimeConfigInput,
   VaultCollabActionResult,
@@ -51,6 +75,8 @@ declare global {
     success: boolean;
     data?: T;
     error?: string;
+    reasonCode?: string;
+    details?: Record<string, unknown>;
   }
 
   type VaultMemoryType =
@@ -65,6 +91,7 @@ declare global {
   type VaultStatusValue = 'active' | 'resolved' | 'draft' | 'stale' | 'archived' | 'pending_delete' | 'promoted';
   type VaultPriorityValue = 'low' | 'normal' | 'high' | 'critical' | 'canonical';
   type VaultSourceApp = 'claude' | 'codex' | 'openclaw' | 'manual' | 'other';
+  type VaultOpenLoopShadowTelemetry = OpenLoopShadowTelemetry;
   type VaultActionType =
     | 'save'
     | 'recall'
@@ -97,8 +124,11 @@ declare global {
 
   interface VaultProject {
     id: number;
+    projectUid?: string | null;
     name: string;
     slug: string;
+    projectType?: 'work_project' | 'brain_context' | 'unclassified';
+    lifecycleState?: 'shadow' | 'active' | 'archived';
     description: string | null;
     createdAt: string;
     updatedAt: string;
@@ -624,7 +654,21 @@ declare global {
     status: () => Promise<VaultStatus>;
     getProjectsMomentum: () => Promise<VaultResponse<VaultProjectMomentum[]>>;
     getOpenLoops: (project?: string) => Promise<VaultResponse<VaultOpenLoop[]>>;
-    createProject: (name: string, description?: string) => Promise<VaultResponse<VaultProject>>;
+    createProject: (input: CreateProjectInput) => Promise<VaultResponse<VaultProject>>;
+    createOpenLoop: (input: CreateOpenLoopInput) => Promise<VaultResponse<CreateOpenLoopResult>>;
+    getDedicatedOpenLoop: (loopUid: string) => Promise<VaultResponse<DedicatedOpenLoop | null>>;
+    listDedicatedOpenLoops: (input?: ListDedicatedOpenLoopsInput) => Promise<VaultResponse<ListDedicatedOpenLoopsResult>>;
+    countDedicatedOpenLoops: (input?: CountDedicatedOpenLoopsInput) => Promise<VaultResponse<CountDedicatedOpenLoopsResult>>;
+    addLoopEvidence: (input: AddLoopEvidenceInput) => Promise<VaultResponse<OpenLoopMutationResult>>;
+    evaluateProjectGate: (input: EvaluateProjectGateInput) => Promise<VaultResponse<ProjectGateResult>>;
+    requestLoopSnooze: (input: RequestLoopSnoozeInput) => Promise<VaultResponse<RequestLoopSnoozeResult>>;
+    decideLoopSnooze: (input: DecideLoopSnoozeInput) => Promise<VaultResponse<SnoozeDecisionResult>>;
+    resolveOpenLoop: (input: ResolveOpenLoopInput) => Promise<VaultResponse<ResolveOpenLoopResult>>;
+    recoverOpenLoop: (input: RecoverOpenLoopInput) => Promise<VaultResponse<OpenLoopMutationResult>>;
+    classifyProject: (input: ClassifyProjectInput) => Promise<VaultResponse<ProjectClassificationResult>>;
+    convertProjectType: (input: ConvertProjectTypeInput) => Promise<VaultResponse<ProjectClassificationResult>>;
+    inventoryLegacyLoopCandidates: (project?: string) => Promise<VaultResponse<LegacyLoopCandidateReport>>;
+    getOpenLoopShadowTelemetry: (project?: string) => Promise<VaultResponse<OpenLoopShadowTelemetry>>;
     saveMemory: (input: any) => Promise<VaultResponse<VaultSaveResult>>;
     findMemory: (query: any) => Promise<VaultResponse<VaultMemory[]>>;
     recallContext: (query: any) => Promise<VaultResponse<VaultRecallPack>>;
