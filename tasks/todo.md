@@ -172,3 +172,37 @@ reused. Review gate deliberately left disabled.
   and fresh/legacy/lifecycle/merge/rollback runtime smokes using a compatible local
   binding passed; core output was restored, and the normal suite/build still needs
   one run outside this sandbox.
+
+---
+
+# v0.6.1 hotfix — blank window on startup (2026-07-23)
+
+## Root cause
+v0.6.0 opened to a blank window. The desktop renderer (VaultAgentView.tsx,
+SettingsView.tsx) imported `resolveAiProviderSettings` from the `@the-vault/core`
+package entry point. That entry transitively loads better-sqlite3 + drizzle +
+node:fs, which have no browser build, so the renderer bundle threw on load and
+React never mounted. `pnpm build` passed because bundling doesn't execute the
+code; the crash only shows at runtime.
+
+## Fix (ef57ec2)
+- New browser-safe module `packages/core/src/config/provider-resolution.ts` holds
+  the pure resolution helpers (resolveAiProviderSettings, getAiProviderDisplayName,
+  getEnrichmentModelKey, getRoutingTableKey + types) with zero db/node imports.
+- `@the-vault/core/provider-resolution` subpath export added; core build emits it
+  as a second tsup entry. settings.ts re-exports the same symbols so existing core
+  consumers are unchanged.
+- Renderer components import from the subpath. Verified: renderer bundle no longer
+  references better-sqlite3/node:fs/drizzle; app boots to the full cockpit.
+
+## Verified
+pnpm lint ✓, pnpm test 346/346 ✓, pnpm build ✓, packaged app launches and renders
+(confirmed on screen). Released v0.6.1 (56f4fca, tag pushed); v0.6.0 GitHub release
+marked with a blank-window warning pointing to v0.6.1.
+
+## Local ABI note (not a code issue)
+better-sqlite3 has no N-API prebuild at v12.9.0, so its binding is ABI-specific:
+tests need the Node-v137 build in node_modules, electron-builder needs Electron-v132.
+They overwrite each other locally. Sequence that works: `prebuild-install` (Node
+build) → run tests → `pnpm --filter @the-vault/desktop build` (electron-builder
+rebuilds to v132 during packaging). CI does a clean install so it is unaffected.
