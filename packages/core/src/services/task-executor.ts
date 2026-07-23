@@ -9,7 +9,12 @@ import {
   type GeneratedImage,
 } from './openrouter-client.js';
 import { buildProjectContextPack } from './project-context-pack.service.js';
-import type { ModelRouteConfig, VaultTask } from '../types/index.js';
+import type {
+  ModelRouteConfig,
+  TaskProviderAttemptError,
+  TaskResultMetadata,
+  VaultTask,
+} from '../types/index.js';
 import type { TaskType } from '../rules/controlled-values.js';
 import type { Vault } from '../vault.js';
 
@@ -36,7 +41,7 @@ export interface TaskExecutorEvent {
   task: VaultTask | null;
   timestamp: string;
   message: string;
-  metadata?: Record<string, unknown>;
+  metadata?: TaskResultMetadata;
 }
 
 export interface TaskExecutorStatus {
@@ -98,7 +103,7 @@ export interface TaskExecutorOptions {
 
 interface TaskExecutionSuccess {
   text: string;
-  metadata: Record<string, unknown>;
+  metadata: TaskResultMetadata;
 }
 
 export class TaskExecutor {
@@ -335,22 +340,55 @@ export class TaskExecutor {
     }
 
     let lastError: Error | null = null;
+    const providerAttempts: TaskProviderAttemptError[] = [];
 
     for (const attempt of attempts) {
+      const provider = attempt.config.provider;
+      const route = this.getEffectiveRoute(task, provider, attempt.isPrimary);
+
       if (!isProviderConfigUsable(attempt.config)) {
+        if (attempt.isPrimary) {
+          providerAttempts.push({
+            provider,
+            models: getRouteModelIds(route),
+            error: getProviderConfigurationError(provider),
+            timestamp: new Date().toISOString(),
+          });
+        }
         continue;
       }
 
       // Each provider routes with its own table; the model stamped on the
       // task at creation only applies to the primary provider it came from.
-      const route = this.getEffectiveRoute(task, attempt.config.provider, attempt.isPrimary);
-
       try {
-        return task.taskType === 'image' || /dall-e|image/i.test(route.modelId)
+        const execution = task.taskType === 'image' || /dall-e|image/i.test(route.modelId)
           ? await this.executeImageTask(task, route, attempt.config, attempt.isPrimary)
           : await this.executeTextTask(task, route, attempt.config, attempt.isPrimary);
+
+        if (providerAttempts.length === 0) {
+          return execution;
+        }
+
+        const primaryProviderError = providerAttempts.find(
+          (providerAttempt) => providerAttempt.provider === chain.primary.provider,
+        );
+
+        return {
+          ...execution,
+          metadata: {
+            ...execution.metadata,
+            providerAttempts,
+            ...(primaryProviderError ? { primaryProviderError } : {}),
+          },
+        };
       } catch (error) {
         lastError = error instanceof Error ? error : new Error(String(error));
+        providerAttempts.push({
+          provider: attempt.config.provider,
+          models: getRouteModelIds(route),
+          error: lastError.message,
+          timestamp: new Date().toISOString(),
+        });
       }
     }
 
@@ -539,7 +577,7 @@ export class TaskExecutor {
     type: TaskExecutorEventType,
     task: VaultTask | null,
     message: string,
-    metadata?: Record<string, unknown>,
+    metadata?: TaskResultMetadata,
   ): void {
     this.emitEvent({
       type,
@@ -550,6 +588,18 @@ export class TaskExecutor {
       metadata,
     });
   }
+}
+
+function getRouteModelIds(route: ModelRouteConfig): string[] {
+  return [route.modelId, route.fallbackModelId]
+    .filter((model): model is string => typeof model === 'string' && model.trim().length > 0)
+    .filter((model, index, models) => models.indexOf(model) === index);
+}
+
+function getProviderConfigurationError(provider: AiProviderId): string {
+  return provider === 'llm-hub'
+    ? 'LLM-Hub is not configured (missing API key or base URL).'
+    : 'OpenRouter is not configured (missing API key).';
 }
 
 function buildSystemPrompt(taskType: TaskType): string {

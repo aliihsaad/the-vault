@@ -198,6 +198,7 @@ describe('TaskExecutor', () => {
     ));
 
     const attempts: Array<{ provider: string; modelId: string }> = [];
+    const events: TaskExecutorEvent[] = [];
 
     const executor = new TaskExecutor({
       vault: vault as never,
@@ -206,7 +207,9 @@ describe('TaskExecutor', () => {
         primary: { provider: 'llm-hub', apiKey: 'hub-key', baseUrl: 'http://hub.local/v1' },
         fallback: { provider: 'openrouter', apiKey: 'or-key' },
       }),
-      emitEvent: vi.fn(),
+      emitEvent: (event) => {
+        events.push(event);
+      },
       pollIntervalMs: 60000,
       createClient: (_apiKey, modelId, providerConfig) => {
         const provider = providerConfig?.provider ?? 'openrouter';
@@ -249,8 +252,93 @@ describe('TaskExecutor', () => {
       expect.objectContaining({
         provider: 'openrouter',
         providerFallbackUsed: true,
+        primaryProviderError: expect.objectContaining({
+          provider: 'llm-hub',
+          models: ['hub/primary-model'],
+          error: 'hub is down',
+          timestamp: expect.any(String),
+        }),
+        providerAttempts: [
+          expect.objectContaining({
+            provider: 'llm-hub',
+            models: ['hub/primary-model'],
+            error: 'hub is down',
+            timestamp: expect.any(String),
+          }),
+        ],
       }),
     );
+    expect(events.find((event) => event.type === 'task-completed')?.metadata).toEqual(
+      expect.objectContaining({
+        primaryProviderError: expect.objectContaining({
+          provider: 'llm-hub',
+          error: 'hub is down',
+        }),
+        providerAttempts: [
+          expect.objectContaining({
+            provider: 'llm-hub',
+            error: 'hub is down',
+          }),
+        ],
+      }),
+    );
+  });
+
+  it('keeps provider failure metadata absent when the primary provider succeeds', async () => {
+    const task = createTask({
+      taskUid: 'vt_primary_provider_success',
+      title: 'Primary provider work',
+      taskType: 'general',
+      project: 'Vault',
+      prompt: 'Use the primary provider.',
+      routedModel: 'hub/primary-model',
+    });
+
+    const { vault } = createVaultHarness(task);
+    const events: TaskExecutorEvent[] = [];
+
+    const executor = new TaskExecutor({
+      vault: vault as never,
+      getApiKey: () => 'unused',
+      getProviderChain: () => ({
+        primary: { provider: 'llm-hub', apiKey: 'hub-key', baseUrl: 'http://hub.local/v1' },
+        fallback: { provider: 'openrouter', apiKey: 'or-key' },
+      }),
+      emitEvent: (event) => {
+        events.push(event);
+      },
+      pollIntervalMs: 60000,
+      createClient: (_apiKey, modelId) => ({
+        complete: async () => ({
+          text: 'Primary provider result.',
+          model: modelId,
+          usage: { promptTokens: 1, completionTokens: 1 },
+        }),
+        generateImage: async () => {
+          throw new Error('not used');
+        },
+      }),
+    });
+
+    executor.start();
+
+    await vi.waitFor(() => {
+      expect(vault.completeTask).toHaveBeenCalledTimes(1);
+    });
+
+    executor.stop();
+
+    const resultMetadata = vault.completeTask.mock.calls[0]?.[2] as Record<string, unknown>;
+    expect(resultMetadata).toEqual(expect.objectContaining({
+      provider: 'llm-hub',
+      providerFallbackUsed: false,
+    }));
+    expect(resultMetadata).not.toHaveProperty('primaryProviderError');
+    expect(resultMetadata).not.toHaveProperty('providerAttempts');
+
+    const completedEventMetadata = events.find((event) => event.type === 'task-completed')?.metadata;
+    expect(completedEventMetadata).not.toHaveProperty('primaryProviderError');
+    expect(completedEventMetadata).not.toHaveProperty('providerAttempts');
   });
 
   it('annotates action-like text tasks so model output is not mistaken for applied Vault mutations', async () => {

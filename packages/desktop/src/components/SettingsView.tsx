@@ -21,6 +21,7 @@ import {
 } from 'lucide-react';
 import { ConnectPanel } from './ConnectPanel.js';
 import { buildGraphifySettingsViewModel } from '../graphify-view-model.js';
+import { resolveAiProviderSettings } from '@the-vault/core';
 import type {
   GraphifyInstallPlan,
   GraphifyRuntimeConfig,
@@ -482,19 +483,10 @@ export function SettingsView({ vaultStatus }: { vaultStatus: VaultStatus | null 
           ? llmHubRoutingResponse.data
           : DEFAULT_ROUTING_TABLE,
       };
-      const nextPrimary: AiProviderId = nextSettings.ai_provider_primary === 'llm-hub'
-        || (!nextSettings.ai_provider_primary && nextSettings.ai_provider === 'llm-hub')
-        ? 'llm-hub'
-        : 'openrouter';
-      const nextFallback: AiProviderId | 'none' =
-        (nextSettings.ai_provider_fallback === 'openrouter' || nextSettings.ai_provider_fallback === 'llm-hub')
-          && nextSettings.ai_provider_fallback !== nextPrimary
-          ? nextSettings.ai_provider_fallback
-          : 'none';
-      const nextEnrichmentModels: Record<AiProviderId, string> = {
-        openrouter: nextSettings.enrichment_model || '',
-        'llm-hub': typeof nextSettings.enrichment_model_llm_hub === 'string' ? nextSettings.enrichment_model_llm_hub : '',
-      };
+      const resolvedProviderSettings = resolveAiProviderSettings(nextSettings);
+      const nextPrimary = resolvedProviderSettings.primaryProvider;
+      const nextFallback = resolvedProviderSettings.fallbackProvider ?? 'none';
+      const nextEnrichmentModels = resolvedProviderSettings.enrichmentModels;
       const nextLlmHubBaseUrl = typeof nextSettings.llm_hub_base_url === 'string' ? nextSettings.llm_hub_base_url : '';
       const nextLlmHubApiKey = llmHubSecretResponse.success ? (llmHubSecretResponse.data || '') : '';
       const nextOpenRouterKey = secretResponse.data || '';

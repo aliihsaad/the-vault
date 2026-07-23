@@ -13,6 +13,19 @@ import type * as schema from '../database/schema.js';
 
 type DB = BetterSQLite3Database<typeof schema>;
 
+export type EnrichmentModelSettingKey = 'enrichment_model' | 'enrichment_model_llm_hub';
+
+export interface ResolvedAiProviderSettings {
+  primaryProvider: AiProviderId;
+  fallbackProvider: AiProviderId | null;
+  primaryProviderLabel: string;
+  fallbackProviderLabel: string | null;
+  backendLabel: string;
+  enrichmentModels: Record<AiProviderId, string>;
+  primaryEnrichmentModelKey: EnrichmentModelSettingKey;
+  primaryEnrichmentModel: string;
+}
+
 /**
  * Default settings seeded on first initialization.
  */
@@ -142,14 +155,58 @@ function asProviderId(value: unknown): AiProviderId | null {
   return value === 'openrouter' || value === 'llm-hub' ? value : null;
 }
 
+function asString(value: unknown): string {
+  return typeof value === 'string' ? value : '';
+}
+
+export function getAiProviderDisplayName(provider: AiProviderId): string {
+  return provider === 'llm-hub' ? 'LLM-Hub' : 'OpenRouter';
+}
+
+/** Resolve provider roles, labels, and per-provider enrichment models from settings. */
+export function resolveAiProviderSettings(
+  values: Record<string, unknown>,
+): ResolvedAiProviderSettings {
+  const primaryProvider = asProviderId(values.ai_provider_primary)
+    ?? asProviderId(values.ai_provider)
+    ?? 'openrouter';
+  const fallbackCandidate = asProviderId(values.ai_provider_fallback);
+  const fallbackProvider = fallbackCandidate && fallbackCandidate !== primaryProvider
+    ? fallbackCandidate
+    : null;
+  const enrichmentModels: Record<AiProviderId, string> = {
+    openrouter: asString(values.enrichment_model),
+    'llm-hub': asString(values.enrichment_model_llm_hub),
+  };
+  const primaryProviderLabel = getAiProviderDisplayName(primaryProvider);
+  const fallbackProviderLabel = fallbackProvider
+    ? getAiProviderDisplayName(fallbackProvider)
+    : null;
+  const primaryEnrichmentModelKey = getEnrichmentModelKey(primaryProvider);
+
+  return {
+    primaryProvider,
+    fallbackProvider,
+    primaryProviderLabel,
+    fallbackProviderLabel,
+    backendLabel: fallbackProviderLabel
+      ? `${primaryProviderLabel} (primary) · ${fallbackProviderLabel} (fallback)`
+      : `${primaryProviderLabel} (primary) · No fallback`,
+    enrichmentModels,
+    primaryEnrichmentModelKey,
+    primaryEnrichmentModel: enrichmentModels[primaryProvider],
+  };
+}
+
 /**
  * Which provider is primary. Falls back to the legacy single-provider
  * 'ai_provider' setting so pre-role configurations keep working.
  */
 export function getPrimaryProviderId(db: DB): AiProviderId {
-  return asProviderId(getSetting(db, 'ai_provider_primary'))
-    ?? asProviderId(getSetting(db, 'ai_provider'))
-    ?? 'openrouter';
+  return resolveAiProviderSettings({
+    ai_provider_primary: getSetting(db, 'ai_provider_primary'),
+    ai_provider: getSetting(db, 'ai_provider'),
+  }).primaryProvider;
 }
 
 /**
@@ -157,15 +214,15 @@ export function getPrimaryProviderId(db: DB): AiProviderId {
  * the fallback would duplicate the primary.
  */
 export function getFallbackProviderId(db: DB): AiProviderId | null {
-  const fallback = asProviderId(getSetting(db, 'ai_provider_fallback'));
-  if (!fallback || fallback === getPrimaryProviderId(db)) {
-    return null;
-  }
-  return fallback;
+  return resolveAiProviderSettings({
+    ai_provider_primary: getSetting(db, 'ai_provider_primary'),
+    ai_provider_fallback: getSetting(db, 'ai_provider_fallback'),
+    ai_provider: getSetting(db, 'ai_provider'),
+  }).fallbackProvider;
 }
 
 /** The per-provider settings key holding that provider's enrichment model. */
-export function getEnrichmentModelKey(provider: AiProviderId): string {
+export function getEnrichmentModelKey(provider: AiProviderId): EnrichmentModelSettingKey {
   return provider === 'llm-hub' ? 'enrichment_model_llm_hub' : 'enrichment_model';
 }
 

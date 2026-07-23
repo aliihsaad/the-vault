@@ -20,6 +20,8 @@ export type {
   ActivityLogEntry,
   VaultSettings,
   VaultTask,
+  TaskProviderAttemptError,
+  TaskResultMetadata,
   CreateTaskInput,
   FindTaskQuery,
   TaskQueueStats,
@@ -486,10 +488,16 @@ export type {
   ProviderModelSummary,
 } from './services/openrouter-client.js';
 export {
+  getAiProviderDisplayName,
   getPrimaryProviderId,
   getFallbackProviderId,
   getEnrichmentModelKey,
   getRoutingTableKey,
+  resolveAiProviderSettings,
+} from './config/settings.js';
+export type {
+  EnrichmentModelSettingKey,
+  ResolvedAiProviderSettings,
 } from './config/settings.js';
 export { TaskExecutor } from './services/task-executor.js';
 export type {
