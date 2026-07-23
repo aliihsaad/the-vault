@@ -1,6 +1,6 @@
 {
   "name": "@the-vault/desktop",
-  "version": "0.6.0",
+  "version": "0.6.1",
   "private": true,
   "description": "Desktop cockpit for The Vault local-first AI memory system",
   "author": "Ali Saad",
