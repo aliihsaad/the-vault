@@ -9,6 +9,7 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { z } from 'zod';
 import { Vault, TaskExecutor, createProviderClient, FailoverEnrichmentClient, isProviderConfigUsable, getEnrichmentModelKey, portableDecrypt, slugify, MEMORY_TYPES, ROUTINE_TYPES, STATUS_VALUES, PRIORITY_VALUES, SOURCE_APPS, TASK_TYPES, TASK_STATUSES, TASK_PRIORITIES, PROPOSAL_STATUSES, PROPOSAL_TYPES, PROJECT_LINK_TYPES, OUTCOME_VALUES, MEMORY_CONTENT_MAX_CHARS, type AiProviderChain, type AiProviderConfig, type AiProviderId, type EnrichmentClient } from '@the-vault/core';
 import { registerGraphifyMcpTools } from './graphify-tools.js';
+import { registerOpenLoopsV2McpTools } from './open-loops-v2-tools.js';
 
 // Initialize Vault
 const vault = new Vault();
@@ -513,7 +514,7 @@ server.tool(
 // ============================================================================
 server.tool(
   'vault_list_open_loops',
-  'Exhaustively list active memory items with explicit non-empty next steps. Paginated and unranked; use this for bulk open-loop audits instead of vault_recall_context.open_loops.',
+  'Legacy compatibility read from memory_items: exhaustively list active memories with explicit non-empty next steps. Use vault_list_dedicated_open_loops for Open-Loops v2 rows.',
   {
     project: z.string().optional().describe('Filter by project'),
     tags: z.array(z.string()).optional().describe('Require all listed tags, case-insensitive'),
@@ -539,6 +540,7 @@ server.tool(
         content: [{
           type: 'text' as const,
           text: JSON.stringify({
+            source: result.source,
             total: result.total,
             limit: result.limit,
             offset: result.offset,
@@ -574,7 +576,7 @@ server.tool(
 // ============================================================================
 server.tool(
   'vault_count_open_loops',
-  'Count active memory items with explicit non-empty next steps using the same predicate as vault_list_open_loops. Optionally group by project.',
+  'Legacy compatibility count from memory_items using the same predicate as vault_list_open_loops. Use vault_count_dedicated_open_loops for Open-Loops v2 rows.',
   {
     project: z.string().optional().describe('Filter by project'),
     tags: z.array(z.string()).optional().describe('Require all listed tags, case-insensitive'),
@@ -598,6 +600,7 @@ server.tool(
         content: [{
           type: 'text' as const,
           text: JSON.stringify({
+            source: result.source,
             total: result.total,
             by_project: result.byProject,
             generated_at: result.generatedAt,
@@ -618,7 +621,7 @@ server.tool(
 // ============================================================================
 server.tool(
   'vault_resolve_loop_batch',
-  'Resolve up to 100 active explicit open loops in one call. Partial success is allowed; each successful item uses the same path as vault_resolve_loop.',
+  'Legacy compatibility batch write on memory_items-derived loops. Partial success is allowed; it never mutates dedicated Open-Loops v2 rows.',
   {
     items: z.array(z.object({
       item_uid: z.string().min(1).max(200).describe('Memory item UID to resolve'),
@@ -640,6 +643,7 @@ server.tool(
         content: [{
           type: 'text' as const,
           text: JSON.stringify({
+            source: 'legacy_memory_items',
             requested: result.requested,
             resolved: result.resolved,
             failed: result.failed.map((failure) => ({
@@ -668,7 +672,7 @@ server.tool(
 // ============================================================================
 server.tool(
   'vault_resolve_loop',
-  'Close an open loop on a memory item. Sets status=resolved with an outcome (fixed | wont_fix | obsolete | duplicate) and optionally records a resolution note. Use when the user confirms a surfaced open loop is done. For "come back later" use vault_update_memory with snoozed_until instead.',
+  'Legacy compatibility write on a memory_items-derived loop. Sets the memory status/outcome; it never creates or mutates a dedicated Open-Loops v2 row. Use vault_resolve_open_loop for dedicated loops.',
   {
     item_uid: z.string().describe('The unique ID of the memory item to resolve'),
     outcome: z.enum(OUTCOME_VALUES).describe('Resolution outcome: fixed, wont_fix, obsolete, or duplicate'),
@@ -692,6 +696,7 @@ server.tool(
           type: 'text' as const,
           text: JSON.stringify({
             success: true,
+            source: 'legacy_memory_items',
             item_uid: resolved.itemUid,
             status: resolved.status,
             outcome: resolved.outcome,
@@ -1269,6 +1274,7 @@ server.tool(
             removed_relationship_ids: result.removedRelationshipIds,
             rewritten_task_uids: result.rewrittenTaskUids,
             rewritten_proposal_uids: result.rewrittenProposalUids,
+            moved_loop_uids: result.movedLoopUids,
             source_project_deleted: result.sourceProjectDeleted,
           }, null, 2),
         }],
@@ -1401,6 +1407,7 @@ server.tool(
   },
 );
 
+registerOpenLoopsV2McpTools(server, vault);
 registerGraphifyMcpTools(server, vault);
 
 // ============================================================================
