@@ -10,11 +10,20 @@
     ".": {
       "import": "./dist/index.js",
       "types": "./dist/index.d.ts"
+    },
+    "./provider-resolution": {
+      "import": "./dist/config/provider-resolution.js",
+      "types": "./dist/config/provider-resolution.d.ts"
+    }
+  },
+  "typesVersions": {
+    "*": {
+      "provider-resolution": ["./dist/config/provider-resolution.d.ts"]
     }
   },
   "scripts": {
-    "build": "tsup src/index.ts --format esm --dts --clean",
-    "dev": "tsup src/index.ts --format esm --dts --clean --watch",
+    "build": "tsup src/index.ts src/config/provider-resolution.ts --format esm --dts --clean",
+    "dev": "tsup src/index.ts src/config/provider-resolution.ts --format esm --dts --clean --watch",
     "test": "vitest run"
   },
   "dependencies": {

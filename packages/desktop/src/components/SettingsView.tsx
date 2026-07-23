@@ -21,7 +21,7 @@ import {
 } from 'lucide-react';
 import { ConnectPanel } from './ConnectPanel.js';
 import { buildGraphifySettingsViewModel } from '../graphify-view-model.js';
-import { resolveAiProviderSettings } from '@the-vault/core';
+import { resolveAiProviderSettings } from '@the-vault/core/provider-resolution';
 import type {
   GraphifyInstallPlan,
   GraphifyRuntimeConfig,

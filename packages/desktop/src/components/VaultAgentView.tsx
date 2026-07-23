@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Activity, Bot, Clock3, Play, RefreshCw, Save, SendHorizonal, Sparkles, Square, Workflow } from 'lucide-react';
 import { formatDistanceToNow } from 'date-fns';
-import { getAiProviderDisplayName, resolveAiProviderSettings } from '@the-vault/core';
+import { getAiProviderDisplayName, resolveAiProviderSettings } from '@the-vault/core/provider-resolution';
 import { DayGroupedList } from './DayGroupedList.js';
 
 const VAULT_AGENT_ROUTING_PRESETS: Array<{
