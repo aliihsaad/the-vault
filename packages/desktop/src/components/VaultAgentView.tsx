@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Activity, Bot, Clock3, Play, RefreshCw, Save, SendHorizonal, Sparkles, Square, Workflow } from 'lucide-react';
 import { formatDistanceToNow } from 'date-fns';
+import { getAiProviderDisplayName, resolveAiProviderSettings } from '@the-vault/core';
 import { DayGroupedList } from './DayGroupedList.js';
 
 const VAULT_AGENT_ROUTING_PRESETS: Array<{
@@ -135,13 +136,24 @@ export function VaultAgentView() {
     setError(null);
 
     try {
-      const [statusResponse, settingsResponse, logsResponse, secretResponse, enrichmentResponse, routingResponse] = await Promise.all([
+      const [
+        statusResponse,
+        settingsResponse,
+        logsResponse,
+        openRouterSecretResponse,
+        llmHubSecretResponse,
+        enrichmentResponse,
+        openRouterRoutingResponse,
+        llmHubRoutingResponse,
+      ] = await Promise.all([
         window.vaultAPI.status(),
         window.vaultAPI.getAllSettings(),
         window.vaultAPI.getRecentLogs(40),
         window.vaultAPI.getSecretSetting('openrouter_api_key'),
+        window.vaultAPI.getSecretSetting('llm_hub_api_key'),
         window.vaultAPI.refreshEnrichment(),
-        window.vaultAPI.getModelRoutingTable(),
+        window.vaultAPI.getModelRoutingTable('openrouter'),
+        window.vaultAPI.getModelRoutingTable('llm-hub'),
       ]);
 
       if (!statusResponse.initialized) {
@@ -156,15 +168,23 @@ export function VaultAgentView() {
         throw new Error(logsResponse.error || 'Failed to load recent agent activity');
       }
 
+      const nextSettings = settingsResponse.data;
+      const providerSettings = resolveAiProviderSettings(nextSettings);
+      const secretResponse = providerSettings.primaryProvider === 'llm-hub'
+        ? llmHubSecretResponse
+        : openRouterSecretResponse;
+      const routingResponse = providerSettings.primaryProvider === 'llm-hub'
+        ? llmHubRoutingResponse
+        : openRouterRoutingResponse;
+
       if (!secretResponse.success) {
-        throw new Error(secretResponse.error || 'Failed to inspect the OpenRouter API key state');
+        throw new Error(secretResponse.error || 'Failed to inspect the primary provider API key state');
       }
 
       if (!routingResponse.success || !routingResponse.data) {
         throw new Error(routingResponse.error || 'Failed to inspect task model routing');
       }
 
-      const nextSettings = settingsResponse.data;
       const nextLogs = logsResponse.data || [];
       const nextProjects = (statusResponse.projects || [])
         .filter((project) => project.projectType !== 'brain_context')
@@ -210,7 +230,7 @@ export function VaultAgentView() {
 
       const enrichmentResponse = await window.vaultAPI.refreshEnrichment();
       if (!enrichmentResponse.success) {
-        throw new Error(enrichmentResponse.error || 'Failed to refresh the OpenRouter runtime');
+        throw new Error(enrichmentResponse.error || 'Failed to refresh the Vault AI runtime');
       }
 
       setMessage('Vault agent controls saved.');
@@ -456,8 +476,10 @@ export function VaultAgentView() {
       ? taskProject
       : '__new__';
 
-  const backendLabel = 'OpenRouter API';
-  const activeModelLabel = settings?.enrichment_model || 'No API model selected';
+  const providerSettings = resolveAiProviderSettings(settings ?? {});
+  const selectedTaskFailoverSummary = formatProviderFailover(selectedTask?.resultMetadata);
+  const backendLabel = providerSettings.backendLabel;
+  const activeModelLabel = providerSettings.primaryEnrichmentModel || 'No primary model selected';
   const activeRoutingPreset = useMemo(
     () => routingTable ? VAULT_AGENT_ROUTING_PRESETS.find((preset) => routingTablesEqual(routingTable, preset.table)) || null : null,
     [routingTable],
@@ -543,7 +565,7 @@ export function VaultAgentView() {
         <div className="section-intro-copy">
           <span className="section-intro-eyebrow">Agent Runtime</span>
           <div className="section-intro-title">Run the built-in Vault runtime and delegated task queue from one focused cockpit</div>
-          <p className="section-intro-text">This page is only for the OpenRouter-backed Vault runtime and background task executor. Codex and Claude stay external clients through MCP; full recall and save activity stays in Activity.</p>
+          <p className="section-intro-text">This page is for the built-in provider-backed Vault runtime and background task executor. Codex and Claude stay external clients through MCP; full recall and save activity stays in Activity.</p>
         </div>
         <div className="section-intro-meta">
           <span className="section-intro-chip">{runtimeStateLabel}</span>
@@ -858,7 +880,7 @@ export function VaultAgentView() {
                         onChange={(event) => setTaskPrompt(event.target.value)}
                         placeholder="Describe the work clearly so the Vault Agent can execute it without blocking your main flow."
                       />
-                      <span className="field-help">This uses the routed OpenRouter model for the selected task type once the executor is running.</span>
+                      <span className="field-help">This uses the primary provider's routed model for the selected task type once the executor is running.</span>
                     </label>
                   </div>
 
@@ -984,6 +1006,12 @@ export function VaultAgentView() {
                         <span>Result</span>
                       </div>
                       <pre className="snippet-block">{selectedTask.resultText}</pre>
+                    </div>
+                  ) : null}
+
+                  {selectedTaskFailoverSummary ? (
+                    <div className="note-card">
+                      <p>{selectedTaskFailoverSummary}</p>
                     </div>
                   ) : null}
 
@@ -1121,7 +1149,7 @@ export function VaultAgentView() {
               <div className="field-grid">
                 <label className="toggle-row">
                   <div>
-                    <span className="field-label">Enable OpenRouter Vault runtime</span>
+                    <span className="field-label">Enable Vault AI runtime</span>
                     <span className="field-help">Turns the built-in API-backed Vault operator on or off.</span>
                   </div>
                   <input
@@ -1170,16 +1198,20 @@ export function VaultAgentView() {
               <div className="detail-stack agent-task-detail-stack">
                 <div className="detail-grid">
                   <div className="detail-block">
-                    <span className="detail-label">Provider</span>
-                    <strong>OpenRouter</strong>
+                    <span className="detail-label">Primary provider</span>
+                    <strong>{providerSettings.primaryProviderLabel}</strong>
                   </div>
                   <div className="detail-block">
-                    <span className="detail-label">API key</span>
+                    <span className="detail-label">Fallback provider</span>
+                    <strong>{providerSettings.fallbackProviderLabel || 'none'}</strong>
+                  </div>
+                  <div className="detail-block">
+                    <span className="detail-label">Primary API key</span>
                     <strong>{apiKeyConfigured ? 'configured' : 'missing'}</strong>
                   </div>
                   <div className="detail-block">
                     <span className="detail-label">Selected model</span>
-                    <strong>{settings?.enrichment_model || 'none selected'}</strong>
+                    <strong>{activeModelLabel}</strong>
                   </div>
                   <div className="detail-block">
                     <span className="detail-label">Runtime state</span>
@@ -1246,16 +1278,21 @@ export function VaultAgentView() {
                 getDate={(event) => event.timestamp}
                 getKey={(event) => `${event.timestamp}-${event.taskUid}-${event.type}`}
                 emptyMessage="No task events have been received in this session yet."
-                renderItem={(event) => (
-                  <div className={`adapter-check ${getEventCardClass(event.type)}`}>
-                    <div className="adapter-check-head">
-                      <span className={`badge ${getTaskBadgeClassFromEvent(event.type)}`}>{event.type}</span>
-                      <strong>{event.task?.title || event.taskUid}</strong>
+                renderItem={(event) => {
+                  const failoverSummary = formatProviderFailover(event.metadata);
+
+                  return (
+                    <div className={`adapter-check ${getEventCardClass(event.type)}`}>
+                      <div className="adapter-check-head">
+                        <span className={`badge ${getTaskBadgeClassFromEvent(event.type)}`}>{event.type}</span>
+                        <strong>{event.task?.title || event.taskUid}</strong>
+                      </div>
+                      <p>{event.message}</p>
+                      {failoverSummary ? <p>{failoverSummary}</p> : null}
+                      <p>{formatTimestamp(event.timestamp)}</p>
                     </div>
-                    <p>{event.message}</p>
-                    <p>{formatTimestamp(event.timestamp)}</p>
-                  </div>
-                )}
+                  );
+                }}
               />
             )}
           </section>
@@ -1310,6 +1347,34 @@ function getTaskAssetPaths(task: VaultTask | null): string[] {
 function getTaskResultMetadataString(task: VaultTask | null, key: string): string | null {
   const value = task?.resultMetadata?.[key];
   return typeof value === 'string' && value.trim() ? value.trim() : null;
+}
+
+function formatProviderFailover(metadata: Record<string, unknown> | null | undefined): string | null {
+  const rawError = metadata?.primaryProviderError;
+  if (!rawError || typeof rawError !== 'object') {
+    return null;
+  }
+
+  const providerError = rawError as Record<string, unknown>;
+  const provider = providerError.provider;
+  const error = providerError.error;
+  if ((provider !== 'openrouter' && provider !== 'llm-hub') || typeof error !== 'string' || !error.trim()) {
+    return null;
+  }
+
+  const models = Array.isArray(providerError.models)
+    ? providerError.models
+      .filter((model): model is string => typeof model === 'string')
+      .map((model) => model.trim())
+      .filter(Boolean)
+    : [];
+  const completedProvider = metadata?.provider;
+  const completedWith = completedProvider === 'openrouter' || completedProvider === 'llm-hub'
+    ? ` The task completed with ${getAiProviderDisplayName(completedProvider)}.`
+    : '';
+  const modelDetail = models.length > 0 ? ` using ${models.join(', ')}` : '';
+
+  return `Provider failover: ${getAiProviderDisplayName(provider)} failed${modelDetail}: ${error.trim()}${completedWith}`;
 }
 
 function formatTimestamp(value: string | null | undefined): string {

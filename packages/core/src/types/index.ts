@@ -1012,6 +1012,22 @@ export interface ActivityLogEntry {
 // ---------------------------------------------------------------------------
 // Vault Task
 // ---------------------------------------------------------------------------
+export interface TaskProviderAttemptError {
+  provider: 'openrouter' | 'llm-hub';
+  models: string[];
+  error: string;
+  timestamp: string;
+}
+
+export interface TaskResultMetadata extends Record<string, unknown> {
+  primaryProviderError?: TaskProviderAttemptError;
+  /**
+   * Unsuccessful provider attempts that preceded the provider which
+   * ultimately completed the task.
+   */
+  providerAttempts?: TaskProviderAttemptError[];
+}
+
 export interface VaultTask {
   id: number;
   taskUid: string;
@@ -1024,7 +1040,7 @@ export interface VaultTask {
   context: Record<string, unknown>;
   routedModel: string | null;
   resultText: string | null;
-  resultMetadata: Record<string, unknown> | null;
+  resultMetadata: TaskResultMetadata | null;
   errorMessage: string | null;
   retryCount: number;
   maxRetries: number;

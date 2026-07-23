@@ -39,6 +39,7 @@ import type {
   SnoozeDecisionResult,
   SaveGraphifyRuntimeConfigInput,
   SaveVaultCollabRuntimeConfigInput,
+  TaskResultMetadata,
   VaultCollabActionResult,
   VaultCollabAgentRequestInput,
   VaultCollabDashboardActionInput,
@@ -331,7 +332,7 @@ declare global {
     context: Record<string, unknown>;
     routedModel: string | null;
     resultText: string | null;
-    resultMetadata: Record<string, unknown> | null;
+    resultMetadata: TaskResultMetadata | null;
     errorMessage: string | null;
     retryCount: number;
     maxRetries: number;
@@ -380,7 +381,7 @@ declare global {
     task: VaultTask | null;
     timestamp: string;
     message: string;
-    metadata?: Record<string, unknown>;
+    metadata?: TaskResultMetadata;
   }
 
   interface VaultStatus {
