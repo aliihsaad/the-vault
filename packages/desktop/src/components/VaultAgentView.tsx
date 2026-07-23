@@ -336,6 +336,9 @@ export function VaultAgentView() {
         priority: taskPriority,
         project: normalizedProject || undefined,
         maxRetries: Math.max(0, Number(taskMaxRetries) || 0),
+        workIntent: 'normal_work',
+        actor: { actorUid: 'desktop', actorKind: 'service', roles: [] },
+        idempotencyKey: `desktop:${Date.now()}:${normalizedTitle}`,
         createdBy: 'desktop',
       });
 

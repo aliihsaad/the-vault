@@ -821,13 +821,13 @@ describe('task delegation system', () => {
 
     const applyResult = vault.applyDutyTaskResult(enrichTask!.taskUid);
     expect(applyResult.applied).toBe(true);
-    expect(applyResult.appliedFields.sort()).toEqual(['keywords', 'nextSteps', 'summary', 'tags']);
+    expect(applyResult.appliedFields.sort()).toEqual(['keywords', 'summary', 'tags']);
 
     const detail = vault.getMemoryDetail(saved.item.itemUid);
     expect(detail?.summary).toContain('exponential delay');
     expect(detail?.tags).toEqual(expect.arrayContaining(['sync', 'backoff', 'bugfix']));
     expect(detail?.keywords).toEqual(expect.arrayContaining(['retry', 'exponential-backoff']));
-    expect(detail?.nextSteps).toEqual(['Verify retry timing under packet loss']);
+    expect(detail?.nextSteps).toEqual([]);
 
     const taskAfter = vault.getTask(enrichTask!.taskUid);
     expect(taskAfter?.resultMetadata?.dutyApplied).toBe(true);

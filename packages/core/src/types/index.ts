@@ -396,6 +396,25 @@ export interface ConvertProjectTypeInput extends ClassifyProjectInput {
   reason: string;
 }
 
+export interface TransitionProjectLifecycleInput {
+  project: string;
+  nextState: ProjectLifecycleState;
+  reason: string;
+  actor: ActorContext;
+  expectedVersion: number;
+  idempotencyKey: string;
+  authorizationRequestUid?: string;
+}
+
+export interface ProjectLifecycleTransitionResult {
+  eventUid: string;
+  project: Project;
+  previousState: ProjectLifecycleState;
+  nextState: ProjectLifecycleState;
+  reason: string;
+  idempotentReplay: boolean;
+}
+
 export interface ProjectClassificationReport {
   project: Project;
   requestedType: Exclude<ProjectType, 'unclassified'>;
@@ -1047,6 +1066,8 @@ export interface VaultTask {
   parentTaskUid: string | null;
   sourceMemoryUid: string | null;
   targetMemoryUid: string | null;
+  workIntent?: WorkIntent;
+  relatedLoopUid?: string | null;
   createdBy: string;
   createdAt: string;
   startedAt: string | null;
@@ -1068,6 +1089,12 @@ export interface CreateTaskInput {
   parentTaskUid?: string;
   sourceMemoryUid?: string;
   targetMemoryUid?: string;
+  workIntent?: WorkIntent;
+  relatedLoopUid?: string;
+  actor?: ActorContext;
+  authorizationRequestUid?: string;
+  /** Idempotency scope for the governed admission decision; task rows are not deduplicated by this key. */
+  idempotencyKey?: string;
   createdBy?: string;
 }
 

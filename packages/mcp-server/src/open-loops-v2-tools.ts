@@ -9,6 +9,7 @@ import {
   LOOP_STATES,
   LOOP_TRIGGER_KINDS,
   PROJECT_TYPES,
+  PROJECT_LIFECYCLE_STATES,
   WORK_INTENTS,
   OpenLoopServiceError,
   type ActorContext,
@@ -57,6 +58,29 @@ export function registerOpenLoopsV2McpTools(server: McpServer, vault: Vault): vo
       authorizationPolicyId: args.authorization_policy_id,
       evidencePolicyId: args.evidence_policy_id,
       typeConfig: args.type_config,
+    })),
+  );
+
+  server.tool(
+    'vault_transition_project_lifecycle',
+    'Govern a classified project lifecycle transition (including activation or rollback) with authorization, optimistic concurrency, idempotency, and persisted evidence.',
+    {
+      project: z.string().min(1).max(200),
+      next_state: z.enum(PROJECT_LIFECYCLE_STATES),
+      reason: z.string().min(1).max(2000),
+      actor: ActorSchema,
+      expected_version: z.number().int().min(0),
+      idempotency_key: z.string().min(1).max(200),
+      authorization_request_uid: z.string().max(200).optional(),
+    },
+    async (args) => toolResult(() => vault.transitionProjectLifecycle({
+      project: args.project,
+      nextState: args.next_state,
+      reason: args.reason,
+      actor: actorFrom(args.actor),
+      expectedVersion: args.expected_version,
+      idempotencyKey: args.idempotency_key,
+      authorizationRequestUid: args.authorization_request_uid,
     })),
   );
 

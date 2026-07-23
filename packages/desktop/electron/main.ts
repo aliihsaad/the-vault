@@ -2136,6 +2136,7 @@ app.whenReady().then(() => {
   ipcMain.handle('vault:countDedicatedOpenLoops', (_, input) => runVaultOperation(() => vault.countDedicatedOpenLoops(input)));
   ipcMain.handle('vault:addLoopEvidence', (_, input) => runVaultOperation(() => vault.addLoopEvidence(input)));
   ipcMain.handle('vault:evaluateProjectGate', (_, input) => runVaultOperation(() => vault.evaluateProjectGate(input)));
+  ipcMain.handle('vault:transitionProjectLifecycle', (_, input) => runVaultOperation(() => vault.transitionProjectLifecycle(input)));
   ipcMain.handle('vault:requestLoopSnooze', (_, input) => runVaultOperation(() => vault.requestLoopSnooze(input)));
   ipcMain.handle('vault:decideLoopSnooze', (_, input) => runVaultOperation(() => vault.decideLoopSnooze(input)));
   ipcMain.handle('vault:resolveOpenLoop', (_, input) => runVaultOperation(() => vault.resolveOpenLoop(input)));

@@ -12,6 +12,7 @@ contextBridge.exposeInMainWorld('vaultAPI', {
   countDedicatedOpenLoops: (input?: unknown) => ipcRenderer.invoke('vault:countDedicatedOpenLoops', input),
   addLoopEvidence: (input: unknown) => ipcRenderer.invoke('vault:addLoopEvidence', input),
   evaluateProjectGate: (input: unknown) => ipcRenderer.invoke('vault:evaluateProjectGate', input),
+  transitionProjectLifecycle: (input: unknown) => ipcRenderer.invoke('vault:transitionProjectLifecycle', input),
   requestLoopSnooze: (input: unknown) => ipcRenderer.invoke('vault:requestLoopSnooze', input),
   decideLoopSnooze: (input: unknown) => ipcRenderer.invoke('vault:decideLoopSnooze', input),
   resolveOpenLoop: (input: unknown) => ipcRenderer.invoke('vault:resolveOpenLoop', input),

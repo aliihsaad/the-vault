@@ -15,6 +15,7 @@ import {
   TaskPrioritySchema,
   OutcomeSchema,
   ProjectTypeSchema,
+  ProjectLifecycleStateSchema,
   ActorKindSchema,
   LoopPrioritySchema,
   LoopBlockingScopeSchema,
@@ -224,6 +225,16 @@ export const ConvertProjectTypeInputSchema = ClassifyProjectInputSchema.and(z.ob
   reason: NonEmptyTrimmedString.max(2000),
 }));
 
+export const TransitionProjectLifecycleInputSchema = z.object({
+  project: NonEmptyTrimmedString.max(200),
+  nextState: ProjectLifecycleStateSchema,
+  reason: NonEmptyTrimmedString.max(2000),
+  actor: ActorContextSchema,
+  expectedVersion: z.number().int().min(0),
+  idempotencyKey: IdempotencyKeySchema,
+  authorizationRequestUid: z.string().trim().min(1).max(200).optional(),
+});
+
 export const CreateOpenLoopInputSchema = z.object({
   projectUid: NonEmptyTrimmedString.max(200),
   title: NonEmptyTrimmedString.max(200),
@@ -368,6 +379,11 @@ export const CreateTaskInputSchema = z.object({
   parentTaskUid: z.string().optional(),
   sourceMemoryUid: z.string().optional(),
   targetMemoryUid: z.string().optional(),
+  workIntent: WorkIntentSchema.optional().default('normal_work'),
+  relatedLoopUid: z.string().trim().min(1).max(200).optional(),
+  actor: ActorContextSchema.optional(),
+  authorizationRequestUid: z.string().trim().min(1).max(200).optional(),
+  idempotencyKey: z.string().trim().min(1).max(200).optional(),
   createdBy: z.string().max(50).optional().default('system'),
 });
 

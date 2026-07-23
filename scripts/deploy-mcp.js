@@ -49,6 +49,15 @@ const pkg = {
     // From @the-vault/mcp-server
     '@modelcontextprotocol/sdk': '^1.12.0',
   },
+  overrides: {
+    '@hono/node-server': '2.0.11',
+    'body-parser': '2.3.0',
+    'fast-uri': '3.1.4',
+    'hono': '4.12.31',
+    'js-yaml': '3.15.0',
+    'qs': '6.15.3',
+    'shell-quote': '1.9.0',
+  },
 };
 writeFileSync(resolve(standalone, 'package.json'), JSON.stringify(pkg, null, 2));
 

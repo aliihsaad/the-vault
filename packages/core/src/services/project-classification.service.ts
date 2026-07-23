@@ -69,6 +69,7 @@ export function classifyProject(
         `Project ${current.name} is already ${current.projectType}`,
       );
     }
+    assertBrainNextStepsInvariant(transactionalDb, validated.targetType, current.name);
 
     const defaults = getOpenLoopInstallationDefaults(transactionalDb);
     const effectiveProject = withDefaultGovernance(current, defaults);
@@ -170,6 +171,7 @@ export function convertProjectType(
         'Migrate every dedicated loop row to an owning Work Project before converting to Brain',
       );
     }
+    assertBrainNextStepsInvariant(transactionalDb, validated.targetType, current.name);
 
     const authorization = assertAuthorized(authorizeProjectAction(
       transactionalDb,
@@ -258,6 +260,9 @@ function buildClassificationReport(
   if (!conversion && project.projectType !== 'unclassified') reasonCodes.push('PROJECT_ALREADY_CLASSIFIED');
   if (conversion && project.projectType === 'unclassified') reasonCodes.push('PROJECT_NOT_CLASSIFIED');
   if (conversion && project.projectType === input.targetType) reasonCodes.push('PROJECT_TYPE_UNCHANGED');
+  if (input.targetType === 'brain_context' && countLegacyNextSteps(db, project.name) > 0) {
+    reasonCodes.push('BRAIN_CONTEXT_NEXT_STEPS_FORBIDDEN');
+  }
   if (conversion && input.targetType === 'brain_context' && report.dedicatedLoopCount > 0) {
     reasonCodes.push('LOOPS_PREVENT_BRAIN_CONVERSION');
   }
@@ -341,6 +346,26 @@ function countLegacyCandidates(db: DB, projectName: string): number {
     ),
   )).get();
   return Number(row?.count || 0);
+}
+
+function countLegacyNextSteps(db: DB, projectName: string): number {
+  const row = db.select({ count: sql<number>`count(*)` }).from(memoryItems).where(and(
+    eq(memoryItems.project, projectName),
+    ne(memoryItems.nextStepsJson, '[]'),
+  )).get();
+  return Number(row?.count || 0);
+}
+
+function assertBrainNextStepsInvariant(
+  db: DB,
+  targetType: 'work_project' | 'brain_context',
+  projectName: string,
+): void {
+  if (targetType !== 'brain_context' || countLegacyNextSteps(db, projectName) === 0) return;
+  throw new OpenLoopServiceError(
+    'BRAIN_CONTEXT_NEXT_STEPS_FORBIDDEN',
+    'Brain contexts cannot retain legacy next_steps commitments',
+  );
 }
 
 function countDedicatedNonterminalLoops(db: DB, projectUid: string | null): number {

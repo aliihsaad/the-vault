@@ -12,6 +12,10 @@ import type {
   DecideLoopSnoozeInput,
   DedicatedOpenLoop,
   EvaluateProjectGateInput,
+  TransitionProjectLifecycleInput,
+  ProjectLifecycleTransitionResult,
+  WorkIntent,
+  ActorContext,
   GraphifyArtifactDiscoveryResult,
   GraphifyArtifactReportReadResult,
   GraphifyBuildMode,
@@ -339,6 +343,8 @@ declare global {
     parentTaskUid: string | null;
     sourceMemoryUid: string | null;
     targetMemoryUid: string | null;
+    workIntent?: WorkIntent;
+    relatedLoopUid?: string | null;
     createdBy: string;
     createdAt: string;
     startedAt: string | null;
@@ -662,6 +668,7 @@ declare global {
     countDedicatedOpenLoops: (input?: CountDedicatedOpenLoopsInput) => Promise<VaultResponse<CountDedicatedOpenLoopsResult>>;
     addLoopEvidence: (input: AddLoopEvidenceInput) => Promise<VaultResponse<OpenLoopMutationResult>>;
     evaluateProjectGate: (input: EvaluateProjectGateInput) => Promise<VaultResponse<ProjectGateResult>>;
+    transitionProjectLifecycle: (input: TransitionProjectLifecycleInput) => Promise<VaultResponse<ProjectLifecycleTransitionResult>>;
     requestLoopSnooze: (input: RequestLoopSnoozeInput) => Promise<VaultResponse<RequestLoopSnoozeResult>>;
     decideLoopSnooze: (input: DecideLoopSnoozeInput) => Promise<VaultResponse<SnoozeDecisionResult>>;
     resolveOpenLoop: (input: ResolveOpenLoopInput) => Promise<VaultResponse<ResolveOpenLoopResult>>;
@@ -742,6 +749,11 @@ declare global {
       parentTaskUid?: string;
       sourceMemoryUid?: string;
       targetMemoryUid?: string;
+      workIntent?: WorkIntent;
+      relatedLoopUid?: string;
+      actor?: ActorContext;
+      authorizationRequestUid?: string;
+      idempotencyKey?: string;
       createdBy?: string;
     }) => Promise<VaultResponse<VaultTask>>;
     findTasks: (query?: {

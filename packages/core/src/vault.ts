@@ -31,6 +31,7 @@ import {
 } from './services/open-loop.service.js';
 import { decideLoopSnooze, requestLoopSnooze } from './services/loop-snooze.service.js';
 import { evaluateProjectGate } from './services/project-gate.service.js';
+import { transitionProjectLifecycle } from './services/project-lifecycle.service.js';
 import {
   getOpenLoopShadowTelemetry,
   inventoryLegacyLoopCandidates,
@@ -207,6 +208,8 @@ import type {
   ConvertProjectTypeInput,
   ProjectClassificationReport,
   ProjectClassificationResult,
+  TransitionProjectLifecycleInput,
+  ProjectLifecycleTransitionResult,
   CreateOpenLoopInput,
   CreateOpenLoopResult,
   DedicatedOpenLoop,
@@ -1051,6 +1054,13 @@ export class Vault {
   convertProjectType(input: ConvertProjectTypeInput): ProjectClassificationResult {
     this.ensureInitialized();
     return convertProjectType(this.db, input);
+  }
+
+  transitionProjectLifecycle(
+    input: TransitionProjectLifecycleInput,
+  ): ProjectLifecycleTransitionResult {
+    this.ensureInitialized();
+    return transitionProjectLifecycle(this.db, input);
   }
 
   inventoryLegacyLoopCandidates(project?: string): LegacyLoopCandidateReport {

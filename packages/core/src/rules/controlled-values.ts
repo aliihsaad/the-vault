@@ -227,6 +227,7 @@ export const AuthorizationPolicyModeSchema = z.enum(AUTHORIZATION_POLICY_MODES);
 export const AUTHORIZATION_ACTIONS = [
   'classify_project',
   'convert_project_type',
+  'transition_project_lifecycle',
   'create_open_loop',
   'request_loop_snooze',
   'decide_loop_snooze',

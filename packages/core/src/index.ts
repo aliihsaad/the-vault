@@ -26,6 +26,8 @@ export type {
   ConvertProjectTypeInput,
   ProjectClassificationReport,
   ProjectClassificationResult,
+  TransitionProjectLifecycleInput,
+  ProjectLifecycleTransitionResult,
   Tag,
   MemoryLink,
   ActivityLogEntry,
@@ -148,6 +150,8 @@ export {
   evaluateProjectGate,
   evaluateProjectGateSnapshot,
 } from './services/project-gate.service.js';
+
+export { transitionProjectLifecycle } from './services/project-lifecycle.service.js';
 
 export {
   getOpenLoopShadowTelemetry,

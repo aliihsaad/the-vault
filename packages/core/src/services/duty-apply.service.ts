@@ -26,7 +26,7 @@ export const APPLYABLE_DUTY_TYPES = new Set(['post_save_enrich', 'post_save_orga
 // combined result must stay recall-friendly, not exhaustive.
 const MAX_TOTAL_TAGS = 12;
 const MAX_TOTAL_KEYWORDS = 10;
-const MAX_NEXT_STEPS = 5;
+
 const MIN_APPLIED_SUMMARY_CHARS = 40;
 const MAX_APPLIED_SUMMARY_CHARS = 600;
 const MAX_METADATA_VALUE_CHARS = 48;
@@ -114,11 +114,8 @@ export function applyDutyTaskResult(
       audit.previousSummary = item.summary;
     }
 
-    const nextSteps = pickNextSteps(item.nextSteps, suggestion.next_steps);
-    if (nextSteps) {
-      updates.nextSteps = nextSteps;
-      appliedFields.push('nextSteps');
-    }
+    // Model-generated next steps are informational suggestions only. They must
+    // never become durable commitments or successor-loop candidates implicitly.
   }
 
   if (appliedFields.length === 0) {
@@ -238,18 +235,4 @@ function pickImprovedSummary(current: string, suggested: string | undefined): st
   // than what we already have is not an improvement worth auto-applying.
   if (next.length <= current.trim().length) return null;
   return next;
-}
-
-function pickNextSteps(existing: string[], suggested: string[] | undefined): string[] | null {
-  // Next steps are only filled in, never overwritten — existing steps may
-  // track real outstanding work the model knows nothing about.
-  if (existing.length > 0 || !suggested) return null;
-
-  const cleaned = suggested
-    .filter((step): step is string => typeof step === 'string')
-    .map((step) => step.trim())
-    .filter((step) => step.length >= 5 && step.length <= 300)
-    .slice(0, MAX_NEXT_STEPS);
-
-  return cleaned.length > 0 ? cleaned : null;
 }
