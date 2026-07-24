@@ -36,6 +36,12 @@ describe('task delegation system', () => {
     vaultRoot = await mkdtemp(join(tmpdir(), 'vault-task-test-'));
     vault = new Vault(vaultRoot);
     vault.initialize();
+    vault.createProject({
+      name: 'Vault',
+      projectType: 'work_project',
+      description: 'Task-system fixture project.',
+      canonicalRoot: vaultRoot,
+    });
   });
 
   afterEach(async () => {
@@ -384,6 +390,7 @@ describe('task delegation system', () => {
       title: 'Draft implementation outline',
       taskType: 'coding',
       prompt: 'Draft an implementation outline for task persistence.',
+      project: 'Vault',
       maxRetries: 1,
       createdBy: 'codex',
     });

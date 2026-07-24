@@ -12,22 +12,11 @@ import {
   PROJECT_LIFECYCLE_STATES,
   WORK_INTENTS,
   OpenLoopServiceError,
-  type ActorContext,
   type Vault,
 } from '@the-vault/core';
 
-const ActorShape = {
-  actor_uid: z.string().min(1).max(200),
-  actor_kind: z.enum(ACTOR_KINDS),
-  roles: z.array(z.string().min(1).max(100)).max(50).optional(),
-  external_provider: z.string().max(200).optional(),
-  external_decision_id: z.string().max(500).optional(),
-  external_approved: z.boolean().optional(),
-};
-
-const ActorSchema = z.object(ActorShape);
-
 export function registerOpenLoopsV2McpTools(server: McpServer, vault: Vault): void {
+  const trustedActor = () => vault.getOpenLoopInstallationDefaults().actor;
   server.tool(
     'vault_create_project',
     'Create a new explicitly typed Work Project or Brain / Memory-Context Project. Legacy unclassified is not accepted.',
@@ -68,7 +57,12 @@ export function registerOpenLoopsV2McpTools(server: McpServer, vault: Vault): vo
       project: z.string().min(1).max(200),
       next_state: z.enum(PROJECT_LIFECYCLE_STATES),
       reason: z.string().min(1).max(2000),
-      actor: ActorSchema,
+      evidence: z.array(z.object({
+        kind: z.enum(EVIDENCE_KINDS),
+        reference: z.string().min(1).max(4000),
+        description: z.string().min(1).max(2000),
+        immutable_hash: z.string().min(8).max(256).optional(),
+      })).max(50).optional(),
       expected_version: z.number().int().min(0),
       idempotency_key: z.string().min(1).max(200),
       authorization_request_uid: z.string().max(200).optional(),
@@ -77,7 +71,13 @@ export function registerOpenLoopsV2McpTools(server: McpServer, vault: Vault): vo
       project: args.project,
       nextState: args.next_state,
       reason: args.reason,
-      actor: actorFrom(args.actor),
+      evidence: args.evidence?.map((item) => ({
+        kind: item.kind,
+        reference: item.reference,
+        description: item.description,
+        immutableHash: item.immutable_hash,
+      })),
+      actor: trustedActor(),
       expectedVersion: args.expected_version,
       idempotencyKey: args.idempotency_key,
       authorizationRequestUid: args.authorization_request_uid,
@@ -107,7 +107,6 @@ export function registerOpenLoopsV2McpTools(server: McpServer, vault: Vault): vo
       source_handoff_uid: z.string().max(200).optional(),
       external_reference: z.string().max(2000).optional(),
       source_context: z.record(z.unknown()),
-      creating_actor: ActorSchema,
       authorization_request_uid: z.string().max(200).optional(),
       idempotency_key: z.string().min(1).max(200),
       correlation_uid: z.string().max(200).optional(),
@@ -132,7 +131,7 @@ export function registerOpenLoopsV2McpTools(server: McpServer, vault: Vault): vo
       sourceHandoffUid: args.source_handoff_uid,
       externalReference: args.external_reference,
       sourceContext: args.source_context,
-      creatingActor: actorFrom(args.creating_actor),
+      creatingActor: trustedActor(),
       authorizationRequestUid: args.authorization_request_uid,
       idempotencyKey: args.idempotency_key,
       correlationUid: args.correlation_uid,
@@ -194,7 +193,6 @@ export function registerOpenLoopsV2McpTools(server: McpServer, vault: Vault): vo
         immutable_hash: z.string().min(8).max(256).optional(),
       })).min(1).max(50),
       current_evidence_summary: z.string().min(1).max(5000),
-      actor: ActorSchema,
       expected_version: z.number().int().positive(),
       idempotency_key: z.string().min(1).max(200),
       transition_to_verification: z.boolean().optional(),
@@ -209,7 +207,7 @@ export function registerOpenLoopsV2McpTools(server: McpServer, vault: Vault): vo
         immutableHash: item.immutable_hash,
       })),
       currentEvidenceSummary: args.current_evidence_summary,
-      actor: actorFrom(args.actor),
+      actor: trustedActor(),
       expectedVersion: args.expected_version,
       idempotencyKey: args.idempotency_key,
       transitionToVerification: args.transition_to_verification,
@@ -224,7 +222,6 @@ export function registerOpenLoopsV2McpTools(server: McpServer, vault: Vault): vo
       project_uid: z.string().min(1).max(200),
       work_intent: z.enum(WORK_INTENTS),
       related_loop_uid: z.string().max(200).optional(),
-      actor: ActorSchema,
       authorization_request_uid: z.string().max(200).optional(),
       idempotency_key: z.string().min(1).max(200),
     },
@@ -232,17 +229,21 @@ export function registerOpenLoopsV2McpTools(server: McpServer, vault: Vault): vo
       projectUid: args.project_uid,
       workIntent: args.work_intent,
       relatedLoopUid: args.related_loop_uid,
-      actor: actorFrom(args.actor),
+      actor: trustedActor(),
       authorizationRequestUid: args.authorization_request_uid,
       idempotencyKey: args.idempotency_key,
     })),
   );
 
-  registerSnoozeAndResolutionTools(server, vault);
-  registerClassificationAndMigrationTools(server, vault);
+  registerSnoozeAndResolutionTools(server, vault, trustedActor);
+  registerClassificationAndMigrationTools(server, vault, trustedActor);
 }
 
-function registerSnoozeAndResolutionTools(server: McpServer, vault: Vault): void {
+function registerSnoozeAndResolutionTools(
+  server: McpServer,
+  vault: Vault,
+  trustedActor: () => ReturnType<Vault['getOpenLoopInstallationDefaults']>['actor'],
+): void {
   server.tool(
     'vault_request_loop_snooze',
     'Request a visible, time- or dependency-bounded snooze for a dedicated loop. The loop remains blocking until the configured policy approves.',
@@ -251,7 +252,6 @@ function registerSnoozeAndResolutionTools(server: McpServer, vault: Vault): void
       reason: z.string().min(1).max(2000),
       snoozed_until: z.string().datetime({ offset: true }).optional(),
       dependency_trigger: z.string().min(1).max(2000).optional(),
-      requester: ActorSchema,
       expected_version: z.number().int().positive(),
       idempotency_key: z.string().min(1).max(200),
     },
@@ -260,7 +260,7 @@ function registerSnoozeAndResolutionTools(server: McpServer, vault: Vault): void
       reason: args.reason,
       snoozedUntil: args.snoozed_until,
       dependencyTrigger: args.dependency_trigger,
-      requester: actorFrom(args.requester),
+      requester: trustedActor(),
       expectedVersion: args.expected_version,
       idempotencyKey: args.idempotency_key,
     })),
@@ -274,7 +274,6 @@ function registerSnoozeAndResolutionTools(server: McpServer, vault: Vault): void
       loop_uid: z.string().min(1).max(200),
       decision: z.enum(APPROVAL_DECISIONS),
       reason: z.string().min(1).max(2000),
-      approver: ActorSchema,
       expected_version: z.number().int().positive(),
       idempotency_key: z.string().min(1).max(200),
     },
@@ -283,7 +282,7 @@ function registerSnoozeAndResolutionTools(server: McpServer, vault: Vault): void
       loopUid: args.loop_uid,
       decision: args.decision,
       reason: args.reason,
-      approver: actorFrom(args.approver),
+      approver: trustedActor(),
       expectedVersion: args.expected_version,
       idempotencyKey: args.idempotency_key,
     })),
@@ -296,7 +295,6 @@ function registerSnoozeAndResolutionTools(server: McpServer, vault: Vault): void
       loop_uid: z.string().min(1).max(200),
       outcome: z.enum(LOOP_OUTCOMES),
       resolution_note: z.string().min(1).max(5000),
-      verifier: ActorSchema,
       expected_version: z.number().int().positive(),
       idempotency_key: z.string().min(1).max(200),
       duplicate_of_loop_uid: z.string().max(200).optional(),
@@ -306,7 +304,7 @@ function registerSnoozeAndResolutionTools(server: McpServer, vault: Vault): void
       loopUid: args.loop_uid,
       outcome: args.outcome,
       resolutionNote: args.resolution_note,
-      verifier: actorFrom(args.verifier),
+      verifier: trustedActor(),
       expectedVersion: args.expected_version,
       idempotencyKey: args.idempotency_key,
       duplicateOfLoopUid: args.duplicate_of_loop_uid,
@@ -320,7 +318,6 @@ function registerSnoozeAndResolutionTools(server: McpServer, vault: Vault): void
     {
       loop_uid: z.string().min(1).max(200),
       reason: z.string().min(1).max(5000),
-      actor: ActorSchema,
       expected_version: z.number().int().positive(),
       idempotency_key: z.string().min(1).max(200),
       authorization_request_uid: z.string().max(200).optional(),
@@ -330,7 +327,7 @@ function registerSnoozeAndResolutionTools(server: McpServer, vault: Vault): void
     async (args) => toolResult(() => vault.recoverOpenLoop({
       loopUid: args.loop_uid,
       reason: args.reason,
-      actor: actorFrom(args.actor),
+      actor: trustedActor(),
       expectedVersion: args.expected_version,
       idempotencyKey: args.idempotency_key,
       authorizationRequestUid: args.authorization_request_uid,
@@ -355,7 +352,11 @@ const ProjectConfigShape = {
 
 const ProjectConfigSchema = z.object(ProjectConfigShape);
 
-function registerClassificationAndMigrationTools(server: McpServer, vault: Vault): void {
+function registerClassificationAndMigrationTools(
+  server: McpServer,
+  vault: Vault,
+  trustedActor: () => ReturnType<Vault['getOpenLoopInstallationDefaults']>['actor'],
+): void {
   server.tool(
     'vault_classify_project',
     'Dry-run or apply governed classification of a legacy-unclassified project. No project type is inferred from its name.',
@@ -363,7 +364,6 @@ function registerClassificationAndMigrationTools(server: McpServer, vault: Vault
       project: z.string().min(1).max(200),
       target_type: z.enum(['work_project', 'brain_context']),
       config: ProjectConfigSchema,
-      actor: ActorSchema,
       expected_version: z.number().int().min(0),
       idempotency_key: z.string().min(1).max(200),
       authorization_request_uid: z.string().max(200).optional(),
@@ -373,7 +373,7 @@ function registerClassificationAndMigrationTools(server: McpServer, vault: Vault
       project: args.project,
       targetType: args.target_type,
       config: projectConfigFrom(args.config),
-      actor: actorFrom(args.actor),
+      actor: trustedActor(),
       expectedVersion: args.expected_version,
       idempotencyKey: args.idempotency_key,
       authorizationRequestUid: args.authorization_request_uid,
@@ -389,7 +389,6 @@ function registerClassificationAndMigrationTools(server: McpServer, vault: Vault
       target_type: z.enum(['work_project', 'brain_context']),
       config: ProjectConfigSchema,
       reason: z.string().min(1).max(2000),
-      actor: ActorSchema,
       expected_version: z.number().int().min(0),
       idempotency_key: z.string().min(1).max(200),
       authorization_request_uid: z.string().max(200).optional(),
@@ -400,7 +399,7 @@ function registerClassificationAndMigrationTools(server: McpServer, vault: Vault
       targetType: args.target_type,
       config: projectConfigFrom(args.config),
       reason: args.reason,
-      actor: actorFrom(args.actor),
+      actor: trustedActor(),
       expectedVersion: args.expected_version,
       idempotencyKey: args.idempotency_key,
       authorizationRequestUid: args.authorization_request_uid,
@@ -421,17 +420,6 @@ function registerClassificationAndMigrationTools(server: McpServer, vault: Vault
     { project: z.string().max(200).optional() },
     async (args) => toolResult(() => vault.getOpenLoopShadowTelemetry(args.project)),
   );
-}
-
-function actorFrom(input: z.infer<typeof ActorSchema>): ActorContext {
-  return {
-    actorUid: input.actor_uid,
-    actorKind: input.actor_kind,
-    roles: input.roles || [],
-    externalProvider: input.external_provider,
-    externalDecisionId: input.external_decision_id,
-    externalApproved: input.external_approved,
-  };
 }
 
 function projectConfigFrom(input: z.infer<typeof ProjectConfigSchema>) {

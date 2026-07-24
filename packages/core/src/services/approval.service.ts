@@ -68,6 +68,9 @@ export function recordInlineAuthorizationGrant(
     scopeJson: JSON.stringify(scope),
     reason: input.reason,
     externalDecisionId: input.actor.externalDecisionId || null,
+    externalProvider: input.actor.actorKind === 'external'
+      ? input.actor.externalProvider || null
+      : null,
     eventUid: input.eventUid || null,
     idempotencyKey: `${input.idempotencyKey}:authorization-record`,
     createdAt: timestamp,
@@ -128,6 +131,7 @@ function mapApprovalRecord(row: typeof approvalRecords.$inferSelect): ApprovalRe
     scope: parseRecord(row.scopeJson),
     reason: row.reason,
     externalDecisionId: row.externalDecisionId,
+    externalProvider: row.externalProvider,
     eventUid: row.eventUid,
     createdAt: row.createdAt,
   };

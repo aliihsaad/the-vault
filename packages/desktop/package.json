@@ -1,6 +1,6 @@
 {
   "name": "@the-vault/desktop",
-  "version": "0.6.2",
+  "version": "0.6.3",
   "private": true,
   "description": "Desktop cockpit for The Vault local-first AI memory system",
   "author": "Ali Saad",
@@ -9,7 +9,9 @@
   "main": "dist-electron/main.js",
   "scripts": {
     "dev": "vite",
-    "build": "tsc && vite build && electron-builder",
+    "build": "tsc && vite build && pnpm run rebuild:native && electron-builder",
+    "rebuild:native": "node scripts/rebuild-native.mjs",
+    "verify:packaged-runtime": "node scripts/verify-packaged-runtime.mjs",
     "preview": "vite preview"
   },
   "build": {
@@ -17,6 +19,8 @@
     "productName": "The Vault",
     "icon": "public/vault-icon.png",
     "asar": true,
+    "npmRebuild": false,
+    "afterPack": "scripts/after-pack.cjs",
     "directories": {
       "output": "dist"
     },
@@ -26,7 +30,7 @@
       "node_modules/**/*",
       "package.json"
     ],
-    "artifactName": "The-Vault-${version}-${os}-${arch}.${ext}",
+    "artifactName": "The-Vault-${version}-windows-${arch}.${ext}",
     "win": {
       "target": [
         {
@@ -48,10 +52,7 @@
     "extraResources": [
       {
         "from": "../../mcp-standalone",
-        "to": "mcp",
-        "filter": [
-          "**/*"
-        ]
+        "to": "mcp"
       },
       {
         "from": "../../skills",
@@ -77,9 +78,11 @@
     "@types/react": "^19.0.8",
     "@types/react-dom": "^19.0.3",
     "@vitejs/plugin-react": "^4.3.4",
-    "electron": "^34.0.0",
-    "electron-builder": "^25.1.8",
-    "vite": "^6.0.7",
+    "electron": "^39.8.1",
+    "electron-builder": "^26.15.3",
+    "electron-builder-squirrel-windows": "^26.15.3",
+    "node-gyp": "^12.4.0",
+    "vite": "^6.4.3",
     "vite-plugin-electron": "^0.29.0",
     "vite-plugin-electron-renderer": "^0.14.6"
   }

@@ -413,7 +413,12 @@ describe.sequential('Open-Loops v2 Phases B-D lifecycle', () => {
     }
     expect(evaluateAuthorizationPolicy(db, quorum, {
       actorUid: 'requester', actorKind: 'user', roles: [],
-    }, null, 'request-quorum')).toMatchObject({ authorized: true, approvalsRecorded: 2 });
+    }, null, 'request-quorum', {
+      action: 'decide_loop_snooze',
+      targetUid: 'target',
+      scope: {},
+      requireApprovedRequest: false,
+    })).toMatchObject({ authorized: true, approvalsRecorded: 2 });
 
     const external = createAuthorizationPolicy(db, {
       policyUid: 'auth_external_fixture',
@@ -429,7 +434,7 @@ describe.sequential('Open-Loops v2 Phases B-D lifecycle', () => {
       externalProvider: 'policy-engine',
       externalDecisionId: 'decision-123',
       externalApproved: true,
-    }).authorized).toBe(true);
+    }).authorized).toBe(false);
 
     const future = new Date(Date.now() + 10 * 60_000).toISOString();
     const roleProject = createWorkProject('Role snooze fixture');
@@ -498,11 +503,11 @@ describe.sequential('Open-Loops v2 Phases B-D lifecycle', () => {
       expectedVersion: externalLoop.version,
       idempotencyKey: 'external-snooze-request',
     });
-    expect(vault.decideLoopSnooze({
+    expect(() => vault.decideLoopSnooze({
       requestUid: externalRequest.request.requestUid,
       loopUid: externalLoop.loopUid,
       decision: 'approved',
-      reason: 'External provider approved.',
+      reason: 'Caller-asserted external approval must be rejected.',
       approver: {
         actorUid: 'external-decision',
         actorKind: 'external',
@@ -512,8 +517,39 @@ describe.sequential('Open-Loops v2 Phases B-D lifecycle', () => {
         externalApproved: true,
       },
       expectedVersion: externalRequest.loop.version,
-      idempotencyKey: 'external-snooze-approve',
-    })).toMatchObject({ policySatisfied: true, loop: { state: 'snoozed' } });
+      idempotencyKey: 'external-snooze-forged',
+    })).toThrow(/trusted provider|provider-bound|not authorized/i);
+
+    vault.recordExternalApprovalDecision({
+      approvalUid: 'external-snooze-trusted-approval',
+      requestUid: externalRequest.request.requestUid,
+      action: 'decide_loop_snooze',
+      targetUid: externalLoop.loopUid,
+      policyUid: external.policyUid,
+      externalProvider: 'policy-engine',
+      externalDecisionId: 'decision-456',
+      scope: externalRequest.request.scope,
+      reason: 'Trusted policy engine approved the bounded snooze.',
+      idempotencyKey: 'external-snooze-ingest',
+    });
+    expect(vault.decideLoopSnooze({
+      requestUid: externalRequest.request.requestUid,
+      loopUid: externalLoop.loopUid,
+      decision: 'approved',
+      reason: 'Apply the already-ingested trusted decision.',
+      approver: actor,
+      expectedVersion: externalRequest.loop.version,
+      idempotencyKey: 'external-snooze-apply',
+    })).toMatchObject({
+      policySatisfied: true,
+      request: { status: 'approved' },
+      approval: {
+        actorUid: 'external:policy-engine',
+        externalProvider: 'policy-engine',
+        externalDecisionId: 'decision-456',
+      },
+      loop: { state: 'snoozed' },
+    });
   });
 
   it('requires outcome-specific evidence and rolls resolution back if its event write fails', () => {

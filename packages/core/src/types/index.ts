@@ -398,8 +398,9 @@ export interface ConvertProjectTypeInput extends ClassifyProjectInput {
 
 export interface TransitionProjectLifecycleInput {
   project: string;
-  nextState: ProjectLifecycleState;
+  nextState: Exclude<ProjectLifecycleState, 'unclassified'>;
   reason: string;
+  evidence?: AddLoopEvidenceReferenceInput[];
   actor: ActorContext;
   expectedVersion: number;
   idempotencyKey: string;
@@ -775,6 +776,7 @@ export interface ApprovalRecord {
   scope: Record<string, unknown>;
   reason: string;
   externalDecisionId: string | null;
+  externalProvider: string | null;
   eventUid: string | null;
   createdAt: string;
 }
@@ -1083,7 +1085,8 @@ export interface CreateTaskInput {
   taskType: TaskType;
   prompt: string;
   priority?: TaskPriority;
-  project?: string;
+  /** Canonical project scope. Required: task admission is governed per project. */
+  project: string;
   context?: Record<string, unknown>;
   maxRetries?: number;
   parentTaskUid?: string;
@@ -1093,7 +1096,7 @@ export interface CreateTaskInput {
   relatedLoopUid?: string;
   actor?: ActorContext;
   authorizationRequestUid?: string;
-  /** Idempotency scope for the governed admission decision; task rows are not deduplicated by this key. */
+  /** Durable task-creation idempotency key; exact replays return the original row. */
   idempotencyKey?: string;
   createdBy?: string;
 }

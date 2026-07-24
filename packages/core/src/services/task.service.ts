@@ -4,14 +4,14 @@
 // ============================================================================
 
 import { eq, and, desc } from 'drizzle-orm';
-import { tasks } from '../database/schema.js';
+import { memoryItems, tasks } from '../database/schema.js';
 import { getRawDatabase } from '../database/connection.js';
 import { logActivity } from './log.service.js';
 import { saveMemory } from './save.service.js';
 import { generateItemUid } from '../utils/uid.js';
 import { now } from '../utils/datetime.js';
 import { CreateTaskInputSchema, FindTaskQuerySchema } from '../rules/validation.js';
-import { evaluateProjectGate } from './project-gate.service.js';
+import { evaluateProjectGate, evaluateProjectGateSnapshot } from './project-gate.service.js';
 import { getProject } from './project.service.js';
 import { OpenLoopServiceError } from './open-loop-errors.js';
 import { resolveModelRoute, mergeRoutingTable, DEFAULT_MODEL_ROUTING } from '../rules/model-routing.js';
@@ -31,74 +31,98 @@ type DB = BetterSQLite3Database<typeof schema>;
 /**
  * Create a new task in the queue with status 'pending'.
  */
+export interface CreateTaskAdmissionOptions {
+  allowMemoryMaintenance?: boolean;
+}
+
 export function createTask(
   db: DB,
   logsPath: string,
   input: CreateTaskInput,
+  options: CreateTaskAdmissionOptions = {},
 ): VaultTask {
   const startMs = Date.now();
-
-  // Validate input
   const validated = CreateTaskInputSchema.parse(input);
+  if (!validated.project) {
+    throw new OpenLoopServiceError('TASK_PROJECT_REQUIRED', 'New tasks require an explicit project.');
+  }
+  if (validated.workIntent === 'memory_maintenance' && !options.allowMemoryMaintenance) {
+    throw new OpenLoopServiceError(
+      'TASK_INTENT_FORBIDDEN',
+      'memory_maintenance is reserved for trusted internal duty writers.',
+    );
+  }
 
-  // Generate UID
   const taskUid = generateItemUid().replace('vm_', 'vt_');
   const timestamp = now();
+  const raw = getRawDatabase();
+  if (!raw) throw new Error('Database not initialized');
+  const admit = raw.transaction(() => {
+    const transactionalDb = db;
+    const project = getProject(transactionalDb, validated.project!);
+    if (!project) {
+      throw new OpenLoopServiceError('TASK_PROJECT_NOT_FOUND', `Task project not found: ${validated.project}`);
+    }
+    assertMemoryProject(transactionalDb, validated.sourceMemoryUid, project.name, 'source');
+    assertMemoryProject(transactionalDb, validated.targetMemoryUid, project.name, 'target');
 
-  // Resolve model route from the primary provider's routing table
-  const routingTable = getRoutingTable(db, getPrimaryProviderId(db));
-  const route = resolveModelRoute(routingTable, validated.taskType);
+    const actor = validated.actor || {
+      actorUid: validated.createdBy,
+      actorKind: 'service' as const,
+      roles: [],
+    };
+    const lifecycle = {
+      workIntent: validated.workIntent,
+      relatedLoopUid: validated.relatedLoopUid || null,
+      actor,
+      authorizationRequestUid: validated.authorizationRequestUid || null,
+    };
+    const publicContext = stripTaskLifecycle(validated.context);
+    const context = { ...publicContext, $vaultLifecycle: lifecycle };
 
-  const workIntent = validated.workIntent || 'normal_work';
-  const relatedLoopUid = validated.relatedLoopUid || null;
-  const context = {
-    ...validated.context,
-    $vaultLifecycle: { workIntent, relatedLoopUid },
-  };
-
-  // Gate evaluation and queue insertion share one transaction, so an allowed
-  // decision cannot race a lifecycle cutover or a newly-created blocker.
-  const task = db.transaction((tx) => {
-    const transactionalDb = tx as DB;
-    if (validated.project) {
-      const project = getProject(transactionalDb, validated.project);
-      if (project?.projectType === 'brain_context' && workIntent !== 'memory_maintenance') {
-        throw new OpenLoopServiceError(
-          'BRAIN_LOOP_OPERATION_DENIED',
-          'BRAIN_LOOP_OPERATION_DENIED: Brain contexts accept only explicit memory maintenance tasks.',
-          { project: validated.project, workIntent },
-        );
-      }
-      if (project?.projectUid && project.lifecycleState === 'gate_active') {
-        const gate = evaluateProjectGate(transactionalDb, {
-          projectUid: project.projectUid,
-          workIntent,
-          relatedLoopUid: relatedLoopUid || undefined,
-          actor: validated.actor || {
-            actorUid: validated.createdBy,
-            actorKind: 'service',
-            roles: [],
-          },
-          authorizationRequestUid: validated.authorizationRequestUid,
-          idempotencyKey: validated.idempotencyKey || `task:${taskUid}`,
-        });
-        if (!gate.allowed) {
-          throw new OpenLoopServiceError(
-            'TASK_ADMISSION_DENIED',
-            `Task admission denied: ${gate.reasonCode}`,
-            { project: validated.project, reasonCode: gate.reasonCode, blockerUids: gate.blockerUids },
-          );
-        }
+    if (validated.idempotencyKey) {
+      const existing = transactionalDb.select().from(tasks)
+        .where(eq(tasks.idempotencyKey, validated.idempotencyKey)).get();
+      if (existing) {
+        assertTaskReplay(existing, validated, project.name, publicContext);
+        return { task: mapTaskRow(existing), created: false };
       }
     }
 
+    if (project.projectType === 'brain_context' && validated.workIntent !== 'memory_maintenance') {
+      throw new OpenLoopServiceError(
+        'BRAIN_LOOP_OPERATION_DENIED',
+        'BRAIN_LOOP_OPERATION_DENIED: Brain contexts accept only explicit memory maintenance tasks.',
+        { project: project.name, workIntent: validated.workIntent },
+      );
+    }
+    if (project.projectUid && project.lifecycleState === 'gate_active') {
+      const gate = evaluateProjectGate(transactionalDb, {
+        projectUid: project.projectUid,
+        workIntent: validated.workIntent,
+        relatedLoopUid: validated.relatedLoopUid,
+        actor,
+        authorizationRequestUid: validated.authorizationRequestUid,
+        idempotencyKey: validated.idempotencyKey || `task:${taskUid}`,
+      });
+      if (!gate.allowed) {
+        throw new OpenLoopServiceError(
+          'TASK_ADMISSION_DENIED',
+          `Task admission denied: ${gate.reasonCode}`,
+          { project: project.name, reasonCode: gate.reasonCode, blockerUids: gate.blockerUids },
+        );
+      }
+    }
+
+    const routingTable = getRoutingTable(transactionalDb, getPrimaryProviderId(transactionalDb));
+    const route = resolveModelRoute(routingTable, validated.taskType);
     transactionalDb.insert(tasks).values({
       taskUid,
       title: validated.title,
       taskType: validated.taskType,
       status: 'pending',
       priority: validated.priority,
-      project: validated.project || null,
+      project: project.name,
       prompt: validated.prompt,
       contextJson: JSON.stringify(context),
       routedModel: route.modelId,
@@ -110,6 +134,7 @@ export function createTask(
       parentTaskUid: validated.parentTaskUid || null,
       sourceMemoryUid: validated.sourceMemoryUid || null,
       targetMemoryUid: validated.targetMemoryUid || null,
+      idempotencyKey: validated.idempotencyKey || null,
       createdBy: validated.createdBy,
       createdAt: timestamp,
       startedAt: null,
@@ -119,21 +144,106 @@ export function createTask(
 
     const inserted = getTask(transactionalDb, taskUid);
     if (!inserted) throw new Error('Failed to retrieve created task');
-    return inserted;
+    return { task: inserted, created: true };
   });
+  const result = admit.immediate();
 
-  // Log the creation
-  logActivity(db, logsPath, {
-    sourceClient: validated.createdBy,
-    project: validated.project,
-    actionType: 'task_create',
-    targetItemId: taskUid,
-    status: 'success',
-    latencyMs: Date.now() - startMs,
-    message: `Created task: ${validated.title}`,
-  });
+  if (result.created) {
+    logActivity(db, logsPath, {
+      sourceClient: validated.createdBy,
+      project: result.task.project || undefined,
+      actionType: 'task_create',
+      targetItemId: result.task.taskUid,
+      status: 'success',
+      latencyMs: Date.now() - startMs,
+      message: `Created task: ${validated.title}`,
+    });
+  }
+  return result.task;
+}
 
-  return task;
+function assertMemoryProject(
+  db: DB,
+  itemUid: string | undefined,
+  expectedProject: string,
+  relation: 'source' | 'target',
+): void {
+  if (!itemUid) return;
+  const row = db.select({ project: memoryItems.project }).from(memoryItems)
+    .where(eq(memoryItems.itemUid, itemUid)).get();
+  if (!row) {
+    throw new OpenLoopServiceError(
+      relation === 'source' ? 'TASK_SOURCE_MEMORY_NOT_FOUND' : 'TASK_TARGET_MEMORY_NOT_FOUND',
+      `Task ${relation} memory not found: ${itemUid}`,
+    );
+  }
+  if (row.project !== expectedProject) {
+    throw new OpenLoopServiceError(
+      'TASK_PROJECT_MISMATCH',
+      `Task project ${expectedProject} does not match ${relation} memory project ${row.project}.`,
+      { itemUid, expectedProject, actualProject: row.project },
+    );
+  }
+}
+
+function stripTaskLifecycle(context: Record<string, unknown>): Record<string, unknown> {
+  const { $vaultLifecycle: _ignored, ...publicContext } = context;
+  return publicContext;
+}
+
+function assertTaskReplay(
+  row: typeof tasks.$inferSelect,
+  input: ReturnType<typeof CreateTaskInputSchema.parse>,
+  canonicalProject: string,
+  publicContext: Record<string, unknown>,
+): void {
+  const existing = mapTaskRow(row);
+  const existingSemantics = {
+    title: existing.title,
+    taskType: existing.taskType,
+    prompt: existing.prompt,
+    priority: existing.priority,
+    project: existing.project,
+    context: existing.context,
+    maxRetries: existing.maxRetries,
+    parentTaskUid: existing.parentTaskUid,
+    sourceMemoryUid: existing.sourceMemoryUid,
+    targetMemoryUid: existing.targetMemoryUid,
+    workIntent: existing.workIntent,
+    relatedLoopUid: existing.relatedLoopUid,
+    createdBy: existing.createdBy,
+  };
+  const requestedSemantics = {
+    title: input.title,
+    taskType: input.taskType,
+    prompt: input.prompt,
+    priority: input.priority,
+    project: canonicalProject,
+    context: publicContext,
+    maxRetries: input.maxRetries,
+    parentTaskUid: input.parentTaskUid || null,
+    sourceMemoryUid: input.sourceMemoryUid || null,
+    targetMemoryUid: input.targetMemoryUid || null,
+    workIntent: input.workIntent,
+    relatedLoopUid: input.relatedLoopUid || null,
+    createdBy: input.createdBy,
+  };
+  if (stableJson(existingSemantics) !== stableJson(requestedSemantics)) {
+    throw new OpenLoopServiceError(
+      'IDEMPOTENCY_CONFLICT',
+      'Task idempotency key was already used for a different task mutation.',
+      { idempotencyKey: input.idempotencyKey },
+    );
+  }
+}
+
+function stableJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(stableJson).join(',')}]`;
+  if (value && typeof value === 'object') {
+    const record = value as Record<string, unknown>;
+    return `{${Object.keys(record).sort().map((key) => `${JSON.stringify(key)}:${stableJson(record[key])}`).join(',')}}`;
+  }
+  return JSON.stringify(value);
 }
 
 // ---------------------------------------------------------------------------
@@ -206,38 +316,72 @@ export function claimNextTask(
   const raw = getRawDatabase();
   if (!raw) throw new Error('Database not initialized');
 
-  const timestamp = now();
+  const claim = raw.transaction(() => {
+    while (true) {
+      const typeFilter = taskType ? 'AND task_type = ?' : '';
+      const candidate = raw.prepare(`
+        SELECT * FROM tasks
+        WHERE status = 'pending' ${typeFilter}
+        ORDER BY
+          CASE priority
+            WHEN 'urgent' THEN 0
+            WHEN 'high' THEN 1
+            WHEN 'normal' THEN 2
+            WHEN 'low' THEN 3
+          END,
+          created_at ASC
+        LIMIT 1
+      `).get(...(taskType ? [taskType] : [])) as Record<string, unknown> | undefined;
+      if (!candidate) return null;
 
-  // Build the claim query with priority ordering
-  const typeFilter = taskType ? 'AND task_type = ?' : '';
-  const params = taskType
-    ? [timestamp, timestamp, taskType]
-    : [timestamp, timestamp];
+      const task = mapRawRow(candidate);
+      const lifecycle = decodeTaskContext(candidate.context_json as string | null);
+      const project = task.project ? getProject(db, task.project) : null;
+      if (!task.project || !project) {
+        const timestamp = now();
+        raw.prepare(`
+          UPDATE tasks
+          SET status = 'failed', error_message = ?, completed_at = ?, updated_at = ?
+          WHERE task_uid = ? AND status = 'pending'
+        `).run('Claim-time gate admission denied: task project is missing', timestamp, timestamp, task.taskUid);
+        continue;
+      }
+      if (project.projectUid && (project.projectType === 'brain_context' || project.lifecycleState === 'gate_active')) {
+        const gate = evaluateProjectGateSnapshot(db, {
+          projectUid: project.projectUid,
+          workIntent: task.workIntent || 'normal_work',
+          relatedLoopUid: task.relatedLoopUid || undefined,
+          actor: lifecycle.actor || {
+            actorUid: task.createdBy,
+            actorKind: 'service',
+            roles: [],
+          },
+          authorizationRequestUid: lifecycle.authorizationRequestUid || undefined,
+          idempotencyKey: `claim:${task.taskUid}`,
+        });
+        if (!gate.allowed) {
+          const timestamp = now();
+          raw.prepare(`
+            UPDATE tasks
+            SET status = 'failed', error_message = ?, completed_at = ?, updated_at = ?
+            WHERE task_uid = ? AND status = 'pending'
+          `).run(`Claim-time gate admission denied: ${gate.reasonCode}`, timestamp, timestamp, task.taskUid);
+          continue;
+        }
+      }
 
-  const result = raw.prepare(`
-    UPDATE tasks
-    SET status = 'running',
-        started_at = ?,
-        updated_at = ?
-    WHERE id = (
-      SELECT id FROM tasks
-      WHERE status = 'pending' ${typeFilter}
-      ORDER BY
-        CASE priority
-          WHEN 'urgent' THEN 0
-          WHEN 'high' THEN 1
-          WHEN 'normal' THEN 2
-          WHEN 'low' THEN 3
-        END,
-        created_at ASC
-      LIMIT 1
-    )
-    RETURNING *
-  `).get(...params) as Record<string, unknown> | undefined;
+      const timestamp = now();
+      const claimed = raw.prepare(`
+        UPDATE tasks
+        SET status = 'running', started_at = ?, updated_at = ?
+        WHERE task_uid = ? AND status = 'pending'
+        RETURNING *
+      `).get(timestamp, timestamp, task.taskUid) as Record<string, unknown> | undefined;
+      if (claimed) return mapRawRow(claimed);
+    }
+  });
 
-  if (!result) return null;
-
-  return mapRawRow(result);
+  return claim.immediate();
 }
 
 // ---------------------------------------------------------------------------
@@ -854,9 +998,33 @@ function normalizeTaskKeywords(task: VaultTask): string[] {
 // Row Mappers
 // ---------------------------------------------------------------------------
 
+function decodeTaskContext(contextJson: string | null): {
+  context: Record<string, unknown>;
+  workIntent: VaultTask['workIntent'];
+  relatedLoopUid: string | null;
+  actor?: CreateTaskInput['actor'];
+  authorizationRequestUid: string | null;
+} {
+  const stored = contextJson ? JSON.parse(contextJson) as Record<string, unknown> : {};
+  const { $vaultLifecycle: rawLifecycle = {}, ...context } = stored;
+  const lifecycle = rawLifecycle && typeof rawLifecycle === 'object'
+    ? rawLifecycle as Record<string, unknown>
+    : {};
+  return {
+    context,
+    workIntent: (lifecycle.workIntent as VaultTask['workIntent']) || 'normal_work',
+    relatedLoopUid: typeof lifecycle.relatedLoopUid === 'string' ? lifecycle.relatedLoopUid : null,
+    actor: lifecycle.actor && typeof lifecycle.actor === 'object'
+      ? lifecycle.actor as CreateTaskInput['actor']
+      : undefined,
+    authorizationRequestUid: typeof lifecycle.authorizationRequestUid === 'string'
+      ? lifecycle.authorizationRequestUid
+      : null,
+  };
+}
+
 function mapTaskRow(row: typeof tasks.$inferSelect): VaultTask {
-  const storedContext = row.contextJson ? JSON.parse(row.contextJson) : {};
-  const { $vaultLifecycle: lifecycle = {}, ...context } = storedContext;
+  const lifecycle = decodeTaskContext(row.contextJson);
   return {
     id: row.id,
     taskUid: row.taskUid,
@@ -866,7 +1034,7 @@ function mapTaskRow(row: typeof tasks.$inferSelect): VaultTask {
     priority: row.priority as VaultTask['priority'],
     project: row.project,
     prompt: row.prompt,
-    context,
+    context: lifecycle.context,
     routedModel: row.routedModel,
     resultText: row.resultText,
     resultMetadata: row.resultMetadataJson ? JSON.parse(row.resultMetadataJson) : null,
@@ -876,8 +1044,8 @@ function mapTaskRow(row: typeof tasks.$inferSelect): VaultTask {
     parentTaskUid: row.parentTaskUid,
     sourceMemoryUid: row.sourceMemoryUid,
     targetMemoryUid: row.targetMemoryUid,
-    workIntent: lifecycle.workIntent || 'normal_work',
-    relatedLoopUid: lifecycle.relatedLoopUid || null,
+    workIntent: lifecycle.workIntent,
+    relatedLoopUid: lifecycle.relatedLoopUid,
     createdBy: row.createdBy,
     createdAt: row.createdAt,
     startedAt: row.startedAt,
@@ -890,6 +1058,7 @@ function mapTaskRow(row: typeof tasks.$inferSelect): VaultTask {
  * Map a raw SQL RETURNING result to VaultTask.
  */
 function mapRawRow(row: Record<string, unknown>): VaultTask {
+  const lifecycle = decodeTaskContext((row.context_json as string) || null);
   return {
     id: row.id as number,
     taskUid: row.task_uid as string,
@@ -899,7 +1068,7 @@ function mapRawRow(row: Record<string, unknown>): VaultTask {
     priority: row.priority as VaultTask['priority'],
     project: (row.project as string) || null,
     prompt: row.prompt as string,
-    context: row.context_json ? JSON.parse(row.context_json as string) : {},
+    context: lifecycle.context,
     routedModel: (row.routed_model as string) || null,
     resultText: (row.result_text as string) || null,
     resultMetadata: row.result_metadata_json ? JSON.parse(row.result_metadata_json as string) : null,
@@ -909,6 +1078,8 @@ function mapRawRow(row: Record<string, unknown>): VaultTask {
     parentTaskUid: (row.parent_task_uid as string) || null,
     sourceMemoryUid: (row.source_memory_uid as string) || null,
     targetMemoryUid: (row.target_memory_uid as string) || null,
+    workIntent: lifecycle.workIntent,
+    relatedLoopUid: lifecycle.relatedLoopUid,
     createdBy: row.created_by as string,
     createdAt: row.created_at as string,
     startedAt: (row.started_at as string) || null,

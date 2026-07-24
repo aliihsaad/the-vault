@@ -109,7 +109,7 @@ export function classifyProject(
       idempotentReplay: false,
       eventUid,
     };
-    if (authorization.policy.mode !== 'quorum') {
+    if (authorization.policy.mode === 'owner' || authorization.policy.mode === 'role') {
       recordInlineAuthorizationGrant(transactionalDb, {
         action: 'classify_project',
         targetUid: projectUid,
@@ -208,7 +208,7 @@ export function convertProjectType(
       idempotentReplay: false,
       eventUid,
     };
-    if (authorization.policy.mode !== 'quorum') {
+    if (authorization.policy.mode === 'owner' || authorization.policy.mode === 'role') {
       recordInlineAuthorizationGrant(transactionalDb, {
         action: 'convert_project_type',
         targetUid: current.projectUid!,

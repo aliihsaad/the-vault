@@ -10,6 +10,7 @@ import { now } from '../utils/datetime.js';
 import { getProject } from './project.service.js';
 import { assertAuthorized, authorizeProjectAction } from './authorization.service.js';
 import { recordInlineAuthorizationGrant } from './approval.service.js';
+import { getEvidencePolicy } from './open-loop-policy.service.js';
 import { OpenLoopServiceError } from './open-loop-errors.js';
 import type {
   Project,
@@ -84,6 +85,14 @@ export function transitionProjectLifecycle(
         `Project ${current.name} still has active legacy next_steps`,
       );
     }
+    if (validated.nextState === 'gate_active') {
+      assertActivationEvidence(transactionalDb, current, validated.evidence || []);
+    }
+    const authorizationScope = {
+      previousState: currentState,
+      nextState: validated.nextState,
+      evidence: validated.evidence || [],
+    };
 
     const authorization = assertAuthorized(authorizeProjectAction(
       transactionalDb,
@@ -91,6 +100,7 @@ export function transitionProjectLifecycle(
       'transition_project_lifecycle',
       validated.actor,
       validated.authorizationRequestUid,
+      { targetUid: current.projectUid!, scope: authorizationScope },
     ));
     const eventUid = generateProjectEventUid();
     const timestamp = now();
@@ -112,7 +122,7 @@ export function transitionProjectLifecycle(
       reason: validated.reason,
       idempotentReplay: false,
     };
-    if (authorization.policy.mode !== 'quorum') {
+    if (authorization.policy.mode === 'owner' || authorization.policy.mode === 'role') {
       recordInlineAuthorizationGrant(transactionalDb, {
         action: 'transition_project_lifecycle',
         targetUid: updated.projectUid!,
@@ -121,7 +131,7 @@ export function transitionProjectLifecycle(
         reason: validated.reason,
         idempotencyKey: validated.idempotencyKey,
         eventUid,
-        scope: { previousState: currentState, nextState: validated.nextState },
+        scope: authorizationScope,
       });
     }
     transactionalDb.insert(projectEvents).values({
@@ -137,6 +147,7 @@ export function transitionProjectLifecycle(
         previousState: currentState,
         nextState: validated.nextState,
         reason: validated.reason,
+        evidence: validated.evidence || [],
       }),
       resultJson: JSON.stringify(result),
       createdAt: timestamp,
@@ -153,11 +164,13 @@ function getReplay(
     .where(eq(projectEvents.idempotencyKey, input.idempotencyKey)).get();
   if (!row) return null;
   const result = JSON.parse(row.resultJson) as ProjectLifecycleTransitionResult;
+  const payload = JSON.parse(row.payloadJson) as { evidence?: unknown[] };
   const sameProject = input.project === result.project.projectUid || input.project === result.project.name;
   const sameMutation = row.eventType === 'lifecycle_transitioned'
     && sameProject
     && result.nextState === input.nextState
-    && result.reason === input.reason;
+    && result.reason === input.reason
+    && JSON.stringify(payload.evidence || []) === JSON.stringify(input.evidence || []);
   if (!sameMutation) {
     throw new OpenLoopServiceError(
       'IDEMPOTENCY_CONFLICT',
@@ -182,4 +195,37 @@ function countActiveLegacyNextSteps(db: DB, projectName: string): number {
     ne(memoryItems.nextStepsJson, '[]'),
   )).get();
   return Number(row?.count || 0);
+}
+
+function assertActivationEvidence(
+  db: DB,
+  project: Project,
+  evidence: NonNullable<TransitionProjectLifecycleInput['evidence']>,
+): void {
+  const policy = project.evidencePolicyId ? getEvidencePolicy(db, project.evidencePolicyId) : null;
+  if (!policy) {
+    throw new OpenLoopServiceError(
+      'EVIDENCE_POLICY_NOT_FOUND',
+      `Project ${project.name} has no enabled evidence policy`,
+    );
+  }
+  const minimumReferences = Math.max(1, policy.requirements.minimumReferences);
+  if (evidence.length < minimumReferences) {
+    throw new OpenLoopServiceError(
+      'EVIDENCE_REQUIRED',
+      `Gate activation requires at least ${minimumReferences} structured evidence reference(s)`,
+    );
+  }
+  const allowedKinds = new Set([
+    ...policy.requirements.fixedKinds,
+    ...policy.requirements.duplicateKinds,
+    ...policy.requirements.retirementKinds,
+  ]);
+  const invalid = evidence.find((reference) => !allowedKinds.has(reference.kind));
+  if (invalid) {
+    throw new OpenLoopServiceError(
+      'EVIDENCE_KIND_NOT_ALLOWED',
+      `Evidence kind ${invalid.kind} is not allowed by policy ${policy.policyUid}`,
+    );
+  }
 }

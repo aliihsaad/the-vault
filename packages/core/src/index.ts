@@ -115,10 +115,12 @@ export {
   createAuthorizationPolicy,
   evaluateAuthorizationPolicy,
   isActorEligible,
+  recordExternalApprovalDecision,
 } from './services/authorization.service.js';
 export type {
   AuthorizationEvaluation,
   CreateAuthorizationPolicyInput,
+  RecordExternalApprovalDecisionInput,
 } from './services/authorization.service.js';
 
 export {

@@ -1,6 +1,6 @@
 {
   "name": "@the-vault/core",
-  "version": "0.6.2",
+  "version": "0.6.3",
   "private": true,
   "license": "MIT",
   "type": "module",
@@ -35,6 +35,6 @@
   },
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.0",
-    "drizzle-kit": "^0.30.0"
+    "drizzle-kit": "^0.31.10"
   }
 }

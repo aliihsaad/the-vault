@@ -246,6 +246,7 @@ export const tasks = sqliteTable(
     parentTaskUid: text('parent_task_uid'),
     sourceMemoryUid: text('source_memory_uid'),
     targetMemoryUid: text('target_memory_uid'),
+    idempotencyKey: text('idempotency_key').unique(),
     createdBy: text('created_by').notNull().default('system'),
     createdAt: text('created_at')
       .notNull()
@@ -493,6 +494,9 @@ export const approvalRecords = sqliteTable(
     scopeJson: text('scope_json').notNull().default('{}'),
     reason: text('reason').notNull(),
     externalDecisionId: text('external_decision_id'),
+    // Identifier of the external authority that issued this decision. Persisted
+    // so the evaluator can bind it to the policy's configured externalProvider.
+    externalProvider: text('external_provider'),
     eventUid: text('event_uid'),
     idempotencyKey: text('idempotency_key').unique().notNull(),
     createdAt: text('created_at').notNull(),

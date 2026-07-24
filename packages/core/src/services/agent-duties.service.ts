@@ -7,8 +7,6 @@ import {
   tasks,
 } from '../database/schema.js';
 import { getSetting, setSetting, getPrimaryProviderId } from '../config/settings.js';
-import { resolveModelRoute } from '../rules/model-routing.js';
-import { CreateTaskInputSchema } from '../rules/validation.js';
 import { slugify } from '../rules/naming.js';
 import {
   detectDuplicates,
@@ -25,7 +23,6 @@ import {
   updateMemory,
 } from './retrieve.service.js';
 import { createTask, getRoutingTable as getProviderRoutingTable } from './task.service.js';
-import { generateItemUid } from '../utils/uid.js';
 import { now } from '../utils/datetime.js';
 import type {
   AgentDutyMaintenanceResult,
@@ -822,11 +819,9 @@ function createDutyTaskIfMissing(
   },
 ): VaultTask | null {
   const existing = findActiveDutyTask(db, item.itemUid, taskType);
-  if (existing) {
-    return null;
-  }
+  if (existing) return null;
 
-  const validated = CreateTaskInputSchema.parse({
+  return createTask(db, logsPath, {
     title: input.title,
     taskType,
     prompt: input.prompt,
@@ -836,63 +831,10 @@ function createDutyTaskIfMissing(
     maxRetries: 1,
     sourceMemoryUid: item.itemUid,
     targetMemoryUid: item.itemUid,
+    workIntent: 'memory_maintenance',
+    idempotencyKey: `duty:${item.itemUid}:${taskType}:${item.updatedAt}`,
     createdBy: 'system',
-  });
-
-  const taskUid = generateItemUid().replace('vm_', 'vt_');
-  const timestamp = now();
-  const route = resolveModelRoute(getProviderRoutingTable(db, getPrimaryProviderId(db)), validated.taskType);
-
-  db.insert(tasks)
-    .values({
-      taskUid,
-      title: validated.title,
-      taskType: validated.taskType,
-      status: 'pending',
-      priority: validated.priority,
-      project: validated.project || null,
-      prompt: validated.prompt,
-      contextJson: JSON.stringify(validated.context),
-      routedModel: route.modelId,
-      resultText: null,
-      resultMetadataJson: null,
-      errorMessage: null,
-      retryCount: 0,
-      maxRetries: validated.maxRetries,
-      parentTaskUid: validated.parentTaskUid || null,
-      sourceMemoryUid: validated.sourceMemoryUid || null,
-      targetMemoryUid: validated.targetMemoryUid || null,
-      createdBy: validated.createdBy,
-      createdAt: timestamp,
-      startedAt: null,
-      completedAt: null,
-      updatedAt: timestamp,
-    })
-    .run();
-
-  const created = db
-    .select()
-    .from(tasks)
-    .where(eq(tasks.taskUid, taskUid))
-    .get();
-  if (!created) {
-    return null;
-  }
-
-  logActivity(db, logsPath, {
-    sourceClient: 'system',
-    project: item.project,
-    actionType: 'task_create',
-    targetItemId: taskUid,
-    status: 'success',
-    message: `Created ${taskType} duty task for ${item.title}`,
-    metadata: {
-      sourceItemUid: item.itemUid,
-      taskType,
-    },
-  });
-
-  return mapTaskRow(created);
+  }, { allowMemoryMaintenance: true });
 }
 
 function findActiveDutyTask(

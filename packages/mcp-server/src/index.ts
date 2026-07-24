@@ -7,7 +7,7 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
-import { Vault, TaskExecutor, createProviderClient, FailoverEnrichmentClient, isProviderConfigUsable, getEnrichmentModelKey, portableDecrypt, slugify, MEMORY_TYPES, ROUTINE_TYPES, STATUS_VALUES, PRIORITY_VALUES, SOURCE_APPS, TASK_TYPES, TASK_STATUSES, TASK_PRIORITIES, ACTOR_KINDS, WORK_INTENTS, PROPOSAL_STATUSES, PROPOSAL_TYPES, PROJECT_LINK_TYPES, OUTCOME_VALUES, MEMORY_CONTENT_MAX_CHARS, type AiProviderChain, type AiProviderConfig, type AiProviderId, type EnrichmentClient } from '@the-vault/core';
+import { Vault, TaskExecutor, createProviderClient, FailoverEnrichmentClient, isProviderConfigUsable, getEnrichmentModelKey, portableDecrypt, slugify, MEMORY_TYPES, ROUTINE_TYPES, STATUS_VALUES, PRIORITY_VALUES, SOURCE_APPS, TASK_TYPES, TASK_STATUSES, TASK_PRIORITIES, PROPOSAL_STATUSES, PROPOSAL_TYPES, PROJECT_LINK_TYPES, OUTCOME_VALUES, MEMORY_CONTENT_MAX_CHARS, type AiProviderChain, type AiProviderConfig, type AiProviderId, type EnrichmentClient } from '@the-vault/core';
 import { registerGraphifyMcpTools } from './graphify-tools.js';
 import { registerOpenLoopsV2McpTools } from './open-loops-v2-tools.js';
 
@@ -798,22 +798,11 @@ server.tool(
     task_type: z.enum(TASK_TYPES).describe('Type of work: coding, image, analysis, summarize, organize, research, enrich, general'),
     prompt: z.string().describe('The instruction/prompt for the AI model'),
     priority: z.enum(TASK_PRIORITIES).optional().describe('Execution priority (default: normal)'),
-    project: z.string().optional().describe('Project scope'),
+    project: z.string().min(1).describe('Canonical project scope'),
     context: z.record(z.unknown()).optional().describe('Additional context: related memory UIDs (item_uids), file paths (related_files), etc. Recall-quality keys for the persisted result memory: subject (string — the topic used for recall matching), tags (string[] — topical tags), keywords (string[] — search terms), skipResultMemory (true — do not persist the result as a memory).'),
     max_retries: z.number().optional().describe('Max retry attempts (default: 2)'),
     source_memory_uid: z.string().optional().describe('Memory item that triggered this task'),
     target_memory_uid: z.string().optional().describe('Memory item this task should update'),
-    work_intent: z.enum(WORK_INTENTS).optional().describe('Governed admission intent; defaults to normal_work'),
-    related_loop_uid: z.string().optional().describe('Dedicated open-loop UID this task advances or closes'),
-    actor: z.object({
-      actor_uid: z.string().min(1).max(200),
-      actor_kind: z.enum(ACTOR_KINDS),
-      roles: z.array(z.string().min(1).max(100)).max(50).optional(),
-      external_provider: z.string().max(200).optional(),
-      external_decision_id: z.string().max(500).optional(),
-      external_approved: z.boolean().optional(),
-    }).optional().describe('Actor requesting admission; required by policy when the gate is active'),
-    authorization_request_uid: z.string().optional(),
     idempotency_key: z.string().optional(),
   },
   async (args) => {
@@ -828,17 +817,6 @@ server.tool(
         maxRetries: args.max_retries,
         sourceMemoryUid: args.source_memory_uid,
         targetMemoryUid: args.target_memory_uid,
-        workIntent: args.work_intent,
-        relatedLoopUid: args.related_loop_uid,
-        actor: args.actor ? {
-          actorUid: args.actor.actor_uid,
-          actorKind: args.actor.actor_kind,
-          roles: args.actor.roles || [],
-          externalProvider: args.actor.external_provider,
-          externalDecisionId: args.actor.external_decision_id,
-          externalApproved: args.actor.external_approved,
-        } : undefined,
-        authorizationRequestUid: args.authorization_request_uid,
         idempotencyKey: args.idempotency_key,
       });
 

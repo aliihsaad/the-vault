@@ -56,15 +56,18 @@ jobs:
           npm_config_python: python
 
       - name: Verify bundled MCP sidecar
+        run: pnpm --filter @the-vault/desktop verify:packaged-runtime
+
+      - name: Generate SHA-256 checksum
         shell: pwsh
         run: |
-          $mcpRoot = "packages/desktop/dist/win-unpacked/resources/mcp"
-          if (!(Test-Path "$mcpRoot/node.exe")) {
-            throw "Missing bundled MCP Node runtime: $mcpRoot/node.exe"
+          $installers = @(Get-ChildItem "packages/desktop/dist/The-Vault-*-windows-*.exe")
+          if ($installers.Count -ne 1) {
+            throw "Expected exactly one Windows installer, found $($installers.Count)"
           }
-          if (!(Test-Path "$mcpRoot/dist/index.js")) {
-            throw "Missing bundled MCP server entry: $mcpRoot/dist/index.js"
-          }
+          $installer = $installers[0]
+          $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $installer.FullName).Hash.ToLowerInvariant()
+          "$hash *$($installer.Name)" | Set-Content -NoNewline -Encoding ascii -LiteralPath "$($installer.FullName).sha256"
 
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
@@ -72,6 +75,7 @@ jobs:
           name: the-vault-windows-installer
           path: |
             packages/desktop/dist/*.exe
+            packages/desktop/dist/*.sha256
             packages/desktop/dist/*.blockmap
             packages/desktop/dist/latest*.yml
           if-no-files-found: error
@@ -100,6 +104,7 @@ jobs:
           prerelease: ${{ contains(github.event.inputs.tag_name || github.ref_name, '-') }}
           files: |
             packages/desktop/dist/*.exe
+            packages/desktop/dist/*.sha256
             packages/desktop/dist/*.blockmap
             packages/desktop/dist/latest*.yml
           body_path: release-notes.md

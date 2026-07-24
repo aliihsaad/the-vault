@@ -34,3 +34,5 @@ Use Vault memory before restarting discovery:
 - Include real file paths, concrete keywords, and next steps when saving implementation work.
 
 Use Vault MCP when the `vault-memory` server is attached in Codex. If MCP is not attached, keep following the same memory discipline and use the skill file as the operating guide.
+
+## Imported Claude Cowork project instructions

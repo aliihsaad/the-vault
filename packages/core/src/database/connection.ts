@@ -37,6 +37,7 @@ export function getDatabase(dbPath: string): VaultDB {
   sqliteInstance.pragma('journal_mode = WAL');
   sqliteInstance.pragma('synchronous = normal');
   sqliteInstance.pragma('foreign_keys = ON');
+  sqliteInstance.pragma('busy_timeout = 5000');
 
   // Initialize Drizzle
   dbInstance = drizzle(sqliteInstance, { schema });
@@ -224,6 +225,7 @@ export function initializeSchema(dbPath: string): void {
       parent_task_uid TEXT,
       source_memory_uid TEXT,
       target_memory_uid TEXT,
+      idempotency_key TEXT UNIQUE,
       created_by TEXT NOT NULL DEFAULT 'system',
       created_at TEXT NOT NULL,
       started_at TEXT,
@@ -346,6 +348,12 @@ function applyAdditiveMigrations(raw: Database.Database): void {
   ensureColumn('projects', 'owner_role', 'owner_role TEXT');
   ensureColumn('projects', 'memory_purpose', 'memory_purpose TEXT');
   ensureColumn('projects', 'type_config_json', "type_config_json TEXT NOT NULL DEFAULT '{}'");
+  ensureColumn(
+    'tasks',
+    'idempotency_key',
+    'idempotency_key TEXT',
+    'CREATE UNIQUE INDEX IF NOT EXISTS idx_tasks_idempotency_key ON tasks(idempotency_key);',
+  );
 
   raw.exec(`
     CREATE UNIQUE INDEX IF NOT EXISTS idx_projects_project_uid ON projects(project_uid);
@@ -501,6 +509,7 @@ function createOpenLoopsGovernanceSchema(raw: Database.Database): void {
       scope_json TEXT NOT NULL DEFAULT '{}',
       reason TEXT NOT NULL,
       external_decision_id TEXT,
+      external_provider TEXT,
       event_uid TEXT,
       idempotency_key TEXT UNIQUE NOT NULL,
       created_at TEXT NOT NULL,
@@ -555,9 +564,66 @@ function createOpenLoopsGovernanceSchema(raw: Database.Database): void {
       applied_at TEXT NOT NULL
     );
   `);
+
+  // Additive upgrade: a v0.6.2 database already has approval_records without the
+  // external_provider column (the CREATE TABLE IF NOT EXISTS above is a no-op on
+  // it). Add the column so external decisions can be bound to a provider. The
+  // table is guaranteed to exist here, so this is safe and idempotent.
+  const approvalColumns = raw
+    .prepare('PRAGMA table_info(approval_records)')
+    .all() as Array<{ name: string }>;
+  if (!approvalColumns.some((column) => column.name === 'external_provider')) {
+    raw.exec('ALTER TABLE approval_records ADD COLUMN external_provider TEXT;');
+  }
+}
+
+/**
+ * Consolidate duplicate active system duties before the unique active-duty
+ * index is created. v0.6.2's duty writer did check-then-insert without a
+ * uniqueness constraint, so a legacy database can hold several pending/running
+ * duties that share (source_memory_uid, task_type, dutyType). Creating
+ * idx_tasks_active_duty_unique over such rows would abort initialization.
+ *
+ * Policy: keep the oldest active duty per group (by created_at, then id) and
+ * mark every later duplicate `cancelled` with an explicit, auditable migration
+ * reason and timestamps. Rows are preserved, never deleted. Running this again
+ * after consolidation is a no-op, so repeated initialization stays idempotent.
+ */
+function migrateDuplicateActiveDuties(raw: Database.Database): void {
+  const now = new Date().toISOString();
+  raw.prepare(`
+    UPDATE tasks
+    SET status = 'cancelled',
+        error_message = 'Superseded during v0.6.3 upgrade: duplicate active duty consolidated to the oldest row for the active-duty uniqueness migration.',
+        completed_at = COALESCE(completed_at, @now),
+        updated_at = @now
+    WHERE id IN (
+      SELECT dup.id FROM tasks dup
+      WHERE dup.status IN ('pending', 'running')
+        AND dup.source_memory_uid IS NOT NULL
+        AND dup.created_by = 'system'
+        AND json_extract(dup.context_json, '$.dutyType') IS NOT NULL
+        AND EXISTS (
+          SELECT 1 FROM tasks older
+          WHERE older.source_memory_uid = dup.source_memory_uid
+            AND older.task_type = dup.task_type
+            AND json_extract(older.context_json, '$.dutyType') = json_extract(dup.context_json, '$.dutyType')
+            AND older.status IN ('pending', 'running')
+            AND older.source_memory_uid IS NOT NULL
+            AND older.created_by = 'system'
+            AND json_extract(older.context_json, '$.dutyType') IS NOT NULL
+            AND (
+              older.created_at < dup.created_at
+              OR (older.created_at = dup.created_at AND older.id < dup.id)
+            )
+        )
+    );
+  `).run({ now });
 }
 
 function createOpenLoopsTriggers(raw: Database.Database): void {
+  // Deduplicate legacy active duties before the unique index below is created.
+  migrateDuplicateActiveDuties(raw);
   raw.exec(`
     CREATE TRIGGER IF NOT EXISTS trg_open_loops_work_project_insert
     BEFORE INSERT ON open_loops
@@ -591,6 +657,76 @@ function createOpenLoopsTriggers(raw: Database.Database): void {
     BEGIN
       SELECT RAISE(ABORT, 'BRAIN_CONTEXT_HAS_LOOP_HISTORY');
     END;
+
+    CREATE TRIGGER IF NOT EXISTS trg_memory_items_brain_next_steps_insert
+    BEFORE INSERT ON memory_items
+    WHEN EXISTS (
+      SELECT 1 FROM projects WHERE name = NEW.project AND project_type = 'brain_context'
+    ) AND trim(COALESCE(NEW.next_steps_json, '[]')) NOT IN ('', '[]', 'null')
+    BEGIN
+      SELECT RAISE(ABORT, 'BRAIN_CONTEXT_NEXT_STEPS_FORBIDDEN');
+    END;
+
+    CREATE TRIGGER IF NOT EXISTS trg_memory_items_brain_next_steps_update
+    BEFORE UPDATE OF project, next_steps_json ON memory_items
+    WHEN EXISTS (
+      SELECT 1 FROM projects WHERE name = NEW.project AND project_type = 'brain_context'
+    ) AND trim(COALESCE(NEW.next_steps_json, '[]')) NOT IN ('', '[]', 'null')
+    BEGIN
+      SELECT RAISE(ABORT, 'BRAIN_CONTEXT_NEXT_STEPS_FORBIDDEN');
+    END;
+
+    CREATE TRIGGER IF NOT EXISTS trg_tasks_brain_work_insert
+    BEFORE INSERT ON tasks
+    WHEN EXISTS (
+      SELECT 1 FROM projects WHERE name = NEW.project AND project_type = 'brain_context'
+    ) AND COALESCE(json_extract(NEW.context_json, '$."$vaultLifecycle".workIntent'), 'normal_work') <> 'memory_maintenance'
+    BEGIN
+      SELECT RAISE(ABORT, 'BRAIN_CONTEXT_EXECUTABLE_TASK_FORBIDDEN');
+    END;
+
+    CREATE TRIGGER IF NOT EXISTS trg_tasks_brain_work_update
+    BEFORE UPDATE OF project, context_json, status ON tasks
+    WHEN NEW.status IN ('pending', 'running')
+      AND EXISTS (
+        SELECT 1 FROM projects WHERE name = NEW.project AND project_type = 'brain_context'
+      )
+      AND COALESCE(json_extract(NEW.context_json, '$."$vaultLifecycle".workIntent'), 'normal_work') <> 'memory_maintenance'
+    BEGIN
+      SELECT RAISE(ABORT, 'BRAIN_CONTEXT_EXECUTABLE_TASK_FORBIDDEN');
+    END;
+
+    CREATE TRIGGER IF NOT EXISTS trg_projects_brain_zero_next_steps
+    BEFORE UPDATE OF project_type ON projects
+    WHEN NEW.project_type = 'brain_context'
+      AND EXISTS (
+        SELECT 1 FROM memory_items
+        WHERE project = NEW.name
+          AND trim(COALESCE(next_steps_json, '[]')) NOT IN ('', '[]', 'null')
+      )
+    BEGIN
+      SELECT RAISE(ABORT, 'BRAIN_CONTEXT_NEXT_STEPS_FORBIDDEN');
+    END;
+
+    CREATE TRIGGER IF NOT EXISTS trg_projects_brain_zero_executable_tasks
+    BEFORE UPDATE OF project_type ON projects
+    WHEN NEW.project_type = 'brain_context'
+      AND EXISTS (
+        SELECT 1 FROM tasks
+        WHERE project = NEW.name
+          AND status IN ('pending', 'running')
+          AND COALESCE(json_extract(context_json, '$."$vaultLifecycle".workIntent'), 'normal_work') <> 'memory_maintenance'
+      )
+    BEGIN
+      SELECT RAISE(ABORT, 'BRAIN_CONTEXT_HAS_EXECUTABLE_TASKS');
+    END;
+
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_tasks_active_duty_unique
+      ON tasks(source_memory_uid, task_type, json_extract(context_json, '$.dutyType'))
+      WHERE status IN ('pending', 'running')
+        AND source_memory_uid IS NOT NULL
+        AND created_by = 'system'
+        AND json_extract(context_json, '$.dutyType') IS NOT NULL;
 
     CREATE TRIGGER IF NOT EXISTS trg_loop_events_append_only_update
     BEFORE UPDATE ON loop_events

@@ -10,7 +10,9 @@ import {
 } from './services/open-loop-policy.service.js';
 import {
   createAuthorizationPolicy,
+  recordExternalApprovalDecision as recordExternalApprovalDecisionService,
   type CreateAuthorizationPolicyInput,
+  type RecordExternalApprovalDecisionInput,
 } from './services/authorization.service.js';
 import {
   buildProjectClassificationDryRun,
@@ -1037,6 +1039,13 @@ export class Vault {
   createAuthorizationPolicy(input: CreateAuthorizationPolicyInput) {
     this.ensureInitialized();
     return createAuthorizationPolicy(this.db, input);
+  }
+
+  recordExternalApprovalDecision(
+    input: RecordExternalApprovalDecisionInput,
+  ): void {
+    this.ensureInitialized();
+    recordExternalApprovalDecisionService(this.db, input);
   }
 
   buildProjectClassificationDryRun(

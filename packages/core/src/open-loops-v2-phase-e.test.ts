@@ -33,6 +33,11 @@ describe.sequential('Open-Loops v2 Phase E enforcement', () => {
       nextState: 'gate_active',
       reason: 'Attempt activation without authorization.',
       actor: intruder,
+      evidence: [{
+        kind: 'test',
+        reference: 'vitest://phase-e/activation',
+        description: 'Phase E activation fixture passed.',
+      }],
       expectedVersion: project.version,
       idempotencyKey: 'phase-e-activation-denied',
     })).toThrow(/not authorized/i);
@@ -43,6 +48,11 @@ describe.sequential('Open-Loops v2 Phase E enforcement', () => {
       nextState: 'gate_active',
       reason: 'Enable the verified canary gate.',
       actor,
+      evidence: [{
+        kind: 'test',
+        reference: 'vitest://phase-e/activation',
+        description: 'Phase E activation fixture passed.',
+      }],
       expectedVersion: project.version,
       idempotencyKey: 'phase-e-activation',
     });
@@ -57,6 +67,11 @@ describe.sequential('Open-Loops v2 Phase E enforcement', () => {
       nextState: 'gate_active',
       reason: 'Enable the verified canary gate.',
       actor,
+      evidence: [{
+        kind: 'test',
+        reference: 'vitest://phase-e/activation',
+        description: 'Phase E activation fixture passed.',
+      }],
       expectedVersion: project.version,
       idempotencyKey: 'phase-e-activation',
     })).toMatchObject({ eventUid: activated.eventUid, idempotentReplay: true });
@@ -98,6 +113,11 @@ describe.sequential('Open-Loops v2 Phase E enforcement', () => {
       nextState: 'gate_active',
       reason: 'Activate after migration checks.',
       actor,
+      evidence: [{
+        kind: 'test',
+        reference: 'vitest://phase-e/active-gate',
+        description: 'Phase E activation fixture passed.',
+      }],
       expectedVersion: project.version,
       idempotencyKey: 'active-gate-enable',
     });
@@ -140,7 +160,7 @@ describe.sequential('Open-Loops v2 Phase E enforcement', () => {
     }).status).toBe('pending');
   });
 
-  it('keeps Brain contexts zero-loop and allows only explicit memory maintenance tasks', () => {
+  it('keeps Brain contexts zero-loop and allows maintenance only through trusted duties', async () => {
     vault.saveMemory({
       title: 'Legacy commitment',
       project: 'Legacy brain fixture',
@@ -174,20 +194,31 @@ describe.sequential('Open-Loops v2 Phase E enforcement', () => {
       createdBy: 'test',
     })).toThrow(/BRAIN_LOOP_OPERATION_DENIED/);
 
-    const maintenance = vault.createTask({
-      title: 'Maintain reference context',
+    expect(() => vault.createTask({
+      title: 'Forge maintenance authority',
       taskType: 'organize',
-      prompt: 'Improve reference metadata only.',
+      prompt: 'Attempt to bypass the trusted duty writer.',
       project: brain.name,
       workIntent: 'memory_maintenance',
       actor,
-      createdBy: 'test',
-    });
+      createdBy: 'system',
+    })).toThrow(/reserved for trusted internal duty writers/i);
+
+    const reference = vault.saveMemory({
+      title: 'Brain reference',
+      project: brain.name,
+      memoryType: 'reference',
+      subject: 'Brain reference',
+      summary: 'Short reference that needs metadata enrichment.',
+    }).item;
+    await vault.schedulePostSaveDuties(reference.itemUid);
+    const maintenance = vault.findTasks({ project: brain.name, limit: 10 })
+      .find((task) => task.sourceMemoryUid === reference.itemUid);
     expect(maintenance).toMatchObject({ status: 'pending', workIntent: 'memory_maintenance' });
     expect(vault.countDedicatedOpenLoops({ projectUid: brain.projectUid! }).total).toBe(0);
   });
 
-  it('never turns task results or generated next-step suggestions into successor loops', () => {
+  it('never turns task results or generated next-step suggestions into successor loops', async () => {
     const project = createWorkProject('Completion fixture');
     const task = vault.createTask({
       title: 'Routine completion',
@@ -213,24 +244,17 @@ describe.sequential('Open-Loops v2 Phase E enforcement', () => {
       subject: 'Reference',
       summary: 'Short reference.',
     }).item;
-    const duty = vault.createTask({
-      title: 'Enrich reference',
-      taskType: 'enrich',
-      prompt: 'Improve metadata.',
-      project: project.name,
-      targetMemoryUid: source.itemUid,
-      context: { dutyType: 'post_save_enrich', skipResultMemory: true },
-      workIntent: 'memory_maintenance',
-      actor,
-      createdBy: 'system',
-    });
-    vault.completeTask(duty.taskUid, JSON.stringify({
+    await vault.schedulePostSaveDuties(source.itemUid);
+    const duty = vault.findTasks({ project: project.name, taskType: 'enrich', limit: 10 })
+      .find((task) => task.sourceMemoryUid === source.itemUid);
+    expect(duty).toBeDefined();
+    vault.completeTask(duty!.taskUid, JSON.stringify({
       summary: 'A substantially improved reference summary that remains reusable and concrete.',
       tags: ['reference'],
       keywords: ['metadata'],
       next_steps: ['Automatically create follow-up work.'],
     }));
-    const applied = vault.applyDutyTaskResult(duty.taskUid);
+    const applied = vault.applyDutyTaskResult(duty!.taskUid);
     expect(applied.appliedFields).not.toContain('nextSteps');
     expect(vault.getMemoryDetail(source.itemUid)?.nextSteps).toEqual([]);
     expect(vault.countDedicatedOpenLoops({ projectUid: project.projectUid! }).total).toBe(0);

@@ -159,7 +159,7 @@ export function createOpenLoop(
         eventUid,
         idempotentReplay: false,
       };
-      if (authorization.policy.mode !== 'quorum') {
+      if (authorization.policy.mode === 'owner' || authorization.policy.mode === 'role') {
         recordInlineAuthorizationGrant(transactionalDb, {
           action: 'create_open_loop',
           targetUid: loopUid,
@@ -517,7 +517,7 @@ export function recoverOpenLoop(
     if (update.changes !== 1) throw loopVersionConflict(loop, validated.expectedVersion);
     const updated = requireOpenLoop(transactionalDb, loop.loopUid);
     const result: OpenLoopMutationResult = { loop: updated, eventUid, idempotentReplay: false };
-    if (authorization.policy.mode !== 'quorum') {
+    if (authorization.policy.mode === 'owner' || authorization.policy.mode === 'role') {
       recordInlineAuthorizationGrant(transactionalDb, {
         action: 'recover_open_loop',
         targetUid: loop.loopUid,

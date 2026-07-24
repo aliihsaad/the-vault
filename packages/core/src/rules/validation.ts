@@ -229,10 +229,24 @@ export const TransitionProjectLifecycleInputSchema = z.object({
   project: NonEmptyTrimmedString.max(200),
   nextState: ProjectLifecycleStateSchema,
   reason: NonEmptyTrimmedString.max(2000),
+  evidence: z.array(z.object({
+    kind: EvidenceKindSchema,
+    reference: NonEmptyTrimmedString.max(4000),
+    description: NonEmptyTrimmedString.max(2000),
+    immutableHash: z.string().trim().min(1).max(500).optional(),
+  })).max(50).optional().default([]),
   actor: ActorContextSchema,
   expectedVersion: z.number().int().min(0),
   idempotencyKey: IdempotencyKeySchema,
   authorizationRequestUid: z.string().trim().min(1).max(200).optional(),
+}).superRefine((input, context) => {
+  if (input.nextState === 'gate_active' && input.evidence.length === 0) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['evidence'],
+      message: 'Gate activation requires structured evidence',
+    });
+  }
 });
 
 export const CreateOpenLoopInputSchema = z.object({
@@ -373,7 +387,7 @@ export const CreateTaskInputSchema = z.object({
   taskType: TaskTypeSchema,
   prompt: z.string().min(1).max(50000),
   priority: TaskPrioritySchema.optional().default('normal'),
-  project: z.string().max(100).optional(),
+  project: z.string().trim().min(1).max(100),
   context: z.record(z.unknown()).optional().default({}),
   maxRetries: z.number().int().min(0).max(10).optional().default(2),
   parentTaskUid: z.string().optional(),

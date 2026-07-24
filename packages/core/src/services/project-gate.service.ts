@@ -53,7 +53,7 @@ export function evaluateProjectGate(
         validated.actor,
         validated.authorizationRequestUid,
       ));
-      if (authorization.policy.mode !== 'quorum') {
+      if (authorization.policy.mode === 'owner' || authorization.policy.mode === 'role') {
         recordInlineAuthorizationGrant(transactionalDb, {
           action: 'urgent_safety_bypass',
           targetUid: validated.projectUid,

@@ -147,11 +147,14 @@ export function decideLoopSnooze(
     const transactionReplay = getLoopEventReplay<SnoozeDecisionResult>(transactionalDb, validated.idempotencyKey, 'snooze_decided', validated.loopUid, validated.requestUid);
     if (transactionReplay) return { ...transactionReplay, idempotentReplay: true };
     const request = requireSnoozeRequest(transactionalDb, validated.requestUid, validated.loopUid);
-    if (request.status !== 'pending') {
+    if (!['pending', 'approved'].includes(request.status)) {
       throw new OpenLoopServiceError('APPROVAL_REQUEST_MISMATCH', `Snooze request is already ${request.status}`);
     }
-    if (request.expiresAt && request.expiresAt <= now()) {
-      throw new OpenLoopServiceError('APPROVAL_REQUEST_EXPIRED', 'The requested snooze expiry has already passed');
+    if (request.expiresAt) {
+      const expiresAt = Date.parse(request.expiresAt);
+      if (!Number.isFinite(expiresAt) || expiresAt <= Date.now()) {
+        throw new OpenLoopServiceError('APPROVAL_REQUEST_EXPIRED', 'The requested snooze expiry has already passed');
+      }
     }
     const loop = requireOpenLoop(transactionalDb, validated.loopUid);
     assertLoopVersion(loop, validated.expectedVersion);
@@ -160,41 +163,77 @@ export function decideLoopSnooze(
     if (!policy || !policy.enabled || policy.version !== request.policyVersion) {
       throw new OpenLoopServiceError('AUTHORIZATION_POLICY_NOT_FOUND', 'The request policy version is unavailable');
     }
-    if (!isActorEligible(policy, validated.approver, project.ownerActorUid)) {
-      throw new OpenLoopServiceError('AUTHORIZATION_DENIED', 'Approver is not eligible under the request policy');
+
+    const externalPolicy = policy.mode === 'external';
+    if (request.status === 'approved' && !externalPolicy) {
+      throw new OpenLoopServiceError('APPROVAL_REQUEST_MISMATCH', 'The snooze request is already approved');
     }
-    const existingActorDecision = transactionalDb.select().from(approvalRecords).where(and(
-      eq(approvalRecords.requestUid, request.requestUid),
-      eq(approvalRecords.actorUid, validated.approver.actorUid),
-    )).get();
-    if (existingActorDecision) {
-      throw new OpenLoopServiceError('APPROVAL_ALREADY_RECORDED', 'This actor already decided the snooze request');
+    let externalApproval: typeof approvalRecords.$inferSelect | undefined;
+    if (externalPolicy) {
+      if (validated.decision !== 'approved' || !policy.externalProvider) {
+        throw new OpenLoopServiceError(
+          'AUTHORIZATION_DENIED',
+          'External snooze decisions must be ingested through the trusted provider channel',
+        );
+      }
+      externalApproval = transactionalDb.select().from(approvalRecords).where(and(
+        eq(approvalRecords.requestUid, request.requestUid),
+        eq(approvalRecords.action, 'decide_loop_snooze'),
+        eq(approvalRecords.targetUid, loop.loopUid),
+        eq(approvalRecords.policyUid, policy.policyUid),
+        eq(approvalRecords.policyVersion, policy.version),
+        eq(approvalRecords.actorKind, 'external'),
+        eq(approvalRecords.decision, 'approved'),
+        eq(approvalRecords.externalProvider, policy.externalProvider),
+      )).get();
+      if (!externalApproval) {
+        throw new OpenLoopServiceError(
+          'AUTHORIZATION_DENIED',
+          'No trusted provider-bound external decision exists for this snooze request',
+        );
+      }
+    } else {
+      if (!isActorEligible(policy, validated.approver, project.ownerActorUid)) {
+        throw new OpenLoopServiceError('AUTHORIZATION_DENIED', 'Approver is not eligible under the request policy');
+      }
+      const existingActorDecision = transactionalDb.select().from(approvalRecords).where(and(
+        eq(approvalRecords.requestUid, request.requestUid),
+        eq(approvalRecords.actorUid, validated.approver.actorUid),
+      )).get();
+      if (existingActorDecision) {
+        throw new OpenLoopServiceError('APPROVAL_ALREADY_RECORDED', 'This actor already decided the snooze request');
+      }
     }
 
     const eventUid = generateLoopEventUid();
-    const approvalUid = generateApprovalUid();
     const timestamp = now();
-    transactionalDb.insert(approvalRecords).values({
-      approvalUid,
-      requestUid: request.requestUid,
-      action: 'decide_loop_snooze',
-      targetUid: loop.loopUid,
-      policyUid: policy.policyUid,
-      policyVersion: policy.version,
-      actorUid: validated.approver.actorUid,
-      actorKind: validated.approver.actorKind,
-      actorRolesJson: JSON.stringify(validated.approver.roles),
-      decision: validated.decision,
-      scopeJson: JSON.stringify(request.scope),
-      reason: validated.reason,
-      externalDecisionId: validated.approver.externalDecisionId || null,
-      eventUid,
-      idempotencyKey: validated.idempotencyKey,
-      createdAt: timestamp,
-    }).run();
+    const approvalUid = externalApproval?.approvalUid || generateApprovalUid();
+    if (!externalApproval) {
+      transactionalDb.insert(approvalRecords).values({
+        approvalUid,
+        requestUid: request.requestUid,
+        action: 'decide_loop_snooze',
+        targetUid: loop.loopUid,
+        policyUid: policy.policyUid,
+        policyVersion: policy.version,
+        actorUid: validated.approver.actorUid,
+        actorKind: validated.approver.actorKind,
+        actorRolesJson: JSON.stringify(validated.approver.roles),
+        decision: validated.decision,
+        scopeJson: JSON.stringify(request.scope),
+        reason: validated.reason,
+        externalDecisionId: validated.approver.externalDecisionId || null,
+        externalProvider: validated.approver.actorKind === 'external'
+          ? validated.approver.externalProvider || null
+          : null,
+        eventUid,
+        idempotencyKey: validated.idempotencyKey,
+        createdAt: timestamp,
+      }).run();
+    }
 
     let policySatisfied = false;
-    let requestStatus: ApprovalRequest['status'] = 'pending';
+    let requestStatus: ApprovalRequest['status'] = request.status;
     if (validated.decision === 'denied') {
       requestStatus = 'denied';
     } else {
@@ -204,10 +243,20 @@ export function decideLoopSnooze(
         'decide_loop_snooze',
         validated.approver,
         request.requestUid,
+        {
+          targetUid: loop.loopUid,
+          scope: request.scope,
+          requireApprovedRequest: false,
+        },
       ).authorized;
+      if (externalPolicy && !policySatisfied) {
+        throw new OpenLoopServiceError(
+          'AUTHORIZATION_DENIED',
+          'The trusted external decision failed request binding evaluation',
+        );
+      }
       if (policySatisfied) requestStatus = 'approved';
     }
-
     const nextValues: Partial<typeof openLoops.$inferInsert> = {
       version: loop.version + 1,
       updatedAt: timestamp,
@@ -242,8 +291,8 @@ export function decideLoopSnooze(
       loopUid: loop.loopUid,
       idempotencyKey: validated.idempotencyKey,
       eventType: 'snooze_decided',
-      actorUid: validated.approver.actorUid,
-      actorKind: validated.approver.actorKind,
+      actorUid: externalApproval?.actorUid || validated.approver.actorUid,
+      actorKind: (externalApproval?.actorKind || validated.approver.actorKind) as typeof validated.approver.actorKind,
       authorizationPolicyUid: policy.policyUid,
       authorizationPolicyVersion: policy.version,
       previousState: loop.state,
@@ -253,7 +302,7 @@ export function decideLoopSnooze(
         approvalUid,
         decision: validated.decision,
         policySatisfied,
-        reason: validated.reason,
+        reason: externalApproval?.reason || validated.reason,
       }),
       evidenceReferencesJson: '[]',
       resultJson: JSON.stringify(result),

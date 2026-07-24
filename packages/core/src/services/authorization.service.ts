@@ -5,6 +5,7 @@
 import { and, eq } from 'drizzle-orm';
 import {
   approvalRecords,
+  approvalRequests,
   authorizationPolicies,
 } from '../database/schema.js';
 import { now } from '../utils/datetime.js';
@@ -43,6 +44,13 @@ export interface CreateAuthorizationPolicyInput {
   actions: AuthorizationAction[];
 }
 
+export interface AuthorizationRequestBinding {
+  action: AuthorizationAction;
+  targetUid: string;
+  scope?: Record<string, unknown>;
+  requireApprovedRequest?: boolean;
+}
+
 export function createAuthorizationPolicy(
   db: DB,
   input: CreateAuthorizationPolicyInput,
@@ -70,12 +78,185 @@ export function createAuthorizationPolicy(
   return getAuthorizationPolicy(db, input.policyUid)!;
 }
 
+export interface RecordExternalApprovalDecisionInput {
+  approvalUid: string;
+  requestUid: string;
+  action: AuthorizationAction;
+  targetUid: string;
+  policyUid: string;
+  externalProvider: string;
+  externalDecisionId: string;
+  scope?: Record<string, unknown>;
+  reason: string;
+  idempotencyKey: string;
+}
+
+/**
+ * Trusted-only ingestion of an external authorization decision.
+ *
+ * This MUST be called from a trusted internal/broker route, never from an
+ * ordinary public MCP tool: ordinary callers cannot select provider authority.
+ * It asserts the decision's provider matches the policy's configured
+ * externalProvider, verifies the decision is bound to an existing pending or
+ * approved, unexpired request for the same action/target/policy/version/scope,
+ * and persists the provider identity so the evaluator can re-verify the
+ * binding. Caller booleans such as `externalApproved` are never trusted — only
+ * this stored record counts.
+ */
+export function recordExternalApprovalDecision(
+  db: DB,
+  input: RecordExternalApprovalDecisionInput,
+): void {
+  const approvalUid = input.approvalUid.trim();
+  const requestUid = input.requestUid.trim();
+  const provider = input.externalProvider.trim();
+  const decisionId = input.externalDecisionId.trim();
+  const idempotencyKey = input.idempotencyKey.trim();
+  const reason = input.reason.trim();
+  if (!approvalUid || !requestUid || !provider || !decisionId || !idempotencyKey || !reason) {
+    throw new OpenLoopServiceError(
+      'AUTHORIZATION_DENIED',
+      'External decisions require non-empty approval, request, provider, decision, reason, and idempotency identifiers',
+    );
+  }
+
+  db.transaction((tx) => {
+    const transactionalDb = tx as DB;
+    const policy = getAuthorizationPolicy(transactionalDb, input.policyUid);
+    if (!policy || !policy.enabled) {
+      throw new OpenLoopServiceError(
+        'AUTHORIZATION_POLICY_NOT_FOUND',
+        `Authorization policy ${input.policyUid} was not found or is disabled`,
+      );
+    }
+    if (policy.mode !== 'external') {
+      throw new OpenLoopServiceError(
+        'AUTHORIZATION_ACTION_NOT_ALLOWED',
+        `Policy ${policy.policyUid} is not an external authorization policy`,
+      );
+    }
+    if (!policy.actions.includes(input.action)) {
+      throw new OpenLoopServiceError(
+        'AUTHORIZATION_ACTION_NOT_ALLOWED',
+        `Policy ${policy.policyUid} does not allow ${input.action}`,
+      );
+    }
+    if (!policy.externalProvider || provider !== policy.externalProvider) {
+      throw new OpenLoopServiceError(
+        'AUTHORIZATION_DENIED',
+        'External decision provider does not match the configured policy provider',
+      );
+    }
+
+    const request = transactionalDb.select()
+      .from(approvalRequests)
+      .where(eq(approvalRequests.requestUid, requestUid))
+      .get();
+    if (!request
+      || request.action !== input.action
+      || request.targetUid !== input.targetUid
+      || request.policyUid !== policy.policyUid
+      || request.policyVersion !== policy.version
+      || !['pending', 'approved'].includes(request.status)
+      || isExpiredApprovalRequest(request.expiresAt)) {
+      throw new OpenLoopServiceError(
+        'AUTHORIZATION_DENIED',
+        'External decision does not match a pending or approved authorization request',
+      );
+    }
+
+    const requestScope = parseObject(request.scopeJson);
+    const decisionScope = input.scope ?? requestScope;
+    if (canonicalJson(decisionScope) !== canonicalJson(requestScope)) {
+      throw new OpenLoopServiceError(
+        'AUTHORIZATION_DENIED',
+        'External decision scope does not match the authorization request',
+      );
+    }
+
+    const actorUid = `external:${provider}`;
+    const matchesDecision = (row: typeof approvalRecords.$inferSelect): boolean => (
+      row.approvalUid === approvalUid
+      && row.requestUid === requestUid
+      && row.action === input.action
+      && row.targetUid === input.targetUid
+      && row.policyUid === policy.policyUid
+      && row.policyVersion === policy.version
+      && row.actorUid === actorUid
+      && row.actorKind === 'external'
+      && row.decision === 'approved'
+      && row.externalDecisionId === decisionId
+      && row.externalProvider === provider
+      && canonicalJson(parseObject(row.scopeJson)) === canonicalJson(requestScope)
+    );
+    const approveRequest = (): void => {
+      transactionalDb.update(approvalRequests).set({
+        status: 'approved',
+        decidedAt: now(),
+      }).where(eq(approvalRequests.requestUid, requestUid)).run();
+    };
+
+    const existingIdempotency = transactionalDb.select().from(approvalRecords)
+      .where(eq(approvalRecords.idempotencyKey, idempotencyKey)).get();
+    if (existingIdempotency) {
+      if (!matchesDecision(existingIdempotency)) {
+        throw new OpenLoopServiceError(
+          'IDEMPOTENCY_CONFLICT',
+          'External approval idempotency key was already used for another decision',
+        );
+      }
+      approveRequest();
+      return;
+    }
+
+    const existingProviderDecision = transactionalDb.select().from(approvalRecords)
+      .where(and(
+        eq(approvalRecords.requestUid, requestUid),
+        eq(approvalRecords.actorUid, actorUid),
+      )).get();
+    if (existingProviderDecision) {
+      if (!matchesDecision(existingProviderDecision)) {
+        throw new OpenLoopServiceError(
+          'APPROVAL_ALREADY_RECORDED',
+          'The external provider already recorded a different decision for this request',
+        );
+      }
+      approveRequest();
+      return;
+    }
+
+    const timestamp = now();
+    transactionalDb.insert(approvalRecords).values({
+      approvalUid,
+      requestUid,
+      action: input.action,
+      targetUid: input.targetUid,
+      policyUid: policy.policyUid,
+      policyVersion: policy.version,
+      actorUid,
+      actorKind: 'external',
+      actorRolesJson: '[]',
+      decision: 'approved',
+      scopeJson: canonicalJson(requestScope),
+      reason,
+      externalDecisionId: decisionId,
+      externalProvider: provider,
+      idempotencyKey,
+      createdAt: timestamp,
+    }).run();
+    transactionalDb.update(approvalRequests).set({
+      status: 'approved',
+      decidedAt: timestamp,
+    }).where(eq(approvalRequests.requestUid, requestUid)).run();
+  });
+}
 export function authorizeProjectAction(
   db: DB,
   project: Project,
   action: AuthorizationAction,
   actor: ActorContext,
   approvalRequestUid?: string,
+  binding?: Omit<AuthorizationRequestBinding, 'action'>,
 ): AuthorizationEvaluation {
   const policyUid = project.authorizationPolicyId;
   if (!policyUid) {
@@ -104,6 +285,12 @@ export function authorizeProjectAction(
     actor,
     project.ownerActorUid,
     approvalRequestUid,
+    {
+      action,
+      targetUid: binding?.targetUid || project.projectUid!,
+      scope: binding?.scope,
+      requireApprovedRequest: binding?.requireApprovedRequest,
+    },
   );
 }
 
@@ -113,17 +300,19 @@ export function evaluateAuthorizationPolicy(
   actor: ActorContext,
   projectOwnerActorUid?: string | null,
   approvalRequestUid?: string,
+  binding?: AuthorizationRequestBinding,
 ): AuthorizationEvaluation {
-  if (policy.mode === 'quorum') {
-    const approvalsRecorded = approvalRequestUid
-      ? countEligibleApprovals(db, policy, approvalRequestUid)
+  if (policy.mode === 'quorum' || policy.mode === 'external') {
+    const approvalsRecorded = approvalRequestUid && binding
+      ? countEligibleApprovals(db, policy, approvalRequestUid, binding)
       : 0;
-    const authorized = approvalsRecorded >= policy.quorum;
+    const approvalsRequired = policy.mode === 'quorum' ? policy.quorum : 1;
+    const authorized = approvalsRecorded >= approvalsRequired;
     return {
       authorized,
       reasonCode: authorized ? 'AUTHORIZED' : 'QUORUM_NOT_SATISFIED',
       policy,
-      approvalsRequired: policy.quorum,
+      approvalsRequired,
       approvalsRecorded,
     };
   }
@@ -169,18 +358,35 @@ export function isActorEligible(
   if (policy.mode === 'role' || policy.mode === 'quorum') {
     return actor.roles.some((role) => policy.allowedRoles.includes(role));
   }
-  return actor.actorKind === 'external'
-    && Boolean(policy.externalProvider)
-    && actor.externalProvider === policy.externalProvider
-    && actor.externalApproved === true
-    && Boolean(actor.externalDecisionId);
+  // External authority is accepted only through a persisted, bound approval request.
+  return false;
 }
 
 function countEligibleApprovals(
   db: DB,
   policy: AuthorizationPolicy,
   requestUid: string,
+  binding: AuthorizationRequestBinding,
 ): number {
+  const request = db.select()
+    .from(approvalRequests)
+    .where(eq(approvalRequests.requestUid, requestUid))
+    .get();
+  const allowedStatuses = binding.requireApprovedRequest === false
+    ? new Set(['pending', 'approved'])
+    : new Set(['approved']);
+  if (!request
+    || request.action !== binding.action
+    || request.targetUid !== binding.targetUid
+    || request.policyUid !== policy.policyUid
+    || request.policyVersion !== policy.version
+    || !allowedStatuses.has(request.status)
+    || isExpiredApprovalRequest(request.expiresAt)
+    || (binding.scope !== undefined
+      && canonicalJson(parseObject(request.scopeJson)) !== canonicalJson(binding.scope))) {
+    return 0;
+  }
+
   const rows = db.select()
     .from(approvalRecords)
     .where(and(
@@ -192,6 +398,23 @@ function countEligibleApprovals(
     .all();
   const actors = new Set<string>();
   for (const row of rows) {
+    if (row.action !== request.action
+      || row.targetUid !== request.targetUid
+      || canonicalJson(parseObject(row.scopeJson)) !== canonicalJson(parseObject(request.scopeJson))) {
+      continue;
+    }
+    if (policy.mode === 'external') {
+      // A persisted external decision authorizes only when it carries a decision
+      // id AND its provider matches the policy's configured externalProvider.
+      // Caller-supplied booleans are never trusted; only the stored binding is.
+      if (row.actorKind === 'external'
+        && Boolean(row.externalDecisionId)
+        && Boolean(row.externalProvider)
+        && row.externalProvider === policy.externalProvider) {
+        actors.add(row.actorUid);
+      }
+      continue;
+    }
     const roles = parseStringArray(row.actorRolesJson);
     if (roles.some((role) => policy.allowedRoles.includes(role))) {
       actors.add(row.actorUid);
@@ -221,7 +444,38 @@ function validatePolicyConfiguration(
   }
 }
 
+function isExpiredApprovalRequest(expiresAt: string | null): boolean {
+  if (!expiresAt) return false;
+  const timestamp = Date.parse(expiresAt);
+  return !Number.isFinite(timestamp) || timestamp <= Date.now();
+}
 function parseStringArray(value: string): string[] {
   const parsed = JSON.parse(value) as unknown;
   return Array.isArray(parsed) ? parsed.filter((entry): entry is string => typeof entry === 'string') : [];
+}
+
+function parseObject(value: string): Record<string, unknown> {
+  const parsed = JSON.parse(value) as unknown;
+  return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+    ? parsed as Record<string, unknown>
+    : {};
+}
+
+function canonicalJson(value: unknown): string {
+  return JSON.stringify(sortForCanonicalJson(value)) ?? 'null';
+}
+
+function sortForCanonicalJson(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map((entry) => entry === undefined ? null : sortForCanonicalJson(entry));
+  }
+  if (value && typeof value === 'object') {
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>)
+        .filter(([, entry]) => entry !== undefined)
+        .sort(([left], [right]) => left.localeCompare(right))
+        .map(([key, entry]) => [key, sortForCanonicalJson(entry)]),
+    );
+  }
+  return value;
 }
