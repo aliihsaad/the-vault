@@ -5,6 +5,7 @@ import {
   AlertTriangle,
   Archive,
   BarChart3,
+  BrainCircuit,
   Bug,
   CheckCircle2,
   Clock3,
@@ -59,6 +60,7 @@ import {
   getRecallPackingSettings,
   OPERATIONAL_ANALYTICS_DAYS,
   OPERATIONAL_ANALYTICS_LOG_LIMIT,
+  partitionProjectCockpitRows,
   RECALL_ANALYTICS_LOG_LIMIT,
   type ProjectCockpitRow,
 } from '../cockpit-metrics.js';
@@ -169,16 +171,17 @@ export function ProjectsOperationsView({
     [vaultStatus?.projects, momentum, workspaces, latest, logs, openLoops],
   );
   const visibleRows = useMemo(() => filterProjectCockpitRows(rows, projectSearch), [rows, projectSearch]);
+  const groupedRows = useMemo(() => partitionProjectCockpitRows(rows), [rows]);
+  const visibleGroups = useMemo(() => partitionProjectCockpitRows(visibleRows), [visibleRows]);
   const activeWorkspaces = rows.filter((row) => row.workspacePath).length;
-  const movingProjects = rows.filter((row) => row.direction === 'up').length;
 
   return (
     <div className="ops-layout">
       <OpsIntro
         label="Projects"
         title="Project radar"
-        text="Project health is derived from saved project metadata, recent memories, workspace registry state, activity logs, and open-loop pressure."
-        chips={[`${visibleRows.length}/${rows.length} visible`, `${activeWorkspaces} workspaces`, `${movingProjects} gaining momentum`]}
+        text="Work projects and brain contexts are intentionally separated so delivery activity never looks like durable agent memory."
+        chips={[`${visibleRows.length}/${rows.length} visible`, `${groupedRows.workProjects.length} work projects`, `${groupedRows.brains.length} brains`, `${activeWorkspaces} linked workspaces`]}
         onRefresh={() => void refreshAll()}
         loading={loading}
       />
@@ -188,7 +191,7 @@ export function ProjectsOperationsView({
           <PanelHeader
             icon={<FolderOpen size={18} />}
             title="Project directory"
-            subtitle="Dense project index with memory counts, descriptions, creation dates, and delete controls."
+            subtitle="Operational workspaces and durable memory contexts, grouped by their declared project type."
           />
           <label className="search-field ops-project-search">
             <Search size={16} />
@@ -206,25 +209,31 @@ export function ProjectsOperationsView({
           ) : visibleRows.length === 0 ? (
             <div className="empty-state">No projects match the current search.</div>
           ) : (
-            <div className="ops-project-table" role="table" aria-label="Projects">
-              <div className="ops-project-table-head" role="row">
-                <span role="columnheader">Name</span>
-                <span role="columnheader">Memories</span>
-                <span role="columnheader">Description</span>
-                <span role="columnheader">Created</span>
-                <span role="columnheader" aria-label="Actions" />
-              </div>
-              {visibleRows.map((row) => (
-                <ProjectOpsRow
-                  key={row.name}
-                  row={row}
-                  deleting={deletingProjectSlug === row.slug}
-                  onDelete={() => {
-                    setDeleteError(null);
-                    setDeleteCandidate(row);
-                  }}
-                />
-              ))}
+            <div className="ops-project-groups">
+              <ProjectDirectoryGroup
+                kind="work"
+                icon={<FolderOpen size={17} />}
+                title="Work projects"
+                description="Execution spaces for repositories, tasks, loops, and delivery."
+                rows={visibleGroups.workProjects}
+                deletingProjectSlug={deletingProjectSlug}
+                onDelete={(row) => {
+                  setDeleteError(null);
+                  setDeleteCandidate(row);
+                }}
+              />
+              <ProjectDirectoryGroup
+                kind="brain"
+                icon={<BrainCircuit size={17} />}
+                title="Brains"
+                description="Durable agent memory contexts; ordinary project work stays separate."
+                rows={visibleGroups.brains}
+                deletingProjectSlug={deletingProjectSlug}
+                onDelete={(row) => {
+                  setDeleteError(null);
+                  setDeleteCandidate(row);
+                }}
+              />
             </div>
           )}
         </div>
@@ -1469,6 +1478,60 @@ function PanelHeader({ icon, title, subtitle }: { icon: ReactNode; title: string
 
 const DELETE_PROJECT_TARGET_SLUG = 'the-vault';
 
+function ProjectDirectoryGroup({
+  kind,
+  icon,
+  title,
+  description,
+  rows,
+  deletingProjectSlug,
+  onDelete,
+}: {
+  kind: 'work' | 'brain';
+  icon: ReactNode;
+  title: string;
+  description: string;
+  rows: ProjectCockpitRow[];
+  deletingProjectSlug: string | null;
+  onDelete: (row: ProjectCockpitRow) => void;
+}) {
+  return (
+    <section className={`ops-project-group ops-project-group-${kind}`} aria-labelledby={`ops-project-group-${kind}`}>
+      <header className="ops-project-group-header">
+        <div className="ops-project-group-identity">
+          <span className="ops-project-group-icon">{icon}</span>
+          <div>
+            <h3 id={`ops-project-group-${kind}`}>{title}</h3>
+            <p>{description}</p>
+          </div>
+        </div>
+        <span className="ops-project-group-count">{rows.length}</span>
+      </header>
+      {rows.length === 0 ? (
+        <div className="ops-project-group-empty">No {title.toLowerCase()} match this view.</div>
+      ) : (
+        <div className="ops-project-table" role="table" aria-label={title}>
+          <div className="ops-project-table-head" role="row">
+            <span role="columnheader">Name</span>
+            <span role="columnheader">Memories</span>
+            <span role="columnheader">Description</span>
+            <span role="columnheader">Created</span>
+            <span role="columnheader" aria-label="Actions" />
+          </div>
+          {rows.map((row) => (
+            <ProjectOpsRow
+              key={row.name}
+              row={row}
+              deleting={deletingProjectSlug === row.slug}
+              onDelete={() => onDelete(row)}
+            />
+          ))}
+        </div>
+      )}
+    </section>
+  );
+}
+
 function ProjectOpsRow({
   row,
   deleting,
@@ -1479,12 +1542,18 @@ function ProjectOpsRow({
   onDelete: () => void;
 }) {
   const isFallbackTarget = row.slug === DELETE_PROJECT_TARGET_SLUG;
+  const isBrain = row.projectType === 'brain_context';
 
   return (
-    <div className="ops-project-table-row" role="row">
+    <div className={`ops-project-table-row ops-project-table-row-${isBrain ? 'brain' : 'work'}`} role="row">
       <div className="ops-project-name-cell" role="cell">
         <strong title={row.name}>{row.name}</strong>
-        <span>{row.slug}</span>
+        <div className="ops-project-name-meta">
+          <span>{row.slug}</span>
+          <span className={`ops-project-kind-badge ops-project-kind-badge-${isBrain ? 'brain' : 'work'}`}>
+            {isBrain ? 'Brain' : 'Work'}
+          </span>
+        </div>
       </div>
       <span className="ops-project-memory-cell" role="cell">{formatCompactNumber(row.memoryCount)}</span>
       <span className="ops-project-description-cell" role="cell" title={row.description}>{row.description}</span>

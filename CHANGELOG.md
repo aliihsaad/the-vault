@@ -1,5 +1,15 @@
 # Changelog
 
+## v0.6.4 - 2026-07-24
+
+Project-identity and Reviewer quality release. Makes project type explicit at the agent boundary, separates Work Projects from Brains in the desktop directory, and prevents low-quality project-review proposals.
+
+- Breaking: agent memory writes require an existing project explicitly classified as `work_project` or `brain_context`; missing and legacy-unclassified projects are rejected until the agent creates or classifies them with an explicit type.
+- UI: group every non-Brain project under Work Projects and render Brains in a visually distinct durable-memory section with type badges and counts.
+- Reviewer: stop truncating generated project descriptions; detect provider token-limit finishes, use representative project-wide evidence, retry once, and reject incomplete, prompt-echoed, overlong, or evidence-ungrounded descriptions.
+- Reviewer: replace slug-only merge suggestions with conservative multi-signal duplicate detection using repository/root identity, typo-safe names, descriptions, weighted memory topics, and related-file evidence.
+- Safety: never propose a Brain/Work merge, preserve small-project typo detection, attach the actual evidence items to proposals, and test generic-name false positives.
+
 ## v0.6.3 - 2026-07-23
 
 Corrective security release for v0.6.2. Closes five governance bypass classes and fixes a universal database-upgrade failure.

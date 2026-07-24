@@ -992,10 +992,240 @@ describe('task delegation system', () => {
       expect(prompt).toContain('Adopt deterministic conflict replay');
       expect(prompt).toContain('Sync hardening plan');
       expect(prompt).not.toContain('Delegated organize output');
-      expect(prompt).toContain('Common tags: sync');
+      expect(prompt).toContain('Repeated project terms: sync');
     } finally {
       vault.setEnrichmentClient(null);
     }
+  });
+
+  it('retries cropped description drafts and stores only complete validated text', async () => {
+    const prompts: string[] = [];
+    let attempts = 0;
+    vault.setEnrichmentClient({
+      isAvailable: () => true,
+      complete: async (params) => {
+        if (!params.systemPrompt.includes('validated project metadata')) {
+          return {
+            text: '{}',
+            model: 'mock-model',
+            usage: { promptTokens: 0, completionTokens: 0 },
+          };
+        }
+        prompts.push(params.userPrompt);
+        attempts += 1;
+        if (attempts === 1) {
+          return {
+            text: 'This project is a personal',
+            model: 'mock-model',
+            finishReason: 'length',
+            usage: { promptTokens: 0, completionTokens: 0 },
+          };
+        }
+        return {
+          text: '{"description":"DescriptionRetry is a local-first portfolio platform for publishing animated case studies and maintaining its project catalog."}',
+          model: 'mock-model',
+          finishReason: 'stop',
+          usage: { promptTokens: 0, completionTokens: 0 },
+        };
+      },
+    });
+
+    try {
+      const identityMarker = 'WHOLE_PROJECT_IDENTITY_MARKER';
+      const longSummary = `${'Stable portfolio architecture and publishing workflow. '.repeat(5)}${identityMarker} The platform maintains case studies, navigation, and project metadata.`;
+      vault.saveMemory({
+        title: 'Portfolio platform identity',
+        project: 'DescriptionRetry',
+        memoryType: 'decision',
+        subject: 'stable portfolio purpose',
+        summary: longSummary,
+        tags: ['portfolio', 'publishing'],
+        sourceApp: 'codex',
+      });
+      vault.saveMemory({
+        title: 'Case study catalog',
+        project: 'DescriptionRetry',
+        memoryType: 'reference',
+        subject: 'case study publishing catalog',
+        summary: 'The platform publishes animated case studies from a maintained project catalog.',
+        tags: ['portfolio', 'publishing'],
+        sourceApp: 'codex',
+      });
+      vault.saveMemory({
+        title: 'Local content workflow',
+        project: 'DescriptionRetry',
+        memoryType: 'plan',
+        subject: 'local-first content workflow',
+        summary: 'Project content is maintained locally before it is published to the portfolio.',
+        tags: ['portfolio', 'content'],
+        sourceApp: 'codex',
+      });
+
+      const review = await vault.executeProjectReview('DescriptionRetry', { force: true });
+      const proposal = review.proposalsCreated.find((candidate) => candidate.proposalType === 'description');
+
+      expect(attempts).toBe(2);
+      expect(proposal?.payload).toEqual({
+        type: 'description',
+        description: 'DescriptionRetry is a local-first portfolio platform for publishing animated case studies and maintaining its project catalog.',
+      });
+      expect(proposal?.evidenceItemUids.length).toBeGreaterThanOrEqual(2);
+      expect(proposal?.confidence).toBe(70);
+      expect(prompts[0]).toContain(identityMarker);
+      expect(prompts[1]).toContain('provider hit its token limit');
+    } finally {
+      vault.setEnrichmentClient(null);
+    }
+  });
+
+  it('rejects prompt echoes and incomplete description fragments instead of filing proposals', async () => {
+    let attempts = 0;
+    vault.setEnrichmentClient({
+      isAvailable: () => true,
+      complete: async (params) => {
+        if (!params.systemPrompt.includes('validated project metadata')) {
+          return {
+            text: '{}',
+            model: 'mock-model',
+            usage: { promptTokens: 0, completionTokens: 0 },
+          };
+        }
+        attempts += 1;
+        return attempts === 1
+          ? {
+              text: 'We need to output one or two sentences max 360 characters based on the key items.',
+              model: 'mock-model',
+              usage: { promptTokens: 0, completionTokens: 0 },
+            }
+          : {
+              text: 'DescriptionInvalid is a dashboard for',
+              model: 'mock-model',
+              usage: { promptTokens: 0, completionTokens: 0 },
+            };
+      },
+    });
+
+    try {
+      for (let index = 0; index < 3; index += 1) {
+        vault.saveMemory({
+          title: `Dashboard architecture ${index}`,
+          project: 'DescriptionInvalid',
+          memoryType: index === 0 ? 'decision' : 'summary',
+          subject: `dashboard architecture concern ${index}`,
+          summary: `Stable dashboard evidence number ${index} for the invalid description test.`,
+          tags: ['dashboard', 'architecture'],
+          sourceApp: 'codex',
+        });
+      }
+
+      const review = await vault.executeProjectReview('DescriptionInvalid', { force: true });
+
+      expect(attempts).toBe(2);
+      expect(review.proposalsCreated.filter((proposal) => proposal.proposalType === 'description')).toHaveLength(0);
+    } finally {
+      vault.setEnrichmentClient(null);
+    }
+  });
+
+  it('rejects fluent descriptions that are not grounded in the project evidence', async () => {
+    let attempts = 0;
+    vault.setEnrichmentClient({
+      isAvailable: () => true,
+      complete: async (params) => {
+        if (!params.systemPrompt.includes('validated project metadata')) {
+          return {
+            text: '{}',
+            model: 'mock-model',
+            usage: { promptTokens: 0, completionTokens: 0 },
+          };
+        }
+        attempts += 1;
+        return {
+          text: 'GroundingCheck is a blockchain trading platform for cryptocurrency portfolio analytics.',
+          model: 'mock-model',
+          usage: { promptTokens: 0, completionTokens: 0 },
+        };
+      },
+    });
+
+    try {
+      for (let index = 0; index < 3; index += 1) {
+        vault.saveMemory({
+          title: `Restaurant menu workflow ${index}`,
+          project: 'GroundingCheck',
+          memoryType: index === 0 ? 'decision' : 'summary',
+          subject: `restaurant ordering concern ${index}`,
+          summary: `Voice waiter routes table orders and menu selections to the kitchen queue, evidence ${index}.`,
+          tags: ['restaurant', 'menu', 'ordering'],
+          sourceApp: 'codex',
+        });
+      }
+
+      const review = await vault.executeProjectReview('GroundingCheck', { force: true });
+
+      expect(attempts).toBe(2);
+      expect(review.proposalsCreated.filter((proposal) => proposal.proposalType === 'description')).toHaveLength(0);
+    } finally {
+      vault.setEnrichmentClient(null);
+    }
+  });
+
+  it('detects established duplicate projects with unrelated names from project-wide evidence', async () => {
+    vault.setEnrichmentClient(null);
+    vault.createProject({
+      name: 'Talabie AI Waiter',
+      projectType: 'work_project',
+      description: 'Voice-driven restaurant ordering and menu management with Supabase.',
+      canonicalRoot: join(vaultRoot, 'talabie-waiter'),
+    });
+    vault.createProject({
+      name: 'Dining Concierge Console',
+      projectType: 'work_project',
+      description: 'Restaurant voice assistant for menu selection, table orders, and kitchen tickets.',
+      canonicalRoot: join(vaultRoot, 'dining-console'),
+    });
+
+    const sharedFiles = ['src/order-router.ts', 'src/menu-service.ts'];
+    const saveRestaurantMemory = (
+      project: string,
+      index: number,
+      title: string,
+      summary: string,
+    ) => vault.saveMemory({
+      title,
+      project,
+      memoryType: index === 0 ? 'decision' : 'summary',
+      subject: title,
+      summary,
+      tags: ['restaurant', 'menu', 'ordering', 'supabase'],
+      keywords: ['restaurant', 'menu', 'ordering', 'waiter'],
+      relatedFiles: sharedFiles,
+      sourceApp: 'codex',
+    });
+
+    saveRestaurantMemory('Talabie AI Waiter', 0, 'Table order routing', 'Routes restaurant table orders through the AI waiter.');
+    saveRestaurantMemory('Talabie AI Waiter', 1, 'Menu availability sync', 'Synchronizes menu availability and prices with Supabase.');
+    saveRestaurantMemory('Talabie AI Waiter', 2, 'Kitchen ticket flow', 'Sends confirmed dining orders to the kitchen queue.');
+    saveRestaurantMemory('Talabie AI Waiter', 3, 'Voice waiter intent', 'Maps guest speech to menu items and restaurant actions.');
+
+    saveRestaurantMemory('Dining Concierge Console', 0, 'Guest order pipeline', 'Routes voice menu selections into restaurant table orders.');
+    saveRestaurantMemory('Dining Concierge Console', 1, 'Supabase menu catalog', 'Keeps menu prices and availability synchronized in Supabase.');
+    saveRestaurantMemory('Dining Concierge Console', 2, 'Kitchen queue delivery', 'Delivers confirmed waiter orders to the kitchen ticket queue.');
+    saveRestaurantMemory('Dining Concierge Console', 3, 'Dining intent parser', 'Maps guest speech into menu item and restaurant commands.');
+    saveRestaurantMemory('Dining Concierge Console', 4, 'Table session state', 'Tracks active dining table sessions for the voice waiter.');
+
+    const review = await vault.executeProjectReview('Talabie AI Waiter', { force: true });
+    const proposal = review.proposalsCreated.find((candidate) => candidate.proposalType === 'merge');
+
+    expect(proposal?.payload).toEqual({
+      type: 'merge',
+      sourceProject: 'Talabie AI Waiter',
+      targetProject: 'Dining Concierge Console',
+      relocateFiles: true,
+    });
+    expect(proposal?.confidence).toBeGreaterThanOrEqual(80);
+    expect(proposal?.rationale).toMatch(/memory-topic overlap|shared file evidence/);
+    expect(proposal?.evidenceItemUids).toHaveLength(4);
   });
 
   it('builds project briefings and creates summarize tasks for memory clusters', () => {

@@ -24,7 +24,7 @@ describe('AI provider clients', () => {
 
   it('sends completions to the configured base URL', async () => {
     const fetchMock = vi.fn(async () => new Response(JSON.stringify({
-      choices: [{ message: { content: 'hello from the hub' } }],
+      choices: [{ message: { content: 'hello from the hub' }, finish_reason: 'length' }],
       model: 'hub/test-model',
       usage: { prompt_tokens: 5, completion_tokens: 7 },
     }), { status: 200 }));
@@ -44,6 +44,7 @@ describe('AI provider clients', () => {
     });
 
     expect(result.text).toBe('hello from the hub');
+    expect(result.finishReason).toBe('length');
     expect(result.usage).toEqual({ promptTokens: 5, completionTokens: 7 });
     expect(fetchMock).toHaveBeenCalledTimes(1);
     const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];

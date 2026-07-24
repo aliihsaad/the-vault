@@ -87,6 +87,8 @@ export type MemoryWorkspaceSummary = {
 export type ProjectCockpitRow = {
   name: string;
   slug: string;
+  projectType: 'work_project' | 'brain_context' | 'unclassified';
+  lifecycleState: 'unclassified' | 'legacy_cleanup' | 'shadow' | 'gate_ready' | 'gate_active' | 'suspended' | null;
   description: string;
   createdAt: string;
   memoryCount: number;
@@ -429,6 +431,8 @@ export function buildProjectCockpitRows({
     return {
       name: project.name,
       slug: project.slug,
+      projectType: project.projectType || 'unclassified',
+      lifecycleState: project.lifecycleState || null,
       description: project.description || 'No description stored for this project.',
       createdAt: project.createdAt,
       memoryCount,
@@ -461,8 +465,28 @@ export function filterProjectCockpitRows(rows: ProjectCockpitRow[], search: stri
   return rows.filter((row) => [
     row.name,
     row.slug,
+    row.projectType,
+    row.lifecycleState || '',
     row.description,
   ].join(' ').toLowerCase().includes(query));
+}
+
+export function partitionProjectCockpitRows(rows: ProjectCockpitRow[]): {
+  workProjects: ProjectCockpitRow[];
+  brains: ProjectCockpitRow[];
+} {
+  return rows.reduce<{
+    workProjects: ProjectCockpitRow[];
+    brains: ProjectCockpitRow[];
+  }>((groups, row) => {
+    if (row.projectType === 'brain_context') {
+      groups.brains.push(row);
+    } else {
+      groups.workProjects.push(row);
+    }
+
+    return groups;
+  }, { workProjects: [], brains: [] });
 }
 
 export function buildRelationshipGraphPreview(

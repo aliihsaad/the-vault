@@ -21,6 +21,7 @@ export interface CompletionParams {
 export interface CompletionResult {
   text: string;
   model: string;
+  finishReason?: string | null;
   usage: {
     promptTokens: number;
     completionTokens: number;
@@ -158,7 +159,10 @@ export class OpenAICompatibleClient implements EnrichmentClient {
       }
 
       const payload = await response.json() as {
-        choices?: Array<{ message?: { content?: string } }>;
+        choices?: Array<{
+          message?: { content?: string };
+          finish_reason?: string | null;
+        }>;
         model?: string;
         usage?: { prompt_tokens?: number; completion_tokens?: number };
       };
@@ -171,6 +175,7 @@ export class OpenAICompatibleClient implements EnrichmentClient {
       return {
         text,
         model: payload.model ?? this.model,
+        finishReason: payload.choices?.[0]?.finish_reason ?? null,
         usage: {
           promptTokens: payload.usage?.prompt_tokens ?? 0,
           completionTokens: payload.usage?.completion_tokens ?? 0,

@@ -10,6 +10,7 @@ import { z } from 'zod';
 import { Vault, TaskExecutor, createProviderClient, FailoverEnrichmentClient, isProviderConfigUsable, getEnrichmentModelKey, portableDecrypt, slugify, MEMORY_TYPES, ROUTINE_TYPES, STATUS_VALUES, PRIORITY_VALUES, SOURCE_APPS, TASK_TYPES, TASK_STATUSES, TASK_PRIORITIES, PROPOSAL_STATUSES, PROPOSAL_TYPES, PROJECT_LINK_TYPES, OUTCOME_VALUES, MEMORY_CONTENT_MAX_CHARS, type AiProviderChain, type AiProviderConfig, type AiProviderId, type EnrichmentClient } from '@the-vault/core';
 import { registerGraphifyMcpTools } from './graphify-tools.js';
 import { registerOpenLoopsV2McpTools } from './open-loops-v2-tools.js';
+import { requireTypedProjectForAgentWrite } from './project-admission.js';
 
 // Initialize Vault
 const vault = new Vault();
@@ -126,7 +127,7 @@ if (process.env.VAULT_AUTO_START_TASK_EXECUTOR === 'true') {
 // Create MCP server
 const server = new McpServer({
   name: 'vault-memory',
-  version: '0.5.1',
+  version: '0.6.4',
 });
 
 // ============================================================================
@@ -134,7 +135,7 @@ const server = new McpServer({
 // ============================================================================
 server.tool(
   'vault_save_memory',
-  'Save a structured memory item to Vault. Use this to persist decisions, sessions, plans, summaries, handoffs, artifacts, or references.',
+  'Save a structured memory item to an existing typed Vault project. If the project does not exist, call vault_create_project first and explicitly choose work_project or brain_context.',
   {
     title: z.string().describe('Human-readable title for the memory item'),
     project: z.string().describe('Project name this memory belongs to'),
@@ -155,6 +156,8 @@ server.tool(
   },
   async (args) => {
     try {
+      requireTypedProjectForAgentWrite(vault, args.project);
+
       const result = vault.saveMemory({
         title: args.title,
         project: args.project,

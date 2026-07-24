@@ -16,6 +16,11 @@ import {
 import { logActivity } from './log.service.js';
 import { createProjectProposal } from './proposal.service.js';
 import {
+  scoreProjectSimilarity,
+  type ProjectSimilarityDocument,
+  type ProjectSimilarityMemory,
+} from './project-similarity.js';
+import {
   archiveMemory,
   markMemoryPendingDelete,
   markMemoryStale,
@@ -1056,9 +1061,13 @@ function mapMemoryRow(row: typeof memoryItems.$inferSelect): MemoryItem {
 
 const PROJECT_REVIEW_LAST_KEY = 'agent.project_maintenance.last_review_per_project';
 const PROJECT_REVIEW_DESCRIPTION_MIN_ITEMS = 3;
-const PROJECT_REVIEW_AI_TIMEOUT_MS = 12000;
-const PROJECT_REVIEW_AI_MAX_TOKENS = 200;
-const PROJECT_REVIEW_RECENT_ITEMS_FOR_PROMPT = 6;
+const PROJECT_REVIEW_AI_TIMEOUT_MS = 15000;
+const PROJECT_REVIEW_AI_MAX_TOKENS = 420;
+const PROJECT_REVIEW_DESCRIPTION_ATTEMPTS = 2;
+const PROJECT_REVIEW_DESCRIPTION_MIN_CHARS = 40;
+const PROJECT_REVIEW_DESCRIPTION_MAX_CHARS = 360;
+const PROJECT_REVIEW_EVIDENCE_SUMMARY_CHARS = 360;
+const PROJECT_REVIEW_RECENT_ITEMS_FOR_PROMPT = 8;
 const PROJECT_REVIEW_TOP_TAGS_FOR_PROMPT = 6;
 // Auto-generated bookkeeping tags that describe how a memory was created,
 // not what the project is about — useless as description evidence.
@@ -1125,25 +1134,38 @@ export async function executeProjectReview(
   // ---- Description proposal ----
   if (!projectRow.description?.trim() && activeItems.length >= PROJECT_REVIEW_DESCRIPTION_MIN_ITEMS) {
     candidatesEvaluated += 1;
-    const description = await draftProjectDescription(canonicalName, activeItems);
-    if (description && !dryRun) {
+    const draft = await draftProjectDescription(canonicalName, activeItems);
+    if (draft.description && !dryRun) {
       const created = createProjectProposal(db, logsPath, {
         project: canonicalName,
-        payload: { type: 'description', description },
-        rationale: `Project has no description. Drafted from ${activeItems.length} active item(s).`,
-        confidence: 65,
-        evidenceItemUids: activeItems
-          .slice(0, PROJECT_REVIEW_RECENT_ITEMS_FOR_PROMPT)
-          .map((item) => item.itemUid),
+        payload: { type: 'description', description: draft.description },
+        rationale: `Project has no description. Validated against ${draft.evidenceItemUids.length} representative item(s) from ${activeItems.length} active item(s).`,
+        confidence: draft.attempts === 1 ? 78 : 70,
+        evidenceItemUids: draft.evidenceItemUids,
         createdBy: 'agent',
       });
       proposalsCreated.push(created);
+    } else if (!draft.description && draft.attempts > 0) {
+      logActivity(db, logsPath, {
+        timestamp: reviewedAt,
+        sourceClient: 'system',
+        project: canonicalName,
+        actionType: 'enrich',
+        status: 'error',
+        aiUsed: true,
+        message: `Project review rejected ${draft.attempts} low-quality description draft(s) for ${canonicalName}`,
+        metadata: {
+          dutyType: 'project_review',
+          rejectionReasons: draft.rejectionReasons,
+          evidenceItemUids: draft.evidenceItemUids,
+        },
+      });
     }
   }
 
   // ---- Merge candidates ----
   const mergeMaxItems = getNumberSetting(db, 'agent.project_maintenance.merge_candidate_max_items', 2);
-  const mergeCandidates = findMergeCandidates(db, projectRow.id, canonicalName, projectSlug, mergeMaxItems);
+  const mergeCandidates = findMergeCandidates(db, projectRow.id, canonicalName, mergeMaxItems);
   for (const candidate of mergeCandidates) {
     candidatesEvaluated += 1;
     if (dryRun) continue;
@@ -1157,6 +1179,7 @@ export async function executeProjectReview(
       },
       rationale: candidate.rationale,
       confidence: candidate.confidence,
+      evidenceItemUids: candidate.evidenceItemUids,
       createdBy: 'agent',
     });
     proposalsCreated.push(created);
@@ -1198,36 +1221,41 @@ interface MergeCandidate {
   targetProject: string;
   rationale: string;
   confidence: number;
+  evidenceItemUids: string[];
 }
 
 /**
- * Find other projects whose slug contains or is contained by the target's slug,
- * where one side has ≤ maxItems active memory items and there is no existing
- * relationship between the pair (any direction, any link type). The smaller
- * project becomes the merge source; the larger becomes the target.
+ * Find likely duplicate projects using identity, naming, description, memory
+ * topics, and related-file evidence. A name-only match still requires a small
+ * side, preserving the old typo-cleanup behavior. Strong semantic/file matches
+ * may compare two established projects with unrelated names. Brain and Work
+ * projects are never compared as merge candidates.
  */
 function findMergeCandidates(
   db: DB,
   projectId: number,
   canonicalName: string,
-  projectSlug: string,
   maxItems: number,
 ): MergeCandidate[] {
-  const others = db
-    .select()
-    .from(projects)
-    .all()
-    .filter((row) => row.id !== projectId);
-  if (others.length === 0) return [];
+  const allProjects = db.select().from(projects).all();
+  const reviewedProject = allProjects.find((row) => row.id === projectId);
+  const others = allProjects.filter((row) => row.id !== projectId);
+  if (!reviewedProject || others.length === 0) return [];
+
+  const activeItemsByProject = new Map<string, MemoryItem[]>();
+  for (const item of db.select().from(memoryItems).all().map(mapMemoryRow)) {
+    if (item.status === 'archived') continue;
+    const projectItems = activeItemsByProject.get(item.project) || [];
+    projectItems.push(item);
+    activeItemsByProject.set(item.project, projectItems);
+  }
 
   const allRels = db.select().from(projectRelationships).all();
   const candidates: MergeCandidate[] = [];
+  const reviewedItems = activeItemsByProject.get(canonicalName) || [];
+  const reviewedDocument = toProjectSimilarityDocument(reviewedProject, reviewedItems);
 
   for (const other of others) {
-    const otherSlug = slugify(other.name);
-    if (otherSlug === projectSlug) continue;
-    if (!isSlugNearDuplicate(projectSlug, otherSlug)) continue;
-
     const linked = allRels.some(
       (rel) =>
         (rel.sourceProject === canonicalName && rel.targetProject === other.name)
@@ -1235,108 +1263,304 @@ function findMergeCandidates(
     );
     if (linked) continue;
 
-    const projectItemCount = countActiveItems(db, canonicalName);
-    const otherItemCount = countActiveItems(db, other.name);
+    const otherItems = activeItemsByProject.get(other.name) || [];
+    const similarity = scoreProjectSimilarity(
+      reviewedDocument,
+      toProjectSimilarityDocument(other, otherItems),
+      maxItems,
+    );
+    if (!similarity.isCandidate) continue;
 
-    let source: string;
-    let target: string;
-    if (otherItemCount <= maxItems && otherItemCount <= projectItemCount) {
-      source = other.name;
-      target = canonicalName;
-    } else if (projectItemCount <= maxItems && projectItemCount < otherItemCount) {
-      source = canonicalName;
-      target = other.name;
-    } else {
-      continue;
-    }
+    const direction = chooseMergeDirection(
+      reviewedProject,
+      other,
+      reviewedItems.length,
+      otherItems.length,
+    );
+    const signals = similarity.signals.length > 0
+      ? similarity.signals.join('; ')
+      : `combined similarity ${Math.round(similarity.score * 100)}%`;
 
     candidates.push({
-      sourceProject: source,
-      targetProject: target,
-      rationale: `Project slugs near-collide ("${projectSlug}" vs "${otherSlug}") and "${source}" is ≤ ${maxItems} item(s) — likely a naming variant.`,
-      confidence: 70,
+      sourceProject: direction.source,
+      targetProject: direction.target,
+      rationale: `Potential duplicate despite project naming: ${signals}. Keep "${direction.target}" (${direction.targetCount} active item(s)) and review merging "${direction.source}" (${direction.sourceCount} active item(s)).`,
+      confidence: similarity.confidence,
+      evidenceItemUids: similarity.evidenceItemUids,
     });
   }
 
   return candidates;
 }
 
-function countActiveItems(db: DB, projectName: string): number {
-  return db
-    .select()
-    .from(memoryItems)
-    .where(eq(memoryItems.project, projectName))
-    .all()
-    .filter((row) => row.status !== 'archived').length;
+function toProjectSimilarityDocument(
+  project: typeof projects.$inferSelect,
+  items: MemoryItem[],
+): ProjectSimilarityDocument {
+  return {
+    name: project.name,
+    description: project.description,
+    projectType: project.projectType,
+    canonicalRoot: project.canonicalRoot,
+    repositoryUrl: project.repositoryUrl,
+    memories: items.map(toProjectSimilarityMemory),
+  };
 }
 
-function isSlugNearDuplicate(left: string, right: string): boolean {
-  if (!left || !right) return false;
-  if (left === right) return false;
-  if (left.startsWith(right) || right.startsWith(left)) return true;
-  if (left.includes(right) || right.includes(left)) return true;
-  // Levenshtein distance ≤ 2 catches single-char typos like whisphr/whisphry
-  return levenshtein(left, right) <= 2;
+function toProjectSimilarityMemory(item: MemoryItem): ProjectSimilarityMemory {
+  return {
+    itemUid: item.itemUid,
+    title: item.title,
+    subject: item.subject,
+    summary: item.summary,
+    keywords: item.keywords,
+    tags: item.tags,
+    relatedFiles: item.relatedFiles,
+    memoryType: item.memoryType,
+    promoted: item.promoted,
+    updatedAt: item.updatedAt,
+  };
 }
 
-function levenshtein(a: string, b: string): number {
-  if (a === b) return 0;
-  if (!a) return b.length;
-  if (!b) return a.length;
-  const prev: number[] = new Array(b.length + 1);
-  const curr: number[] = new Array(b.length + 1);
-  for (let j = 0; j <= b.length; j += 1) prev[j] = j;
-  for (let i = 1; i <= a.length; i += 1) {
-    curr[0] = i;
-    for (let j = 1; j <= b.length; j += 1) {
-      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
-      curr[j] = Math.min(curr[j - 1] + 1, prev[j] + 1, prev[j - 1] + cost);
-    }
-    for (let j = 0; j <= b.length; j += 1) prev[j] = curr[j];
+function chooseMergeDirection(
+  left: typeof projects.$inferSelect,
+  right: typeof projects.$inferSelect,
+  leftCount: number,
+  rightCount: number,
+): { source: string; target: string; sourceCount: number; targetCount: number } {
+  if (leftCount !== rightCount) {
+    return leftCount < rightCount
+      ? { source: left.name, target: right.name, sourceCount: leftCount, targetCount: rightCount }
+      : { source: right.name, target: left.name, sourceCount: rightCount, targetCount: leftCount };
   }
-  return prev[b.length];
+
+  const leftMetadata = projectRetentionScore(left);
+  const rightMetadata = projectRetentionScore(right);
+  if (leftMetadata !== rightMetadata) {
+    return leftMetadata > rightMetadata
+      ? { source: right.name, target: left.name, sourceCount: rightCount, targetCount: leftCount }
+      : { source: left.name, target: right.name, sourceCount: leftCount, targetCount: rightCount };
+  }
+
+  const keepLeft = left.createdAt < right.createdAt
+    || (left.createdAt === right.createdAt && left.name.localeCompare(right.name) <= 0);
+  return keepLeft
+    ? { source: right.name, target: left.name, sourceCount: rightCount, targetCount: leftCount }
+    : { source: left.name, target: right.name, sourceCount: leftCount, targetCount: rightCount };
+}
+
+function projectRetentionScore(project: typeof projects.$inferSelect): number {
+  return Number(Boolean(project.description?.trim()))
+    + Number(Boolean(project.repositoryUrl?.trim()))
+    + Number(Boolean(project.canonicalRoot?.trim()))
+    + Number(Boolean(project.projectUid));
+}
+
+interface ProjectDescriptionDraft {
+  description: string | null;
+  evidenceItemUids: string[];
+  attempts: number;
+  rejectionReasons: string[];
 }
 
 async function draftProjectDescription(
   projectName: string,
   items: MemoryItem[],
-): Promise<string | null> {
+): Promise<ProjectDescriptionDraft> {
   // Description proposals are only worth surfacing when an AI draft is
   // possible. The old deterministic fallback produced item-count boilerplate
   // ("Active project with N memory items...") that is a statistic, not a
   // description — skipping here lets a later review retry once enrichment
   // is configured instead of filing a junk proposal now.
-  if (!isEnrichmentAvailable()) return null;
+  if (!isEnrichmentAvailable()) return emptyProjectDescriptionDraft();
 
   const client = getEnrichmentClient();
-  if (!client) return null;
+  if (!client) return emptyProjectDescriptionDraft();
 
   const evidence = selectDescriptionEvidence(items);
-  if (evidence.length === 0) return null;
+  const evidenceItemUids = evidence.map((item) => item.itemUid);
+  if (evidence.length === 0) return emptyProjectDescriptionDraft(evidenceItemUids);
 
   const itemsBlock = evidence
-    .map((item) => `- [${item.memoryType}] ${item.title}: ${item.summary.slice(0, 160)}`)
+    .map((item) => [
+      `- [${item.memoryType}${item.promoted ? ', promoted' : ''}] ${item.title}`,
+      `  Subject: ${item.subject}`,
+      `  Evidence: ${item.summary.slice(0, PROJECT_REVIEW_EVIDENCE_SUMMARY_CHARS)}`,
+    ].join('\n'))
     .join('\n');
   const topTags = collectTopProjectTags(items);
-  const tagsLine = topTags.length > 0 ? `\nCommon tags: ${topTags.join(', ')}` : '';
+  const tagsLine = topTags.length > 0 ? `\nRepeated project terms: ${topTags.join(', ')}` : '';
+  const rejectionReasons: string[] = [];
 
-  try {
-    const result = await client.complete({
-      systemPrompt:
-        'You write short factual project descriptions for an engineering memory system. '
-        + 'Output ONE OR TWO sentences (max 240 chars total). State what the project is and what it does. '
-        + 'No marketing language, no opinions, no quotes. Output ONLY the description text.',
-      userPrompt: `Project: ${projectName}\nItem count: ${items.length}${tagsLine}\n\nKey items:\n${itemsBlock}`,
-      maxTokens: PROJECT_REVIEW_AI_MAX_TOKENS,
-      temperature: 0.2,
-      timeoutMs: PROJECT_REVIEW_AI_TIMEOUT_MS,
-    });
-    const text = result.text?.trim();
-    if (!text) return null;
-    return text.length > 280 ? text.slice(0, 277).trimEnd() + '...' : text;
-  } catch {
-    return null;
+  for (let attempt = 1; attempt <= PROJECT_REVIEW_DESCRIPTION_ATTEMPTS; attempt += 1) {
+    try {
+      const retryLine = rejectionReasons.length > 0
+        ? `\nPrevious draft was rejected for: ${rejectionReasons.at(-1)}. Correct that defect.`
+        : '';
+      const result = await client.complete({
+        systemPrompt:
+          'You produce validated project metadata for an engineering memory system. '
+          + 'Return ONLY one JSON object in this exact shape: {"description":"..."}. '
+          + `The description must begin with the exact project name, contain one or two complete factual sentences, and be ${PROJECT_REVIEW_DESCRIPTION_MIN_CHARS}-${PROJECT_REVIEW_DESCRIPTION_MAX_CHARS} characters. `
+          + 'Describe the stable identity and purpose of the whole project, not a recent task, review status, one feature, or implementation checkpoint. '
+          + 'Do not echo these instructions, narrate your reasoning, use marketing language, or end mid-sentence. '
+          + 'If the evidence is insufficient to identify the whole project, return {"description":null}.',
+        userPrompt: `Exact project name: ${projectName}\nActive evidence count: ${items.length}${tagsLine}\n\nRepresentative evidence:\n${itemsBlock}${retryLine}`,
+        maxTokens: PROJECT_REVIEW_AI_MAX_TOKENS,
+        temperature: 0.1,
+        timeoutMs: PROJECT_REVIEW_AI_TIMEOUT_MS,
+      });
+      const extracted = extractProjectDescription(result.text);
+      if (!extracted.description) {
+        rejectionReasons.push(extracted.reason || 'empty or malformed response');
+        continue;
+      }
+
+      const validation = validateProjectDescription(
+        projectName,
+        extracted.description,
+        evidence,
+        result.finishReason,
+      );
+      if (validation.valid) {
+        return {
+          description: validation.description,
+          evidenceItemUids,
+          attempts: attempt,
+          rejectionReasons,
+        };
+      }
+      rejectionReasons.push(validation.reason);
+    } catch {
+      rejectionReasons.push('provider request failed');
+    }
   }
+
+  return {
+    description: null,
+    evidenceItemUids,
+    attempts: PROJECT_REVIEW_DESCRIPTION_ATTEMPTS,
+    rejectionReasons,
+  };
+}
+
+function extractProjectDescription(responseText: string | undefined): {
+  description: string | null;
+  reason?: string;
+} {
+  const text = responseText?.trim();
+  if (!text) return { description: null, reason: 'empty response' };
+
+  const unwrapped = text
+    .replace(/^```(?:json)?\s*/i, '')
+    .replace(/\s*```$/, '')
+    .trim();
+  const jsonCandidate = unwrapped.startsWith('{')
+    ? unwrapped
+    : unwrapped.match(/\{[\s\S]*\}/)?.[0];
+
+  if (jsonCandidate) {
+    try {
+      const parsed = JSON.parse(jsonCandidate) as { description?: unknown };
+      if (parsed.description === null) return { description: null, reason: 'model reported insufficient evidence' };
+      if (typeof parsed.description === 'string') return { description: parsed.description };
+      return { description: null, reason: 'JSON response omitted a string description' };
+    } catch {
+      return { description: null, reason: 'malformed JSON response' };
+    }
+  }
+
+  // Compatibility for providers that ignore the JSON response contract. The
+  // same strict quality validation still applies before a proposal is stored.
+  return { description: unwrapped.replace(/^description\s*:\s*/i, '') };
+}
+
+function validateProjectDescription(
+  projectName: string,
+  description: string,
+  evidence: MemoryItem[],
+  finishReason?: string | null,
+): { valid: true; description: string } | { valid: false; reason: string } {
+  const cleaned = description
+    .trim()
+    .replace(/^['"]|['"]$/g, '')
+    .replace(/\s+/g, ' ');
+
+  if (finishReason === 'length') return { valid: false, reason: 'provider hit its token limit' };
+  if (cleaned.length < PROJECT_REVIEW_DESCRIPTION_MIN_CHARS) return { valid: false, reason: 'draft is too short or incomplete' };
+  if (cleaned.length > PROJECT_REVIEW_DESCRIPTION_MAX_CHARS) return { valid: false, reason: 'draft exceeds the description length limit' };
+  if (/\.\.\.$|…$/.test(cleaned)) return { valid: false, reason: 'draft ends with an ellipsis' };
+  if (!/[.!?]$/.test(cleaned)) return { valid: false, reason: 'draft does not end with a complete sentence' };
+  if (/^(?:we need|i need|let me|from (?:the )?(?:key )?items|based on|analysis\s*:|reasoning\s*:)/i.test(cleaned)) {
+    return { valid: false, reason: 'draft contains model reasoning instead of a description' };
+  }
+  if (/(?:output only|one or two sentences|max \d+ characters|no marketing|provide concise|exact project name|key items)/i.test(cleaned)) {
+    return { valid: false, reason: 'draft echoes prompt instructions' };
+  }
+
+  const normalizedProjectName = normalizeDescriptionAnchor(projectName);
+  if (normalizedProjectName && !normalizeDescriptionAnchor(cleaned).startsWith(normalizedProjectName)) {
+    return { valid: false, reason: 'draft does not begin with the reviewed project name' };
+  }
+
+  const groundingTerms = getDescriptionGroundingTerms(projectName, cleaned, evidence);
+  if (groundingTerms.length < 2) {
+    return { valid: false, reason: 'draft is not sufficiently grounded in representative project evidence' };
+  }
+
+  const sentenceCount = cleaned.match(/[.!?](?:\s|$)/g)?.length || 0;
+  if (sentenceCount > 2) return { valid: false, reason: 'draft contains more than two sentences' };
+  return { valid: true, description: cleaned };
+}
+
+const DESCRIPTION_GROUNDING_NOISE = new Set([
+  'about', 'application', 'build', 'first', 'from', 'into', 'local', 'platform',
+  'project', 'provide', 'provides', 'software', 'solution', 'support', 'supports',
+  'system', 'that', 'their', 'this', 'tool', 'using', 'version', 'with',
+]);
+
+function getDescriptionGroundingTerms(
+  projectName: string,
+  description: string,
+  evidence: MemoryItem[],
+): string[] {
+  const projectTokens = new Set(normalizeDescriptionAnchor(projectName).split(' '));
+  const descriptionTokens = new Set(
+    meaningfulDescriptionTokens(description).filter((token) => !projectTokens.has(token)),
+  );
+  const evidenceTokens = new Set(meaningfulDescriptionTokens(evidence.map((item) => [
+    item.title,
+    item.subject,
+    item.summary,
+    item.tags.join(' '),
+    item.keywords.join(' '),
+  ].join(' ')).join(' ')));
+
+  return [...descriptionTokens].filter((token) => evidenceTokens.has(token));
+}
+
+function meaningfulDescriptionTokens(value: string): string[] {
+  return normalizeDescriptionAnchor(value)
+    .split(' ')
+    .filter((token) => token.length >= 4 && !DESCRIPTION_GROUNDING_NOISE.has(token) && !/^\d+$/.test(token));
+}
+
+function normalizeDescriptionAnchor(value: string): string {
+  return value
+    .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function emptyProjectDescriptionDraft(evidenceItemUids: string[] = []): ProjectDescriptionDraft {
+  return {
+    description: null,
+    evidenceItemUids,
+    attempts: 0,
+    rejectionReasons: [],
+  };
 }
 
 /**
@@ -1360,16 +1584,35 @@ function selectDescriptionEvidence(items: MemoryItem[]): MemoryItem[] {
     || item.memoryType === 'plan'
     || item.memoryType === 'reference';
 
+  const oldestHighSignal = [...pool.filter(isHighSignal)]
+    .sort((left, right) => Date.parse(left.createdAt) - Date.parse(right.createdAt))
+    .slice(0, 2);
+  const candidates = [
+    ...oldestHighSignal,
+    ...pool.filter(isHighSignal),
+    ...pool,
+  ];
   const selected: MemoryItem[] = [];
   const seen = new Set<string>();
-  for (const item of [...pool.filter(isHighSignal), ...pool]) {
+  for (const item of candidates) {
     if (seen.has(item.itemUid)) continue;
+    if (selected.length > 0 && selected.every((existing) => descriptionEvidenceOverlap(existing, item) >= 0.82)) {
+      continue;
+    }
     seen.add(item.itemUid);
     selected.push(item);
     if (selected.length >= PROJECT_REVIEW_RECENT_ITEMS_FOR_PROMPT) break;
   }
 
   return selected;
+}
+
+function descriptionEvidenceOverlap(left: MemoryItem, right: MemoryItem): number {
+  const leftTokens = new Set(normalizeDescriptionAnchor(`${left.title} ${left.subject}`).split(' '));
+  const rightTokens = new Set(normalizeDescriptionAnchor(`${right.title} ${right.subject}`).split(' '));
+  const union = new Set([...leftTokens, ...rightTokens]);
+  if (union.size === 0) return 0;
+  return [...leftTokens].filter((token) => rightTokens.has(token)).length / union.size;
 }
 
 function collectTopProjectTags(items: MemoryItem[]): string[] {

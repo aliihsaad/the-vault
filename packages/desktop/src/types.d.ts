@@ -133,7 +133,7 @@ declare global {
     name: string;
     slug: string;
     projectType?: 'work_project' | 'brain_context' | 'unclassified';
-    lifecycleState?: 'shadow' | 'active' | 'archived';
+    lifecycleState?: 'unclassified' | 'legacy_cleanup' | 'shadow' | 'gate_ready' | 'gate_active' | 'suspended' | null;
     description: string | null;
     createdAt: string;
     updatedAt: string;

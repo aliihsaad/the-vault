@@ -13,6 +13,7 @@ import {
   extractTotalCandidates,
   getOverviewTelemetryDateFrom,
   getOperationalAnalyticsDateFrom,
+  partitionProjectCockpitRows,
   OVERVIEW_TELEMETRY_DAYS,
   OVERVIEW_TELEMETRY_LOG_LIMIT,
   OPERATIONAL_ANALYTICS_DAYS,
@@ -217,8 +218,8 @@ describe('cockpit metrics', () => {
   it('derives project cockpit rows from real project, workspace, log, memory, and loop inputs', () => {
     const rows = buildProjectCockpitRows({
       projects: [
-        { id: 1, name: 'the-vault', slug: 'the-vault', description: 'Memory system', createdAt: '2026-05-01T00:00:00.000Z', updatedAt: '', memoryCount: 12 },
-        { id: 2, name: 'other', slug: 'other', description: null, createdAt: '', updatedAt: '', memoryCount: 2 },
+        { id: 1, name: 'the-vault', slug: 'the-vault', projectType: 'work_project', lifecycleState: 'gate_active', description: 'Memory system', createdAt: '2026-05-01T00:00:00.000Z', updatedAt: '', memoryCount: 12 },
+        { id: 2, name: 'other', slug: 'other', projectType: 'brain_context', lifecycleState: 'shadow', description: null, createdAt: '', updatedAt: '', memoryCount: 2 },
       ],
       momentum: [
         { name: 'the-vault', last7dCount: 5, prior7dCount: 2, delta: 3, direction: 'up', lastActivityAt: '2026-05-18T00:00:00.000Z' },
@@ -253,6 +254,8 @@ describe('cockpit metrics', () => {
     expect(rows[0]).toMatchObject({
       name: 'the-vault',
       slug: 'the-vault',
+      projectType: 'work_project',
+      lifecycleState: 'gate_active',
       createdAt: '2026-05-01T00:00:00.000Z',
       memoryCount: 12,
       last7dCount: 5,
@@ -288,6 +291,33 @@ describe('cockpit metrics', () => {
     expect(filterProjectCockpitRows(rows, 'needle')).toMatchObject([
       { name: 'project-17', createdAt: '2026-05-17T00:00:00.000Z' },
     ]);
+  });
+
+  it('separates brain contexts from every non-brain project', () => {
+    const baseRow = {
+      slug: 'project',
+      description: 'Project',
+      createdAt: '',
+      memoryCount: 0,
+      last7dCount: 0,
+      prior7dCount: 0,
+      delta: 0,
+      direction: 'inactive' as const,
+      lastActivityAt: null,
+      openLoopCount: 0,
+      workspacePath: null,
+      workspaceTrusted: false,
+      logCount: 0,
+      lifecycleState: 'shadow' as const,
+    };
+    const groups = partitionProjectCockpitRows([
+      { ...baseRow, name: 'Delivery app', projectType: 'work_project' },
+      { ...baseRow, name: 'Codex-brain', projectType: 'brain_context' },
+      { ...baseRow, name: 'Legacy app', projectType: 'unclassified' },
+    ]);
+
+    expect(groups.brains.map((row) => row.name)).toEqual(['Codex-brain']);
+    expect(groups.workProjects.map((row) => row.name)).toEqual(['Delivery app', 'Legacy app']);
   });
 
   it('builds a relationship graph only from actual project, memory, file, and related-item data', () => {

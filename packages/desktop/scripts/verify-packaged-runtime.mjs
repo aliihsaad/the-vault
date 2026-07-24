@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process';
-import { existsSync, mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
@@ -8,6 +8,7 @@ import { fileURLToPath } from 'node:url';
 const require = createRequire(import.meta.url);
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const desktopDir = resolve(scriptDir, '..');
+const expectedVersion = JSON.parse(readFileSync(join(desktopDir, 'package.json'), 'utf8')).version;
 const unpackedRoot = join(desktopDir, 'dist', 'win-unpacked');
 const mcpRoot = join(unpackedRoot, 'resources', 'mcp');
 const bundledNode = join(mcpRoot, 'node.exe');
@@ -57,11 +58,15 @@ try {
     capabilities: {},
     clientInfo: {
       name: 'vault-packaged-runtime-smoke',
-      version: '0.6.3',
+      version: expectedVersion,
     },
   });
   if (!initialize.result) {
     throw new Error('Packaged MCP initialize response did not contain a result');
+  }
+  const serverVersion = initialize.result.serverInfo?.version;
+  if (serverVersion !== expectedVersion) {
+    throw new Error(`Packaged MCP version mismatch: expected ${expectedVersion}, received ${serverVersion || 'missing'}`);
   }
 
   send(child, {
@@ -87,6 +92,7 @@ try {
 
   console.log(JSON.stringify({
     initializeResult: true,
+    serverVersion,
     toolsCount: tools.length,
     databaseCreated: true,
     nodePtySpawnType: typeof nodePty.spawn,
