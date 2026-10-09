@@ -1,3 +1,5 @@
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { z } from 'zod';
 
 export const GRAPHIFY_FRESHNESS_STATES = [
@@ -69,6 +71,10 @@ const GRAPHIFY_EXCLUDED_DIR_SEGMENTS = new Set([
   'release',
   'win-unpacked',
   'graphify-out',
+  // Credential stores that sometimes sit inside a source folder.
+  '.ssh',
+  '.aws',
+  '.gnupg',
 ]);
 
 // OS/sidecar junk files. `desktop.ini` is especially important: on Windows it marks
@@ -80,7 +86,23 @@ const GRAPHIFY_EXCLUDED_FILENAMES = new Set([
   '.ds_store',
 ]);
 
-const GRAPHIFY_SECRET_NAME_PATTERN = /\b(secret|token|credential|password)\b/;
+// Secret-looking words anywhere in the path. "token" stays singular on purpose so
+// design-token files (tokens.css) are still indexed.
+const GRAPHIFY_SECRET_NAME_PATTERN = /\b(secrets?|token|credentials?|passwords?|recovery[-_ ]?codes?)\b/;
+
+// Credential and private-key files matched on their exact name or extension.
+const GRAPHIFY_SECRET_FILENAMES = new Set([
+  '.npmrc',
+  '.pypirc',
+  '.netrc',
+  '.git-credentials',
+  '.htpasswd',
+]);
+const GRAPHIFY_SSH_KEY_PATTERN = /^id_(rsa|dsa|ecdsa|ed25519)(\.pub)?$/;
+const GRAPHIFY_SECRET_EXTENSIONS = ['.pem', '.key', '.p12', '.pfx', '.jks', '.keystore', '.kdbx', '.ppk'];
+
+// Per-project exclude file at the source root, using a gitignore-style subset.
+export const GRAPHIFY_IGNORE_FILENAME = '.graphifyignore';
 
 /**
  * Shared predicate for paths that must be excluded from Graphify source staging and
@@ -109,6 +131,98 @@ export function isGraphifyExcludedSourcePath(pathValue: string): boolean {
   if (name === '.env' || name.startsWith('.env.')) {
     return true;
   }
+  if (
+    GRAPHIFY_SECRET_FILENAMES.has(name)
+    || GRAPHIFY_SSH_KEY_PATTERN.test(name)
+    || GRAPHIFY_SECRET_EXTENSIONS.some((extension) => name.endsWith(extension))
+  ) {
+    return true;
+  }
 
   return GRAPHIFY_SECRET_NAME_PATTERN.test(normalized);
+}
+
+/**
+ * Build the source filter for one project: the built-in exclusions plus the
+ * patterns in `<sourceRoot>/.graphifyignore`. Supported syntax is a gitignore
+ * subset: `#` comments, `*`, `**`, `?`, a leading `/` to anchor at the root, and a
+ * trailing `/` (ignored; a matching folder excludes everything under it). A
+ * pattern without a slash matches at any depth. Negation (`!`) is not supported.
+ */
+export function createGraphifySourceFilter(sourceRoot: string): (relativePath: string) => boolean {
+  const patterns = readGraphifyIgnorePatterns(sourceRoot);
+  return (relativePath) => {
+    if (isGraphifyExcludedSourcePath(relativePath)) {
+      return true;
+    }
+    const normalized = relativePath.replace(/\\/g, '/').replace(/^\/+/, '').toLowerCase();
+    return normalized.length > 0 && patterns.some((pattern) => pattern.test(normalized));
+  };
+}
+
+function readGraphifyIgnorePatterns(sourceRoot: string): RegExp[] {
+  const ignorePath = join(sourceRoot, GRAPHIFY_IGNORE_FILENAME);
+  if (!existsSync(ignorePath)) {
+    return [];
+  }
+
+  return readFileSync(ignorePath, 'utf8')
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0 && !line.startsWith('#') && !line.startsWith('!'))
+    .map(compileIgnorePattern);
+}
+
+function compileIgnorePattern(rawPattern: string): RegExp {
+  let pattern = rawPattern.toLowerCase().replace(/\\/g, '/').replace(/\/+$/, '');
+  // gitignore: a slash at the start or in the middle anchors the pattern to the root.
+  const anchored = pattern.includes('/');
+  pattern = pattern.replace(/^\/+/, '');
+
+  let body = '';
+  for (let index = 0; index < pattern.length; index += 1) {
+    const char = pattern[index];
+    if (char === '*' && pattern[index + 1] === '*') {
+      const followedBySlash = pattern[index + 2] === '/';
+      body += followedBySlash ? '(?:.*/)?' : '.*';
+      index += followedBySlash ? 2 : 1;
+    } else if (char === '*') {
+      body += '[^/]*';
+    } else if (char === '?') {
+      body += '[^/]';
+    } else {
+      body += char.replace(/[.+^${}()|[\]\\]/g, '\\$&');
+    }
+  }
+
+  // Matching a folder excludes everything beneath it.
+  return new RegExp(`${anchored ? '^' : '(?:^|/)'}${body}(?:/.*)?$`);
+}
+
+/**
+ * Detect a source root that is a plain folder holding several separate projects
+ * (for example a git clone next to an extracted archive of the same repo), which
+ * makes Graphify index every file twice. Returns the child folder names, or an
+ * empty list when the root is itself a project or holds at most one.
+ */
+export function detectGraphifyMultiProjectRoot(sourceRoot: string): string[] {
+  const isProject = (dir: string) => existsSync(join(dir, '.git')) || existsSync(join(dir, 'package.json'));
+  if (!existsSync(sourceRoot) || isProject(sourceRoot)) {
+    return [];
+  }
+
+  const isExcluded = createGraphifySourceFilter(sourceRoot);
+  let children: string[];
+  try {
+    children = readdirSync(sourceRoot, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory() && !isExcluded(entry.name))
+      .map((entry) => entry.name);
+  } catch {
+    return [];
+  }
+
+  const projects = children
+    .filter((name) => isProject(join(sourceRoot, name)))
+    .sort((left, right) => left.localeCompare(right));
+  return projects.length > 1 ? projects : [];
 }

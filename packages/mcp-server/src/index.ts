@@ -127,7 +127,7 @@ if (process.env.VAULT_AUTO_START_TASK_EXECUTOR === 'true') {
 // Create MCP server
 const server = new McpServer({
   name: 'vault-memory',
-  version: '0.6.4',
+  version: '0.6.5',
 });
 
 // ============================================================================
@@ -207,8 +207,8 @@ server.tool(
     project: z.string().optional().describe('Filter by project name'),
     memory_type: z.enum(MEMORY_TYPES).optional().describe('Filter by memory type'),
     subject: z.string().optional().describe('Filter by subject (partial match)'),
-    keywords: z.array(z.string()).optional().describe('Filter by keywords'),
-    tags: z.array(z.string()).optional().describe('Filter by tags'),
+    keywords: z.array(z.string()).optional().describe('Search terms: matches items where ANY term appears (case-insensitive substring) in keywords, title, subject, summary or content'),
+    tags: z.array(z.string()).optional().describe('Filter by tags (all listed tags must match)'),
     status: z.enum(STATUS_VALUES).optional().describe('Filter by status'),
     priority: z.enum(PRIORITY_VALUES).optional().describe('Filter by priority'),
     promoted: z.boolean().optional().describe('Filter by promoted status'),
@@ -265,7 +265,7 @@ server.tool(
 // ============================================================================
 server.tool(
   'vault_recall_context',
-  'Smart recall: retrieve the most relevant memory for a given context. Returns a ranked memory pack with summaries, decisions, plans, and other items. Use this at session start or when you need continuity.',
+  'Smart recall: retrieve the most relevant memory for a given context. Returns a ranked memory pack with summaries, decisions, plans, and other items. When scoped to a project with a query, cross_project_matches lists up to 3 strong matches from other projects. Use this at session start or when you need continuity.',
   {
     project: z.string().optional().describe('Project to search within'),
     subject: z.string().optional().describe('Subject to match against'),
@@ -294,6 +294,11 @@ server.tool(
             context_summary: pack.contextSummary ?? null,
             open_loops_note: 'Ranked/non-exhaustive: vault_recall_context.open_loops is capped and pressure-ranked. Use vault_list_open_loops or vault_count_open_loops for exhaustive loop audits.',
             top_matches: pack.topMatches.map((match) => ({
+              ...briefItem(match.item),
+              score: match.score,
+              reasons: match.reasons,
+            })),
+            cross_project_matches: (pack.crossProject || []).map((match) => ({
               ...briefItem(match.item),
               score: match.score,
               reasons: match.reasons,

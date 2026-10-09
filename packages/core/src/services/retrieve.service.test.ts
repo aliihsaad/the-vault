@@ -10,6 +10,8 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { getDatabase, initializeSchema, resetConnection, type VaultDB } from '../database/connection.js';
 import { memoryItems, projects } from '../database/schema.js';
 import { recallContext, findMemory, getLatest } from './retrieve.service.js';
+import { setEnrichmentClient } from './enrichment.service.js';
+import type { EnrichmentClient } from './openrouter-client.js';
 import { now } from '../utils/datetime.js';
 
 let db: VaultDB;
@@ -189,6 +191,117 @@ describe('recallContext ranking accuracy', () => {
   });
 });
 
+describe('recallContext cross-project matches', () => {
+  it('surfaces strong matches from other projects separately, leaving project results unchanged', async () => {
+    seedItem({ project: 'Vault Collab', title: 'Local deploy note', summary: 'Deploys run from CI.' });
+    const foreignUid = seedItem({
+      project: 'Hermes Brain',
+      title: 'GitHub two-account rule',
+      summary: 'Run gh auth switch before pushing to the work org.',
+    });
+
+    const pack = await recallContext(db, logsPath, { project: 'Vault Collab', queryText: 'gh auth switch' });
+
+    expect(pack.topMatches.every((match) => match.item.project === 'Vault Collab')).toBe(true);
+    expect(pack.crossProject?.map((match) => match.item.itemUid)).toEqual([foreignUid]);
+  });
+
+  it('ignores weak foreign matches and archived items', async () => {
+    seedItem({ project: 'Hermes Brain', title: 'Switch theme', summary: 'Toggle the dark theme.' });
+    // Real-data noise: query words appear only inside other words ("OAuth", "authority").
+    seedItem({
+      project: 'Hermes Brain',
+      title: 'Developer API OAuth fix and authority switch',
+      subject: 'OAuth authority',
+      summary: 'Fixed the OAuth callback; authority checks switch to the new gate.',
+    });
+    seedItem({
+      project: 'Hermes Brain',
+      title: 'Old GitHub two-account rule',
+      summary: 'Run gh auth switch before pushing.',
+      status: 'archived',
+    });
+
+    const pack = await recallContext(db, logsPath, { project: 'Vault Collab', queryText: 'gh auth switch' });
+
+    expect(pack.crossProject).toEqual([]);
+  });
+
+  it('adds no cross-project section for unscoped or query-less recall', async () => {
+    seedItem({ project: 'Hermes Brain', title: 'GitHub two-account rule', summary: 'Run gh auth switch first.' });
+
+    const unscoped = await recallContext(db, logsPath, { queryText: 'gh auth switch' });
+    const queryless = await recallContext(db, logsPath, { project: 'Vault Collab' });
+
+    expect(unscoped.crossProject).toEqual([]);
+    expect(queryless.crossProject).toEqual([]);
+  });
+});
+
+describe('recallContext context summary grounding', () => {
+  function mockClient(summaryReply: { text: string; finishReason?: string }, prompts: string[] = []): EnrichmentClient {
+    return {
+      isAvailable: () => true,
+      complete: async (params) => {
+        if (params.systemPrompt.includes('Rate the relevance')) {
+          return { text: '[]', model: 'mock', usage: { promptTokens: 0, completionTokens: 0 } };
+        }
+        prompts.push(`${params.systemPrompt}\n${params.userPrompt}`);
+        return { ...summaryReply, model: 'mock', usage: { promptTokens: 0, completionTokens: 0 } };
+      },
+    } as EnrichmentClient;
+  }
+
+  afterEach(() => {
+    setEnrichmentClient(null);
+  });
+
+  it('skips the summary when no memory is a strong match', async () => {
+    const prompts: string[] = [];
+    setEnrichmentClient(mockClient({ text: 'Use gh auth login to switch accounts.' }, prompts));
+    seedItem({ title: 'Unrelated deploy note', summary: 'Deploys run from CI.' });
+
+    const pack = await recallContext(db, logsPath, { project: 'Vault Collab', queryText: 'gh auth switch' });
+
+    expect(pack.contextSummary).toBeUndefined();
+    expect(prompts).toHaveLength(0);
+  });
+
+  it('grounds the summary in strong matches only and tells the model not to add knowledge', async () => {
+    const prompts: string[] = [];
+    setEnrichmentClient(mockClient({ text: 'Run gh auth switch before pushing to the work org.' }, prompts));
+    seedItem({
+      title: 'GitHub two-account rule',
+      subject: 'gh auth switch',
+      summary: 'Run gh auth switch before pushing to the work org.',
+      keywords: ['gh auth switch'],
+    });
+
+    const pack = await recallContext(db, logsPath, { project: 'Vault Collab', subject: 'gh auth switch' });
+
+    expect(pack.contextSummary).toBe('Run gh auth switch before pushing to the work org.');
+    expect(prompts[0]).toContain('ONLY');
+    expect(prompts[0]).toContain('GitHub two-account rule');
+  });
+
+  it('drops a summary the model marks as unsupported or that was cut off', async () => {
+    seedItem({
+      title: 'GitHub two-account rule',
+      subject: 'gh auth switch',
+      summary: 'Run gh auth switch before pushing to the work org.',
+      keywords: ['gh auth switch'],
+    });
+
+    setEnrichmentClient(mockClient({ text: 'NONE' }));
+    const none = await recallContext(db, logsPath, { project: 'Vault Collab', subject: 'gh auth switch' });
+    expect(none.contextSummary).toBeUndefined();
+
+    setEnrichmentClient(mockClient({ text: 'Run gh auth switch before', finishReason: 'length' }));
+    const cut = await recallContext(db, logsPath, { project: 'Vault Collab', subject: 'gh auth switch' });
+    expect(cut.contextSummary).toBeUndefined();
+  });
+});
+
 describe('findMemory and getLatest project resolution', () => {
   it('findMemory resolves slug-form project names', () => {
     seedItem({ project: 'Vault Collab', title: 'Findable' });
@@ -197,6 +310,28 @@ describe('findMemory and getLatest project resolution', () => {
 
     expect(results).toHaveLength(1);
     expect(results[0]?.title).toBe('Findable');
+  });
+
+  it('findMemory keywords match any keyword, not all of them', () => {
+    seedItem({ title: 'Account switching', keywords: ['gh account'] });
+    seedItem({ title: 'Unrelated', keywords: ['supabase'] });
+
+    const results = findMemory(db, { keywords: ['gh auth switch', 'gh account', 'github account'] });
+
+    expect(results.map((item) => item.title)).toEqual(['Account switching']);
+  });
+
+  it('findMemory keywords also search title, subject, summary and content text', () => {
+    seedItem({
+      project: 'Hermes Brain',
+      title: 'GitHub two-account rule',
+      summary: 'Run gh auth switch before pushing to the work org.',
+    });
+    seedItem({ title: 'Unrelated', summary: 'Nothing about GitHub accounts here.' });
+
+    const results = findMemory(db, { keywords: ['GH AUTH SWITCH'] });
+
+    expect(results.map((item) => item.title)).toEqual(['GitHub two-account rule']);
   });
 
   it('getLatest resolves slug-form project names', () => {

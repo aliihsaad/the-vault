@@ -4,7 +4,11 @@ import { join, resolve } from 'node:path';
 import { graphifyBuilds, graphifyProjectState } from '../database/schema.js';
 import { now } from '../utils/datetime.js';
 import { slugify } from '../rules/naming.js';
-import { GRAPHIFY_BUILD_STALE_MS } from '../rules/graphify.js';
+import {
+  GRAPHIFY_BUILD_STALE_MS,
+  GRAPHIFY_IGNORE_FILENAME,
+  detectGraphifyMultiProjectRoot,
+} from '../rules/graphify.js';
 import { getGraphifyProjectPaths } from './graphify-paths.service.js';
 import {
   getProjectWorkspace,
@@ -164,6 +168,13 @@ export function getGraphifyProjectStatus(
     };
   }
 
+  const childProjects = detectGraphifyMultiProjectRoot(sourceRoot);
+  const message = childProjects.length > 0
+    ? `Graphify source root holds ${childProjects.length} separate projects (${childProjects.join(', ')}), `
+      + `so the graph will index each of them and duplicate nodes. Point the source root at one checkout, `
+      + `or list the others in ${GRAPHIFY_IGNORE_FILENAME}.`
+    : 'Graphify source root is configured and ready to build.';
+
   return {
     project: state?.project ?? normalizedProject,
     enabled,
@@ -174,7 +185,7 @@ export function getGraphifyProjectStatus(
     buildEligible: true,
     buildBlockedReason: null,
     uiState: 'ready',
-    message: 'Graphify source root is configured. Manual graph builds can be enabled in a later phase.',
+    message,
     state,
   };
 }

@@ -1,5 +1,5 @@
 import { existsSync, readFileSync, statSync } from 'node:fs';
-import { isAbsolute, relative, resolve } from 'node:path';
+import { basename, isAbsolute, relative, resolve } from 'node:path';
 import { getGraphifyProjectPaths } from './graphify-paths.service.js';
 import type {
   GraphifyArtifactDiscoveryResult,
@@ -10,8 +10,16 @@ import type {
   GraphifyHtmlArtifactResult,
 } from '../types/graphify.js';
 
-const DEFAULT_JSON_BUDGET_BYTES = 8 * 1024 * 1024;
-const DEFAULT_REPORT_BUDGET_BYTES = 128 * 1024;
+// Read budgets guard process memory only; tool output is budgeted separately.
+// Real project graphs reach tens of MB (a 22k-node graph is ~34 MB) and reports
+// several hundred KB, so the defaults must comfortably cover them.
+const DEFAULT_JSON_BUDGET_BYTES = 64 * 1024 * 1024;
+const DEFAULT_REPORT_BUDGET_BYTES = 2 * 1024 * 1024;
+
+// The most recently parsed graph.json is reused while the file is unchanged, so
+// repeated queries don't re-read and re-parse a large graph on every call. One
+// entry only: a parsed large graph holds a few hundred MB of heap.
+let jsonCache: { path: string; bytes: number; mtimeMs: number; data: unknown } | null = null;
 
 export interface GraphifyArtifactReadOptions {
   path?: string;
@@ -90,16 +98,27 @@ export function readGraphifyArtifactJson(
 ): GraphifyArtifactJsonReadResult {
   const path = resolveGraphifyArtifactPath(vaultRoot, project, options.path ?? 'graph.json');
   const budget = options.maxBytes ?? DEFAULT_JSON_BUDGET_BYTES;
+  // Stat before reading so a file replaced mid-read can never be cached under its new mtime.
+  const stat = existsSync(path) ? statSync(path) : null;
+  if (
+    stat
+    && stat.size <= budget
+    && jsonCache?.path === path
+    && jsonCache.bytes === stat.size
+    && jsonCache.mtimeMs === stat.mtimeMs
+  ) {
+    return { status: 'available', path, bytes: stat.size, maxBytes: budget, data: jsonCache.data };
+  }
+
   const budgeted = readBudgetedFile(path, budget);
   if (budgeted.status !== 'available') {
     return budgeted;
   }
 
   try {
-    return {
-      ...budgeted,
-      data: JSON.parse(budgeted.text) as unknown,
-    };
+    const data = JSON.parse(budgeted.text) as unknown;
+    jsonCache = stat ? { path, bytes: stat.size, mtimeMs: stat.mtimeMs, data } : null;
+    return { status: 'available', path, bytes: budgeted.bytes, maxBytes: budget, data };
   } catch {
     return {
       status: 'invalid',
@@ -212,7 +231,8 @@ function readBudgetedFile(
       path,
       bytes,
       maxBytes,
-      message: 'Graphify artifact exceeds the read budget.',
+      message: `Graphify ${basename(path)} is ${bytes} bytes, over the ${maxBytes}-byte read budget. `
+        + `Retry with max_bytes of at least ${bytes}.`,
     };
   }
 

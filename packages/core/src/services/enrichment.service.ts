@@ -27,30 +27,11 @@ export function isEnrichmentAvailable(): boolean {
 
 // ---------------------------------------------------------------------------
 // Save-time enrichment functions
+//
+// The author's summary is the source of truth and is never rewritten here.
+// An earlier AI "polish" step overwrote summaries with model output that was
+// cut off at max_tokens, permanently losing the original text.
 // ---------------------------------------------------------------------------
-
-/**
- * Clean and improve a summary text using AI.
- * Returns original text on failure.
- */
-export async function cleanSummary(text: string): Promise<string> {
-  if (!isEnrichmentAvailable() || !text || text.length < 50) {
-    return text;
-  }
-
-  try {
-    const result = await client!.complete({
-      systemPrompt: 'You are a technical editor. Polish the following summary for clarity and searchability. Preserve all technical details and meaning. Output ONLY the improved text, nothing else.',
-      userPrompt: text,
-      maxTokens: 500,
-      temperature: 0.2,
-      timeoutMs: 5000,
-    });
-    return result.text || text;
-  } catch {
-    return text;
-  }
-}
 
 /**
  * Suggest tags for a memory item using AI.
@@ -221,8 +202,9 @@ export async function reRankWithLLM(
 }
 
 /**
- * Generate a 2-3 sentence executive summary of recalled context.
- * Returns null on failure.
+ * Generate a 2-3 sentence summary of recalled context, grounded strictly in the
+ * given items. Callers pass only strong matches. Returns null on failure, when
+ * the model finds nothing relevant, or when its reply was cut off.
  */
 export async function generateContextSummary(
   query: { project?: string; subject?: string; queryText?: string },
@@ -235,19 +217,25 @@ export async function generateContextSummary(
   const queryDescription = [query.queryText, query.subject].filter(Boolean).join(' — ');
   const itemSummaries = topItems
     .slice(0, 5)
-    .map((item) => `[${item.memoryType}] ${item.title}: ${item.summary.slice(0, 150)}`)
+    .map((item) => `[${item.memoryType}] ${item.title}: ${item.summary.slice(0, 400)}`)
     .join('\n');
 
   try {
     const result = await client!.complete({
-      systemPrompt: 'Summarize the recalled memory context in 2-3 concise sentences. Focus on what is most relevant to the query. This summary helps an AI assistant quickly understand prior context.',
+      systemPrompt: 'Summarize the recalled memory items in 2-3 concise sentences, focusing on what answers the query. '
+        + 'Use ONLY facts stated in the items. Do not add advice, commands, or general knowledge that the items do not contain. '
+        + 'If none of the items are relevant to the query, reply with exactly NONE.',
       userPrompt: `Query: ${queryDescription || 'general recall'}\n\nRecalled items:\n${itemSummaries}`,
       maxTokens: 200,
-      temperature: 0.3,
+      temperature: 0,
       timeoutMs: 3000,
     });
 
-    return result.text || null;
+    const text = result.text.trim();
+    if (!text || text === 'NONE' || result.finishReason === 'length') {
+      return null;
+    }
+    return text;
   } catch {
     return null;
   }
@@ -277,18 +265,12 @@ export async function enrichAfterSave(
     const fullText = [item.title, item.subject, item.summary, item.content].filter(Boolean).join('\n');
     const updates: Partial<MemoryItem> = {};
 
-    // Run enrichments in parallel
-    const [cleanedSummary, aiTags, aiType, shouldPromote] = await Promise.all([
-      cleanSummary(item.summary),
+    // Run enrichments in parallel. Summaries are deliberately left untouched.
+    const [aiTags, aiType, shouldPromote] = await Promise.all([
       suggestTags(fullText, item.tags),
       classifyMemoryType(fullText, item.memoryType),
       suggestPromotion(item.title, item.summary, item.memoryType),
     ]);
-
-    // Apply cleaned summary if different
-    if (cleanedSummary && cleanedSummary !== item.summary) {
-      updates.summary = cleanedSummary;
-    }
 
     // Merge AI-suggested tags with existing
     if (aiTags.length > 0) {

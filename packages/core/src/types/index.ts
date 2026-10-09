@@ -164,6 +164,11 @@ export interface MemoryPack {
   topScore: number;
   contextSummary?: string;
   /**
+   * Strong query matches from OTHER projects when recall is project-scoped.
+   * Kept apart from topMatches so project results are never diluted.
+   */
+  crossProject?: RecallMatch[];
+  /**
    * Active open loops scoped to the recall query. Skills must surface these
    * before answering and prompt the user to resolve, snooze, or acknowledge
    * each. Sorted high → low by bucket then score. See plan

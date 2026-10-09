@@ -3,7 +3,7 @@ import { chmod, cp, lstat, mkdir, readdir, rm } from 'node:fs/promises';
 import { dirname, join, relative, resolve } from 'node:path';
 import { now } from '../utils/datetime.js';
 import { slugify } from '../rules/naming.js';
-import { GRAPHIFY_BUILD_STALE_MS, isGraphifyExcludedSourcePath } from '../rules/graphify.js';
+import { GRAPHIFY_BUILD_STALE_MS, createGraphifySourceFilter } from '../rules/graphify.js';
 import { exportGraphifyProjectCorpus } from './graphify-corpus.service.js';
 import { getGraphifyRuntimeConfig } from './graphify-config.service.js';
 import { assertGraphifySemanticBuildAllowed } from './graphify-quality.service.js';
@@ -196,7 +196,11 @@ async function runBuildGraphifyProjectGraph(
 
   await mkdir(paths.logsRoot, { recursive: true });
   await mkdir(paths.artifactRoot, { recursive: true });
-  exportGraphifyProjectCorpus(db, vaultRoot, { project: status.project, buildMode }, workspaceRegistry);
+  const corpus = exportGraphifyProjectCorpus(db, vaultRoot, { project: status.project, buildMode }, workspaceRegistry);
+  // The graph reflects whatever was checked out at build time, not the remote branch.
+  const sourceGit = corpus.sourceGit
+    ? `${corpus.sourceGit.branch ?? '(detached HEAD)'} @ ${corpus.sourceGit.head ?? 'unknown'}`
+    : 'not a git checkout';
   // Stage under a project-named directory so Graphify labels artifacts/reports with
   // the project (it derives the label from the corpus directory basename) instead of
   // a generic "graphify-input".
@@ -270,6 +274,7 @@ async function runBuildGraphifyProjectGraph(
       logPath,
       latestLogPath: paths.latestLog,
       processResult,
+      sourceGit,
       errorMessage,
     });
     return finishBuild(db, {
@@ -325,6 +330,7 @@ async function runBuildGraphifyProjectGraph(
       logPath,
       latestLogPath: paths.latestLog,
       processResult,
+      sourceGit,
       errorMessage,
     });
     return finishBuild(db, {
@@ -353,6 +359,7 @@ async function runBuildGraphifyProjectGraph(
     logPath,
     latestLogPath: paths.latestLog,
     processResult,
+    sourceGit,
     errorMessage: null,
   });
   return finishBuild(db, {
@@ -431,6 +438,7 @@ function writeBuildLog(input: {
   logPath: string;
   latestLogPath: string;
   processResult: GraphifyBuildProcessResult;
+  sourceGit: string;
   errorMessage: string | null;
 }): void {
   const lines = [
@@ -438,6 +446,7 @@ function writeBuildLog(input: {
     `Started: ${input.startedAt}`,
     `Completed: ${input.completedAt}`,
     `Command: ${[input.command, ...input.args].join(' ')}`,
+    `Source git: ${input.sourceGit}`,
     `Exit Code: ${input.processResult.exitCode}`,
     '',
     'STDOUT:',
@@ -467,9 +476,10 @@ async function prepareGraphifyBuildInput(
 
   await removeDirResilient(inputRoot);
   await mkdir(inputRoot, { recursive: true });
+  const isExcluded = createGraphifySourceFilter(sourceRoot);
   await cp(sourceRoot, inputSourceRoot, {
     recursive: true,
-    filter: (sourcePath) => shouldCopySourcePath(sourceRoot, sourcePath),
+    filter: (sourcePath) => shouldCopySourcePath(sourceRoot, sourcePath, isExcluded),
   });
   if (existsSync(memoryExportRoot)) {
     await cp(memoryExportRoot, inputMemoryRoot, { recursive: true });
@@ -539,12 +549,16 @@ async function clearReadonlyRecursive(target: string): Promise<void> {
   }
 }
 
-function shouldCopySourcePath(sourceRoot: string, sourcePath: string): boolean {
+function shouldCopySourcePath(
+  sourceRoot: string,
+  sourcePath: string,
+  isExcluded: (relativePath: string) => boolean,
+): boolean {
   const relativePath = relative(sourceRoot, sourcePath).replace(/\\/g, '/');
   if (!relativePath) {
     return true;
   }
-  return !isGraphifyExcludedSourcePath(relativePath);
+  return !isExcluded(relativePath);
 }
 
 function createBuildId(project: string): string {

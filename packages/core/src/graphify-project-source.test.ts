@@ -1,7 +1,7 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { execFileSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
-import { mkdir, mkdtemp, readdir, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
 import { homedir, tmpdir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
 import { Vault } from './index.js';
@@ -104,9 +104,28 @@ describe('Graphify project source roots and build eligibility', () => {
       uiState: 'ready',
       buildEligible: true,
       buildBlockedReason: null,
-      message: 'Graphify source root is configured. Manual graph builds can be enabled in a later phase.',
+      message: 'Graphify source root is configured and ready to build.',
     }));
     expect(vault.getGraphifyProjectState('The Vault')?.sourceRoot).toBe(resolve(sourceRoot));
+  });
+
+  it('warns when the source root holds several separate checkouts', async () => {
+    // A plain folder (no .git) holding a clone and an extracted archive of the same repo.
+    const sourceRoot = await mkdtemp(join(tmpdir(), 'vault-graphify-multi-root-'));
+    try {
+      await mkdir(join(sourceRoot, 'Work', '.git'), { recursive: true });
+      await mkdir(join(sourceRoot, 'lawyeah-main'));
+      await writeFile(join(sourceRoot, 'lawyeah-main', 'package.json'), '{}');
+
+      vault.setGraphifyProjectSourceRoot('The Vault', sourceRoot);
+      const status = vault.getGraphifyProjectStatus('The Vault');
+
+      expect(status.buildEligible).toBe(true);
+      expect(status.message).toContain('holds 2 separate projects (lawyeah-main, Work)');
+      expect(status.message).toContain('.graphifyignore');
+    } finally {
+      await rm(sourceRoot, { recursive: true, force: true });
+    }
   });
 
   it('rejects relative and missing folders before storing a Graphify source root', () => {

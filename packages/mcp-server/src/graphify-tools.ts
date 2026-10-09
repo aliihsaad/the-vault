@@ -206,7 +206,7 @@ export function registerGraphifyMcpTools(
       query: z.string().describe('Graph search question or symbol/file text'),
       max_nodes: z.number().optional().describe('Maximum graph nodes to return'),
       max_edges: z.number().optional().describe('Maximum graph edges to return'),
-      max_bytes: z.number().optional().describe('Maximum graph.json bytes to read'),
+      max_bytes: z.number().optional().describe('Maximum graph.json bytes to read (default 64 MB; a tooLarge result states the size needed)'),
     },
     async (args) => graphJsonResult(() => vault.queryGraphifyProjectGraph(
         readRequiredString(args.project, 'project'),
@@ -235,7 +235,7 @@ export function registerGraphifyMcpTools(
       project: z.string().describe('Project name'),
       node: z.string().describe('Node id, label, or path'),
       max_neighbors: z.number().optional().describe('Maximum direct neighbors to return'),
-      max_bytes: z.number().optional().describe('Maximum graph.json bytes to read'),
+      max_bytes: z.number().optional().describe('Maximum graph.json bytes to read (default 64 MB; a tooLarge result states the size needed)'),
     },
     async (args) => graphJsonResult(() => vault.getGraphifyNode(
         readRequiredString(args.project, 'project'),
@@ -265,7 +265,7 @@ export function registerGraphifyMcpTools(
       depth: z.number().optional().describe('Neighbor traversal depth (default: 1)'),
       max_nodes: z.number().optional().describe('Maximum neighbor nodes to return'),
       max_edges: z.number().optional().describe('Maximum neighbor edges to return'),
-      max_bytes: z.number().optional().describe('Maximum graph.json bytes to read'),
+      max_bytes: z.number().optional().describe('Maximum graph.json bytes to read (default 64 MB; a tooLarge result states the size needed)'),
     },
     async (args) => graphJsonResult(() => vault.getGraphifyNeighbors(
         readRequiredString(args.project, 'project'),
@@ -297,7 +297,7 @@ export function registerGraphifyMcpTools(
       from: z.string().describe('Starting node id, label, or path'),
       to: z.string().describe('Ending node id, label, or path'),
       max_depth: z.number().optional().describe('Maximum traversal depth (default: 8)'),
-      max_bytes: z.number().optional().describe('Maximum graph.json bytes to read'),
+      max_bytes: z.number().optional().describe('Maximum graph.json bytes to read (default 64 MB; a tooLarge result states the size needed)'),
     },
     async (args) => graphJsonResult(() => vault.getGraphifyShortestPath(
         readRequiredString(args.project, 'project'),
@@ -328,7 +328,7 @@ export function registerGraphifyMcpTools(
       query: z.string().describe('Change, file, symbol, or impact question'),
       max_files: z.number().optional().describe('Maximum likely files/tests to return'),
       max_nodes: z.number().optional().describe('Maximum central nodes to return'),
-      max_bytes: z.number().optional().describe('Maximum graph.json bytes to read'),
+      max_bytes: z.number().optional().describe('Maximum graph.json bytes to read (default 64 MB; a tooLarge result states the size needed)'),
     },
     async (args) => graphJsonResult(() => vault.explainGraphifyImpact(
         readRequiredString(args.project, 'project'),
@@ -364,8 +364,8 @@ export function registerGraphifyMcpTools(
       max_files: z.number().optional().describe('Maximum suggested files/tests'),
       max_graph_nodes: z.number().optional().describe('Maximum Graphify nodes'),
       max_graph_edges: z.number().optional().describe('Maximum Graphify edges'),
-      max_report_bytes: z.number().optional().describe('Maximum GRAPH_REPORT.md bytes to read'),
-      max_graph_bytes: z.number().optional().describe('Maximum graph.json bytes to read'),
+      max_report_bytes: z.number().optional().describe('Maximum characters of GRAPH_REPORT.md snippets to return'),
+      max_graph_bytes: z.number().optional().describe('Maximum graph.json bytes to read (default 64 MB)'),
     },
     async (args) => jsonResult(async () => formatRecallWithGraphContext(await vault.recallWithGraphContext({
       project: readRequiredString(args.project, 'project'),

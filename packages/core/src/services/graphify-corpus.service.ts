@@ -10,7 +10,7 @@ import {
 } from 'node:fs';
 import { join, relative, resolve } from 'node:path';
 import matter from 'gray-matter';
-import { isGraphifyExcludedSourcePath } from '../rules/graphify.js';
+import { createGraphifySourceFilter, isGraphifyExcludedSourcePath } from '../rules/graphify.js';
 import { getGraphifyRuntimeConfig } from './graphify-config.service.js';
 import { getGraphifyProjectStatus } from './graphify-project.service.js';
 import { getGraphifyProjectPaths } from './graphify-paths.service.js';
@@ -24,6 +24,7 @@ import type {
   GraphifyArtifactPaths,
   GraphifyCorpusExportResult,
   GraphifyMemoryExportEntry,
+  GraphifySourceGitHead,
   GraphifySourceManifest,
 } from '../types/graphify.js';
 
@@ -67,6 +68,7 @@ export function exportGraphifyProjectCorpus(
   const includePatterns = normalizeOrderedValues(input.includePatterns ?? DEFAULT_INCLUDE_PATTERNS);
   const excludePatterns = normalizeOrderedValues(input.excludePatterns ?? DEFAULT_EXCLUDE_PATTERNS);
   const sourceSnapshot = hashSourceRoot(sourceRoot);
+  const sourceGit = readSourceGitHead(sourceRoot);
 
   assertManagedPath(paths.corpusRoot, vaultRoot);
   assertManagedPath(paths.memoryExportRoot, vaultRoot);
@@ -115,6 +117,7 @@ export function exportGraphifyProjectCorpus(
       root: sourceRoot,
       fileCount: sourceSnapshot.fileCount,
       hash: sourceSnapshot.hash,
+      git: sourceGit,
     },
     memoryExport: {
       included: includeMemories,
@@ -138,6 +141,7 @@ export function exportGraphifyProjectCorpus(
     project: status.project,
     projectSlug: paths.projectSlug,
     sourceRoot,
+    sourceGit,
     corpusRoot: paths.corpusRoot,
     manifestPath: paths.sourceManifest,
     memoryExportRoot: paths.memoryExportRoot,
@@ -300,6 +304,7 @@ function hashSourceRoot(sourceRoot: string): { hash: string; fileCount: number }
 
 function listSourceFiles(sourceRoot: string): string[] {
   const files: string[] = [];
+  const isExcluded = createGraphifySourceFilter(sourceRoot);
   visit(sourceRoot);
   return files.sort((left, right) => left.localeCompare(right));
 
@@ -310,7 +315,7 @@ function listSourceFiles(sourceRoot: string): string[] {
     for (const entry of entries) {
       const fullPath = join(directory, entry.name);
       const relativePath = relative(sourceRoot, fullPath).replace(/\\/g, '/');
-      if (isIgnoredOrSecretPath(relativePath)) {
+      if (isExcluded(relativePath)) {
         continue;
       }
 
@@ -325,6 +330,49 @@ function listSourceFiles(sourceRoot: string): string[] {
         }
       }
     }
+  }
+}
+
+/**
+ * Read the branch and commit checked out in a source root straight from `.git`,
+ * without running git. Handles worktrees (`.git` file with `gitdir:`) and packed
+ * refs. Returns null when the root is not a git checkout.
+ */
+export function readSourceGitHead(sourceRoot: string): GraphifySourceGitHead | null {
+  try {
+    const dotGit = join(sourceRoot, '.git');
+    if (!existsSync(dotGit)) {
+      return null;
+    }
+    const gitDir = lstatSync(dotGit).isFile()
+      ? resolve(sourceRoot, readFileSync(dotGit, 'utf8').replace(/^gitdir:\s*/, '').trim())
+      : dotGit;
+    // Worktrees keep shared refs in the common git dir.
+    const commonDirFile = join(gitDir, 'commondir');
+    const commonDir = existsSync(commonDirFile)
+      ? resolve(gitDir, readFileSync(commonDirFile, 'utf8').trim())
+      : gitDir;
+
+    const headText = readFileSync(join(gitDir, 'HEAD'), 'utf8').trim();
+    const ref = headText.startsWith('ref:') ? headText.slice(4).trim() : null;
+    if (!ref) {
+      return { branch: null, head: headText || null };
+    }
+
+    const branch = ref.replace(/^refs\/heads\//, '');
+    for (const dir of [gitDir, commonDir]) {
+      const refPath = join(dir, ref);
+      if (existsSync(refPath)) {
+        return { branch, head: readFileSync(refPath, 'utf8').trim() || null };
+      }
+    }
+    const packedRefs = join(commonDir, 'packed-refs');
+    const packed = existsSync(packedRefs)
+      ? readFileSync(packedRefs, 'utf8').split(/\r?\n/).find((line) => line.endsWith(` ${ref}`))
+      : undefined;
+    return { branch, head: packed?.split(' ')[0] ?? null };
+  } catch {
+    return null;
   }
 }
 

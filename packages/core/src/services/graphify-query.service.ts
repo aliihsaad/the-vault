@@ -345,8 +345,24 @@ function loadGraph(
       fallbackReason: null,
       warnings,
     },
-    graph: parseGraph(artifact.data),
+    graph: getParsedGraph(artifact.data),
   };
+}
+
+// The artifact reader returns the same data object while graph.json is unchanged,
+// so the normalized graph is cached per data object and dropped along with it.
+const parsedGraphs = new WeakMap<object, ParsedGraph>();
+
+function getParsedGraph(data: unknown): ParsedGraph {
+  if (!data || typeof data !== 'object') {
+    return parseGraph(data);
+  }
+  let graph = parsedGraphs.get(data);
+  if (!graph) {
+    graph = parseGraph(data);
+    parsedGraphs.set(data, graph);
+  }
+  return graph;
 }
 
 function parseGraph(data: unknown): ParsedGraph {
@@ -595,9 +611,9 @@ function readImpactReportSnippets(
   queryText: string,
   maxReportBytes: number | undefined,
 ): { snippets: GraphifyReportSnippet[]; warnings: string[]; truncated: boolean } {
-  const report = readGraphifyArtifactReport(vaultRoot, project, {
-    maxBytes: normalizeLimit(maxReportBytes, DEFAULT_MAX_REPORT_BYTES),
-  });
+  // maxReportBytes budgets the snippets returned, not the read: real reports are
+  // hundreds of KB, so the read uses the artifact service's default safety cap.
+  const report = readGraphifyArtifactReport(vaultRoot, project);
   if (report.status !== 'available') {
     return {
       snippets: [],
@@ -606,17 +622,19 @@ function readImpactReportSnippets(
     };
   }
 
-  const snippets = selectReportSnippets(report.text, queryText)
-    .slice(0, DEFAULT_MAX_REPORT_SNIPPETS)
-    .map((snippet) => {
-      const text = truncateText(snippet.text, DEFAULT_REPORT_SNIPPET_CHARS);
-      return {
-        source: 'GRAPH_REPORT.md' as const,
-        heading: snippet.heading,
-        text,
-        truncated: text.length < snippet.text.length,
-      };
+  let remainingChars = normalizeLimit(maxReportBytes, DEFAULT_MAX_REPORT_BYTES);
+  const snippets: GraphifyReportSnippet[] = [];
+  for (const snippet of selectReportSnippets(report.text, queryText).slice(0, DEFAULT_MAX_REPORT_SNIPPETS)) {
+    if (remainingChars <= 0) break;
+    const text = truncateText(snippet.text, Math.min(DEFAULT_REPORT_SNIPPET_CHARS, remainingChars));
+    remainingChars -= text.length;
+    snippets.push({
+      source: 'GRAPH_REPORT.md',
+      heading: snippet.heading,
+      text,
+      truncated: text.length < snippet.text.length,
     });
+  }
 
   return {
     snippets,

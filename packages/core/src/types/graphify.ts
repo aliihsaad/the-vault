@@ -207,6 +207,8 @@ export interface GraphifySourceManifest {
     root: string;
     fileCount: number;
     hash: string;
+    /** Branch and commit checked out in the source root when the corpus was exported. */
+    git?: GraphifySourceGitHead | null;
   };
   memoryExport: {
     included: boolean;
@@ -224,10 +226,18 @@ export interface GraphifySourceManifest {
   };
 }
 
+export interface GraphifySourceGitHead {
+  /** Branch name, or null for a detached HEAD. */
+  branch: string | null;
+  /** Commit SHA, or null when it cannot be resolved. */
+  head: string | null;
+}
+
 export interface GraphifyCorpusExportResult {
   project: string;
   projectSlug: string;
   sourceRoot: string;
+  sourceGit: GraphifySourceGitHead | null;
   corpusRoot: string;
   manifestPath: string;
   memoryExportRoot: string;

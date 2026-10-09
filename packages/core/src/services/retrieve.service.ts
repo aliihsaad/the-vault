@@ -3,7 +3,7 @@
 // Find, filter, recall, and get memory items.
 // ============================================================================
 
-import { eq, and, like, desc, asc, gte, lte, sql, or, inArray, notInArray } from 'drizzle-orm';
+import { eq, ne, and, like, desc, asc, gte, lte, sql, or, inArray, notInArray } from 'drizzle-orm';
 import { existsSync, unlinkSync } from 'node:fs';
 import { memoryItems } from '../database/schema.js';
 import {
@@ -14,7 +14,12 @@ import {
   ResolveLoopBatchInputSchema,
   ResolveLoopInputSchema,
 } from '../rules/validation.js';
-import { rankCandidates } from './ranking.service.js';
+import {
+  phraseRelevanceScore,
+  queryHasRelevanceInputs,
+  rankCandidates,
+  relevanceScore,
+} from './ranking.service.js';
 import {
   readMemoryFile,
   archiveFile,
@@ -184,14 +189,23 @@ export function findMemory(db: DB, query: FindMemoryQuery): MemoryItem[] {
     conditions.push(lte(memoryItems.createdAt, validated.dateTo));
   }
 
-  // Keyword filter: match any keyword in JSON array
-  if (validated.keywords && validated.keywords.length > 0) {
-    for (const kw of validated.keywords) {
-      conditions.push(like(memoryItems.keywordsJson, `%${kw.toLowerCase()}%`));
-    }
+  // Keyword filter: an item matches if ANY keyword appears as a substring of its
+  // keywords, title, subject, summary or content (SQLite LIKE is case-insensitive).
+  const keywordTerms = (validated.keywords ?? []).map((kw) => kw.trim()).filter(Boolean);
+  if (keywordTerms.length > 0) {
+    conditions.push(or(...keywordTerms.map((kw) => {
+      const pattern = `%${kw}%`;
+      return or(
+        like(memoryItems.keywordsJson, pattern),
+        like(memoryItems.title, pattern),
+        like(memoryItems.subject, pattern),
+        like(memoryItems.summary, pattern),
+        like(memoryItems.content, pattern),
+      );
+    })));
   }
 
-  // Tag filter: match any tag in JSON array
+  // Tag filter: every listed tag must appear in the JSON array
   if (validated.tags && validated.tags.length > 0) {
     for (const tag of validated.tags) {
       conditions.push(like(memoryItems.tagsJson, `%${tag.toLowerCase()}%`));
@@ -223,6 +237,15 @@ export function findMemory(db: DB, query: FindMemoryQuery): MemoryItem[] {
 // Tuned so weak keyword overlaps don't reintroduce "any access = immortal".
 // See decision vm_ycp9qL_0Vui9Fh9X.
 const RECALL_BUMP_THRESHOLD = 20;
+
+// Query-relevance points an item needs before the context summary may use it,
+// e.g. a partial subject match, two keyword hits, or the phrase in its summary.
+const CONTEXT_SUMMARY_MIN_RELEVANCE = 20;
+
+// Cross-project matches need a phrase-level hit (at least the whole query phrase
+// in a summary) and are capped, so other projects never flood a scoped recall.
+const CROSS_PROJECT_MIN_PHRASE_RELEVANCE = 15;
+const CROSS_PROJECT_CAP = 3;
 
 // ---------------------------------------------------------------------------
 // recallContext — Smart recall with ranking
@@ -330,6 +353,31 @@ export async function recallContext(
   expandedPack.proactive = proactive;
   expandedPack.topScore = expandedPack.topMatches.length > 0 ? expandedPack.topMatches[0].score : 0;
 
+  // Step 5-cross: a scoped recall still shows the few strongest query matches
+  // from other projects (e.g. a rule saved under a work project while recalling a
+  // brain), ranked by phrase-level relevance only, in their own section.
+  expandedPack.crossProject = [];
+  if (projectName && queryHasRelevanceInputs(validated)) {
+    const shownUids = new Set(expandedPack.topMatches.map((match) => match.item.itemUid));
+    const foreignItems = db
+      .select()
+      .from(memoryItems)
+      .where(and(ne(memoryItems.project, projectName), recallableState))
+      .all()
+      .map(mapRow)
+      .filter((item) => !shownUids.has(item.itemUid));
+    expandedPack.crossProject = rankCandidates(foreignItems, { ...validated, project: undefined })
+      .map((candidate) => ({
+        candidate,
+        phrase: phraseRelevanceScore(candidate.signals),
+        relevance: relevanceScore(candidate.signals),
+      }))
+      .filter(({ phrase }) => phrase >= CROSS_PROJECT_MIN_PHRASE_RELEVANCE)
+      .sort((left, right) => right.phrase - left.phrase || right.relevance - left.relevance)
+      .slice(0, CROSS_PROJECT_CAP)
+      .map(({ candidate }) => toRecallMatch(candidate.score, candidate.signals, candidate.item));
+  }
+
   // Step 5a: Surface open loops scoped to the recall query so skills can
   // close-the-loop on every recall. See plan vm_-wkwx67j33XDx2aE Step 3.
   // Cap to avoid swamping recall responses; skills only need the most
@@ -356,11 +404,21 @@ export async function recallContext(
     }
   }
 
-  // Step 5b: AI context summary
-  if (isEnrichmentAvailable()) {
+  // Step 5b: AI context summary, grounded only in items that actually match the
+  // query. Gates on query-relevance signals (not project/promoted/recency boosts)
+  // from before LLM re-ranking, which rescales scores so the top item always looks
+  // strong. With no real match the model would fill the gap with general
+  // knowledge, so no summary is produced. Project-only recall summarizes the top items.
+  const groundingCandidates = queryHasRelevanceInputs(validated)
+    ? topCandidates.filter((candidate) => relevanceScore(candidate.signals) >= CONTEXT_SUMMARY_MIN_RELEVANCE)
+    : topCandidates;
+  const strongUids = new Set(groundingCandidates.map((candidate) => candidate.item.itemUid));
+  const groundingItems = expandedPack.topMatches
+    .map((match) => match.item)
+    .filter((item) => strongUids.has(item.itemUid));
+  if (isEnrichmentAvailable() && groundingItems.length > 0) {
     try {
-      const allItems = expandedPack.topMatches.map((m) => m.item);
-      expandedPack.contextSummary = await generateContextSummary(validated, allItems) ?? undefined;
+      expandedPack.contextSummary = await generateContextSummary(validated, groundingItems) ?? undefined;
     } catch {
       // Silent fallback
     }

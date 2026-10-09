@@ -105,11 +105,15 @@ describe('Graphify artifact gateway', () => {
         path: paths.graphJson,
         data: { nodes: [{ id: 'a' }], edges: [] },
       }));
-      expect(readGraphifyArtifactJson(vaultRoot, 'The Vault', { maxBytes: 8 })).toEqual(expect.objectContaining({
+      const tooLarge = readGraphifyArtifactJson(vaultRoot, 'The Vault', { maxBytes: 8 });
+      expect(tooLarge).toEqual(expect.objectContaining({
         status: 'tooLarge',
         path: paths.graphJson,
         maxBytes: 8,
       }));
+      // The message tells the caller exactly what budget to retry with.
+      const graphBytes = (await readFile(paths.graphJson)).length;
+      expect(tooLarge.status === 'tooLarge' && tooLarge.message).toContain(`max_bytes of at least ${graphBytes}`);
 
       expect(readGraphifyArtifactReport(vaultRoot, 'The Vault', { maxBytes: 1024 })).toEqual(expect.objectContaining({
         status: 'available',

@@ -318,9 +318,9 @@ function readReportSnippets(
   queryText: string,
   limits: GraphifyRecallLimits,
 ): { snippets: GraphifyReportSnippet[]; warnings: string[]; truncated: boolean } {
-  const report = source.readGraphifyArtifactReport(project, {
-    maxBytes: limits.maxReportBytes,
-  });
+  // maxReportBytes budgets the snippets returned, not the read: real reports are
+  // hundreds of KB, so the read uses the artifact service's default safety cap.
+  const report = source.readGraphifyArtifactReport(project);
   if (report.status !== 'available') {
     return {
       snippets: [],
@@ -329,17 +329,19 @@ function readReportSnippets(
     };
   }
 
-  const snippets = selectReportSnippets(report.text, queryText)
-    .slice(0, DEFAULT_MAX_REPORT_SNIPPETS)
-    .map((snippet) => {
-      const text = truncateText(snippet.text, DEFAULT_REPORT_SNIPPET_CHARS);
-      return {
-        source: 'GRAPH_REPORT.md' as const,
-        heading: snippet.heading,
-        text,
-        truncated: text.length < snippet.text.length,
-      };
+  let remainingChars = limits.maxReportBytes;
+  const snippets: GraphifyReportSnippet[] = [];
+  for (const snippet of selectReportSnippets(report.text, queryText).slice(0, DEFAULT_MAX_REPORT_SNIPPETS)) {
+    if (remainingChars <= 0) break;
+    const text = truncateText(snippet.text, Math.min(DEFAULT_REPORT_SNIPPET_CHARS, remainingChars));
+    remainingChars -= text.length;
+    snippets.push({
+      source: 'GRAPH_REPORT.md',
+      heading: snippet.heading,
+      text,
+      truncated: text.length < snippet.text.length,
     });
+  }
 
   return {
     snippets,

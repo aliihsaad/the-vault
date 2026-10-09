@@ -63,7 +63,7 @@ const RELEVANCE_SIGNAL_KEYS = [
   'queryTextWordSummary',
 ] as const;
 
-function relevanceScore(signals: Record<string, number>): number {
+export function relevanceScore(signals: Record<string, number>): number {
   let total = 0;
   for (const key of RELEVANCE_SIGNAL_KEYS) {
     total += signals[key] || 0;
@@ -71,7 +71,30 @@ function relevanceScore(signals: Record<string, number>): number {
   return total;
 }
 
-function queryHasRelevanceInputs(query: RecallQuery): boolean {
+// Relevance signals that match a whole phrase or an exact keyword. Excludes the
+// per-word signals, which are substring hits ("auth" inside "OAuth"), and tags,
+// which are broad labels shared by many unrelated items.
+const PHRASE_SIGNAL_KEYS = [
+  'memoryUidExact',
+  'titleExact',
+  'titlePartial',
+  'subjectExact',
+  'subjectPartial',
+  'keywordOverlap',
+  'queryTextTitle',
+  'queryTextSubject',
+  'queryTextSummary',
+] as const;
+
+export function phraseRelevanceScore(signals: Record<string, number>): number {
+  let total = 0;
+  for (const key of PHRASE_SIGNAL_KEYS) {
+    total += signals[key] || 0;
+  }
+  return total;
+}
+
+export function queryHasRelevanceInputs(query: RecallQuery): boolean {
   return Boolean(
     query.subject ||
     query.queryText ||

@@ -308,6 +308,44 @@ describe('Graphify graph query context', () => {
       path: 'packages/core/src/target-node.ts',
     }));
   });
+
+  it('reads real-size GRAPH_REPORT.md files and caps only the returned snippets', async () => {
+    const paths = getGraphifyProjectPaths(vaultRoot, 'The Vault');
+    await writeManagedGraph(paths.graphJson);
+    // Real reports are hundreds of KB; the relevant section sits well past 4 KB.
+    const padding = Array.from({ length: 200 }, (_, index) => `## Community ${index}\n${'filler '.repeat(20)}\n`).join('\n');
+    await writeFile(
+      paths.graphReport,
+      `# Graph Report\n\n${padding}\n## Build pipeline\nbuildGraphifyProjectGraph stages the source root before running graphify.\n`,
+    );
+    vault.upsertGraphifyProjectState({
+      project: 'The Vault',
+      enabled: true,
+      sourceRoot,
+      freshness: 'fresh',
+      buildMode: 'fast',
+      latestBuildId: 'gb_report_budget',
+      artifactPaths: {
+        graphJson: paths.graphJson,
+        graphHtml: null,
+        graphReport: paths.graphReport,
+        graphSvg: null,
+      },
+      graphStats: { nodeCount: 5, edgeCount: 4, communityCount: 1 },
+      detectedGraphifyVersion: '0.8.18',
+      failureCount: 0,
+      lastError: null,
+    });
+
+    const impact = vault.explainGraphifyImpact('The Vault', { query: 'buildGraphifyProjectGraph' });
+    expect(impact.caveats.join(' ')).not.toContain('read budget');
+    expect(impact.reportSnippets.map((snippet) => snippet.text).join(' ')).toContain('stages the source root');
+
+    const capped = vault.explainGraphifyImpact('The Vault', { query: 'buildGraphifyProjectGraph', maxReportBytes: 40 });
+    const cappedChars = capped.reportSnippets.reduce((total, snippet) => total + snippet.text.length, 0);
+    expect(cappedChars).toBeLessThanOrEqual(40);
+    expect(capped.caveats.join(' ')).not.toContain('read budget');
+  });
 });
 
 async function writeManagedGraph(graphJsonPath: string): Promise<void> {

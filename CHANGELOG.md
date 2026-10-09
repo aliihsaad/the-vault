@@ -1,5 +1,17 @@
 # Changelog
 
+## v0.6.5 - 2026-10-09
+
+Memory-integrity and recall-accuracy release. Fixes saved summaries being cut off by AI enrichment, grounds recall summaries, and hardens Graphify for large graphs and secret files.
+
+- Data loss: post-save enrichment no longer rewrites summaries. The old "polish" step replaced the author's summary with model output that was cut off at the token limit, keeping no copy of the original. Tag suggestions are unchanged.
+- Recall: `context_summary` is built only from memories that actually match the query and is dropped when nothing matches, when the model replies that nothing is relevant, or when its reply was cut off.
+- Recall: project-scoped recall with a query adds `cross_project_matches`, up to 3 phrase-level matches from other projects, without changing the project's own results.
+- Search: `vault_find_memory` keywords now match when any term appears in keywords, title, subject, summary or content (previously every keyword had to be an exact keyword-array element).
+- Graphify: the default graph read budget is 64 MB (was 8 MB), parsed graphs are cached while unchanged, and a `tooLarge` result states the `max_bytes` needed. `GRAPH_REPORT.md` is read in full and `max_report_bytes` now caps only the returned snippets, which removes the false "exceeds the read budget" caveat.
+- Graphify security: builds exclude more credential files (`*recovery-codes*`, `credentials.json`, `secrets.*`, `*.pem`, `*.key`, `*.pfx`, SSH keys, `.npmrc`, `.netrc`, `.ssh/`, `.aws/` and similar).
+- Graphify: a `.graphifyignore` file at the source root excludes extra paths per project, status warns when the source root holds several separate checkouts, and builds record the git branch and commit in the manifest and build log.
+
 ## v0.6.4 - 2026-07-24
 
 Project-identity and Reviewer quality release. Makes project type explicit at the agent boundary, separates Work Projects from Brains in the desktop directory, and prevents low-quality project-review proposals.
