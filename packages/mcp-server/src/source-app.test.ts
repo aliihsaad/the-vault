@@ -10,7 +10,9 @@ describe('detectSourceApp', () => {
     expect(detectSourceApp('openclaw')).toBe('openclaw');
   });
 
-  it('recognises the Claude desktop app, whose MCP host client is named custom3p-main', () => {
+  it('recognises the Claude desktop app clients', () => {
+    // Code-tab / agent-mode sessions name the client "local-agent-mode-<server>" (seen live).
+    expect(detectSourceApp('local-agent-mode-vault-memory')).toBe('claude');
     expect(detectSourceApp('custom3p-main')).toBe('claude');
   });
 

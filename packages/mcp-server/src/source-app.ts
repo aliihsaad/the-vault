@@ -1,15 +1,21 @@
 import type { SourceApp } from '@the-vault/core';
 
+// Client names used by the Claude desktop app: Code-tab/agent-mode sessions send
+// "local-agent-mode-<server>" (verified live), and its custom-server host uses
+// "custom3p-main". Neither contains "claude".
+const CLAUDE_DESKTOP_CLIENT_PREFIXES = ['local-agent-mode', 'custom3p'];
+
 /**
  * Map the MCP client name from the initialize handshake (e.g. "claude-code",
- * "claude-ai", "codex-mcp-client") to a Vault source app. The Claude desktop app
- * connects custom MCP servers through a host client named "custom3p-main".
- * Agent writes always come from some MCP client, so unknown clients are "other"
- * rather than "manual", which is reserved for writes a person makes in the UI.
+ * "claude-ai", "codex-mcp-client") to a Vault source app. Agent writes always
+ * come from some MCP client, so unknown clients are "other" rather than
+ * "manual", which is reserved for writes a person makes in the desktop UI.
  */
 export function detectSourceApp(clientName: string | undefined): SourceApp {
   const name = (clientName ?? '').toLowerCase();
-  if (name.includes('claude') || name.startsWith('custom3p')) return 'claude';
+  if (name.includes('claude') || CLAUDE_DESKTOP_CLIENT_PREFIXES.some((prefix) => name.startsWith(prefix))) {
+    return 'claude';
+  }
   if (name.includes('codex')) return 'codex';
   if (name.includes('openclaw')) return 'openclaw';
   return 'other';
