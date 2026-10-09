@@ -128,7 +128,7 @@ if (process.env.VAULT_AUTO_START_TASK_EXECUTOR === 'true') {
 // Create MCP server
 const server = new McpServer({
   name: 'vault-memory',
-  version: '0.6.5',
+  version: '0.6.6',
 });
 
 // ============================================================================
@@ -158,6 +158,7 @@ server.tool(
   async (args) => {
     try {
       requireTypedProjectForAgentWrite(vault, args.project);
+      const clientName = server.server.getClientVersion()?.name;
 
       const result = vault.saveMemory({
         title: args.title,
@@ -172,7 +173,7 @@ server.tool(
         status: args.status,
         priority: args.priority,
         // Detected from the MCP initialize handshake when the caller omits it.
-        sourceApp: args.source_app ?? detectSourceApp(server.server.getClientVersion()?.name),
+        sourceApp: args.source_app ?? detectSourceApp(clientName),
         sourceSessionId: args.source_session_id,
         nextSteps: args.next_steps,
         relatedItemIds: args.related_item_ids,
@@ -186,6 +187,9 @@ server.tool(
             success: true,
             item_uid: result.item.itemUid,
             project: result.item.project,
+            // Echo the recorded source and the raw handshake name so mislabels are visible.
+            source_app: result.item.sourceApp,
+            mcp_client: clientName ?? null,
             vault_path: result.vaultPath,
             message: result.message,
             ...(result.projectSuggestion ? { project_suggestion: result.projectSuggestion } : {}),

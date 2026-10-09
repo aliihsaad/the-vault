@@ -202,27 +202,39 @@ function compileIgnorePattern(rawPattern: string): RegExp {
 /**
  * Detect a source root that is a plain folder holding several separate projects
  * (for example a git clone next to an extracted archive of the same repo), which
- * makes Graphify index every file twice. Returns the child folder names, or an
- * empty list when the root is itself a project or holds at most one.
+ * makes Graphify index every file twice. A child folder counts as a project when
+ * it, or one of its own subfolders, holds a `.git` or `package.json`, because zip
+ * extracts often add a wrapper folder (`repo-main/repo-main/package.json`).
+ * Returns the child folder names, or an empty list when the root is itself a
+ * project or holds at most one.
  */
 export function detectGraphifyMultiProjectRoot(sourceRoot: string): string[] {
-  const isProject = (dir: string) => existsSync(join(dir, '.git')) || existsSync(join(dir, 'package.json'));
-  if (!existsSync(sourceRoot) || isProject(sourceRoot)) {
+  if (!existsSync(sourceRoot) || hasProjectMarker(sourceRoot)) {
     return [];
   }
 
   const isExcluded = createGraphifySourceFilter(sourceRoot);
-  let children: string[];
+  const projects = listSubfolders(sourceRoot, isExcluded)
+    .filter((name) => {
+      const child = join(sourceRoot, name);
+      return hasProjectMarker(child)
+        || listSubfolders(child, (path) => isExcluded(`${name}/${path}`))
+          .some((grandchild) => hasProjectMarker(join(child, grandchild)));
+    })
+    .sort((left, right) => left.localeCompare(right));
+  return projects.length > 1 ? projects : [];
+}
+
+function hasProjectMarker(dir: string): boolean {
+  return existsSync(join(dir, '.git')) || existsSync(join(dir, 'package.json'));
+}
+
+function listSubfolders(dir: string, isExcluded: (name: string) => boolean): string[] {
   try {
-    children = readdirSync(sourceRoot, { withFileTypes: true })
+    return readdirSync(dir, { withFileTypes: true })
       .filter((entry) => entry.isDirectory() && !isExcluded(entry.name))
       .map((entry) => entry.name);
   } catch {
     return [];
   }
-
-  const projects = children
-    .filter((name) => isProject(join(sourceRoot, name)))
-    .sort((left, right) => left.localeCompare(right));
-  return projects.length > 1 ? projects : [];
 }

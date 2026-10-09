@@ -10,6 +10,10 @@ describe('detectSourceApp', () => {
     expect(detectSourceApp('openclaw')).toBe('openclaw');
   });
 
+  it('recognises the Claude desktop app, whose MCP host client is named custom3p-main', () => {
+    expect(detectSourceApp('custom3p-main')).toBe('claude');
+  });
+
   it('labels other or missing clients as other, never manual', () => {
     expect(detectSourceApp('cursor-vscode')).toBe('other');
     expect(detectSourceApp(undefined)).toBe('other');

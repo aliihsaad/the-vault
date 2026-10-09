@@ -143,6 +143,16 @@ describe('detectGraphifyMultiProjectRoot', () => {
     expect(detectGraphifyMultiProjectRoot(sourceRoot)).toEqual(['lawyeah-main', 'Work']);
   });
 
+  it('finds an extracted archive whose project sits inside a wrapper folder', () => {
+    // Real layout: LawYeah/Work (clone) next to LawYeah/lawyeah-main/lawyeah-main (zip extract).
+    mkdirSync(join(sourceRoot, 'Work', '.git'), { recursive: true });
+    mkdirSync(join(sourceRoot, 'lawyeah-main', 'lawyeah-main'), { recursive: true });
+    writeFileSync(join(sourceRoot, 'lawyeah-main', 'lawyeah-main', 'package.json'), '{}');
+    mkdirSync(join(sourceRoot, 'plans'));
+
+    expect(detectGraphifyMultiProjectRoot(sourceRoot)).toEqual(['lawyeah-main', 'Work']);
+  });
+
   it('ignores child projects excluded by .graphifyignore', () => {
     mkdirSync(join(sourceRoot, 'Work', '.git'), { recursive: true });
     mkdirSync(join(sourceRoot, 'lawyeah-main'));

@@ -1,5 +1,12 @@
 # Changelog
 
+## v0.6.6 - 2026-10-09
+
+Follow-up fixes found while verifying v0.6.5 against a live install.
+
+- Graphify: the multiple-checkouts warning now also detects a project inside a zip wrapper folder (`repo-main/repo-main/package.json`), which v0.6.5 missed for a real clone-plus-archive folder.
+- MCP: saves from the Claude desktop app, whose MCP host client is named `custom3p-main`, are now recorded as `claude` instead of `other`. The save response now includes the recorded `source_app` and the raw `mcp_client` name.
+
 ## v0.6.5 - 2026-10-09
 
 Memory-integrity and recall-accuracy release. Fixes saved summaries being cut off by AI enrichment, grounds recall summaries, and hardens Graphify for large graphs and secret files.
