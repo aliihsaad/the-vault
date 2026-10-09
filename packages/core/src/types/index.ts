@@ -105,6 +105,8 @@ export interface SaveMemoryResult {
   success: boolean;
   item: MemoryItem;
   vaultPath: string;
+  /** Another project the related files point to; the item stays in the requested project. */
+  projectSuggestion?: string | null;
   message: string;
 }
 

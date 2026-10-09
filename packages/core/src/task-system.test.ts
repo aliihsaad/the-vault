@@ -470,7 +470,7 @@ describe('task delegation system', () => {
     expect(firstDetail?.relatedItemIds).toContain(second.item.itemUid);
   });
 
-  it('routes saves to the project inferred from absolute related file paths', () => {
+  it('keeps the requested project and only suggests the one inferred from related file paths', () => {
     vault.createProject({ name: 'the-vault', projectType: 'work_project', description: 'Vault test project', canonicalRoot: vaultRoot });
     vault.createProject({ name: 'Social-Media-Manager-AI-Tool', projectType: 'work_project', description: 'Social test project', canonicalRoot: vaultRoot });
 
@@ -484,8 +484,33 @@ describe('task delegation system', () => {
       sourceApp: 'codex',
     });
 
-    expect(result.item.project).toBe('the-vault');
-    expect(result.vaultPath.replace(/\\/g, '/')).toContain('/projects/the-vault/sessions/');
+    expect(result.item.project).toBe('Social-Media-Manager-AI-Tool');
+    expect(result.vaultPath.replace(/\\/g, '/')).toContain('/projects/social-media-manager-ai-tool/sessions/');
+    expect(result.projectSuggestion).toBe('the-vault');
+    expect(result.message).toContain('the-vault');
+  });
+
+  it('never re-routes a brain memory that references a work project file', () => {
+    vault.createProject({ name: 'LawYeah', projectType: 'work_project', description: 'Work test project', canonicalRoot: vaultRoot });
+    vault.createProject({
+      name: 'claude-code-brain',
+      projectType: 'brain_context',
+      description: 'Brain test project',
+      memoryPurpose: 'Durable context.',
+    });
+
+    const result = vault.saveMemory({
+      title: 'LawYeah: plans go outside the repo',
+      project: 'claude-code-brain',
+      memoryType: 'decision',
+      subject: 'Plan location rule',
+      summary: 'Implementation plans for LawYeah are saved outside the git repository.',
+      relatedFiles: ['C:/Users/Mini/Desktop/LawYeah/CLAUDE.md'],
+      sourceApp: 'claude',
+    });
+
+    expect(result.item.project).toBe('claude-code-brain');
+    expect(result.projectSuggestion).toBe('LawYeah');
   });
 
   it('keeps the requested project when related file paths do not identify one project', () => {
@@ -507,6 +532,7 @@ describe('task delegation system', () => {
 
     expect(result.item.project).toBe('Social-Media-Manager-AI-Tool');
     expect(result.vaultPath.replace(/\\/g, '/')).toContain('/projects/social-media-manager-ai-tool/sessions/');
+    expect(result.projectSuggestion).toBeNull();
   });
 
   it('merges memories into the kept item and rewrites references away from the archived item', () => {

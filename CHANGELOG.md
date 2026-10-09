@@ -5,6 +5,8 @@
 Memory-integrity and recall-accuracy release. Fixes saved summaries being cut off by AI enrichment, grounds recall summaries, and hardens Graphify for large graphs and secret files.
 
 - Data loss: post-save enrichment no longer rewrites summaries. The old "polish" step replaced the author's summary with model output that was cut off at the token limit, keeping no copy of the original. Tag suggestions are unchanged.
+- Breaking: `vault_save_memory` always stores the item in the requested project. Absolute `related_files` paths that point at another known project no longer re-route the save; the response returns `project_suggestion` instead. Re-routing overrode explicit choices (e.g. brain memories citing a work project's file) and wrote into projects the admission check never covered.
+- MCP: when `source_app` is omitted, saves record the client from the MCP handshake (`claude`, `codex`, `openclaw`, or `other`) instead of `manual`.
 - Recall: `context_summary` is built only from memories that actually match the query and is dropped when nothing matches, when the model replies that nothing is relevant, or when its reply was cut off.
 - Recall: project-scoped recall with a query adds `cross_project_matches`, up to 3 phrase-level matches from other projects, without changing the project's own results.
 - Search: `vault_find_memory` keywords now match when any term appears in keywords, title, subject, summary or content (previously every keyword had to be an exact keyword-array element).

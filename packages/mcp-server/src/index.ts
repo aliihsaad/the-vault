@@ -11,6 +11,7 @@ import { Vault, TaskExecutor, createProviderClient, FailoverEnrichmentClient, is
 import { registerGraphifyMcpTools } from './graphify-tools.js';
 import { registerOpenLoopsV2McpTools } from './open-loops-v2-tools.js';
 import { requireTypedProjectForAgentWrite } from './project-admission.js';
+import { detectSourceApp } from './source-app.js';
 
 // Initialize Vault
 const vault = new Vault();
@@ -138,10 +139,10 @@ server.tool(
   'Save a structured memory item to an existing typed Vault project. If the project does not exist, call vault_create_project first and explicitly choose work_project or brain_context.',
   {
     title: z.string().describe('Human-readable title for the memory item'),
-    project: z.string().describe('Project name this memory belongs to'),
+    project: z.string().describe('Project name this memory belongs to (always honoured; project_suggestion flags related files that point elsewhere)'),
     memory_type: z.enum(MEMORY_TYPES).describe('Category of memory: session, summary, decision, plan, artifact, handoff, reference'),
     subject: z.string().describe('Specific main topic name'),
-    summary: z.string().describe('Concise reusable description of what the item contains'),
+    summary: z.string().describe('Concise reusable description of what the item contains (stored verbatim)'),
     content: z.string().max(MEMORY_CONTENT_MAX_CHARS).optional().describe('Full content body (optional, max 2 MiB)'),
     keywords: z.array(z.string()).optional().describe('3-8 search-friendly terms'),
     tags: z.array(z.string()).optional().describe('Classification labels'),
@@ -170,7 +171,8 @@ server.tool(
         routineType: args.routine_type,
         status: args.status,
         priority: args.priority,
-        sourceApp: args.source_app,
+        // Detected from the MCP initialize handshake when the caller omits it.
+        sourceApp: args.source_app ?? detectSourceApp(server.server.getClientVersion()?.name),
         sourceSessionId: args.source_session_id,
         nextSteps: args.next_steps,
         relatedItemIds: args.related_item_ids,
@@ -183,8 +185,10 @@ server.tool(
           text: JSON.stringify({
             success: true,
             item_uid: result.item.itemUid,
+            project: result.item.project,
             vault_path: result.vaultPath,
             message: result.message,
+            ...(result.projectSuggestion ? { project_suggestion: result.projectSuggestion } : {}),
           }, null, 2),
         }],
       };

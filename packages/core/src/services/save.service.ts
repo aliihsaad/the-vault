@@ -65,17 +65,21 @@ export function saveMemory(
   const normalizedRelatedFiles = normalizeRelatedFiles(validated.relatedFiles || []);
 
   // Resolve project to its canonical name first so casing/slug variants
-  // collapse before any path is built or row is inserted. If absolute related
-  // file paths point at exactly one known project folder and the requested
-  // project is absent from those paths, prefer the file-derived project. This
-  // prevents stale agent context from saving work under an unrelated project.
+  // collapse before any path is built or row is inserted. The requested project
+  // is always honoured: re-routing would override the caller's explicit choice
+  // (e.g. a brain memory that cites a work project's file) and would write into
+  // a project the caller's admission check never covered. When absolute related
+  // file paths point at exactly one other known project, return it as a
+  // suggestion so a caller working from stale context can re-save.
   const trimmedProject = validated.project.trim();
-  const requestedProject = ensureProject(db, vaultRoot, trimmedProject);
+  const normalizedProject = ensureProject(db, vaultRoot, trimmedProject);
   const relatedFileProject = inferProjectNameFromRelatedFiles(db, normalizedRelatedFiles);
-  const normalizedProject =
-    relatedFileProject && !relatedFilesContainProjectSlug(normalizedRelatedFiles, requestedProject)
+  const projectSuggestion =
+    relatedFileProject
+    && relatedFileProject !== normalizedProject
+    && !relatedFilesContainProjectSlug(normalizedRelatedFiles, normalizedProject)
       ? relatedFileProject
-      : requestedProject;
+      : null;
   const normalizedTitle = validated.title.trim();
   const normalizedSubject = validated.subject.trim();
   const normalizedSummary = validated.summary.trim();
@@ -221,10 +225,14 @@ export function saveMemory(
   });
 
   // 11. Return result
+  const suggestionNote = projectSuggestion
+    ? ` Its related files point to project "${projectSuggestion}"; it was saved under "${normalizedProject}" as requested. Re-save there if that was intended.`
+    : '';
   return {
     success: true,
     item,
     vaultPath,
-    message: `Memory saved: "${item.title}" (${itemUid})`,
+    projectSuggestion,
+    message: `Memory saved: "${item.title}" (${itemUid}).${suggestionNote}`,
   };
 }
