@@ -198,8 +198,10 @@ export {
 export {
   GRAPHIFY_BUILD_MODES,
   GRAPHIFY_FRESHNESS_STATES,
+  GRAPHIFY_IGNORE_FILENAME,
   GRAPHIFY_INSTALL_PROFILES,
   GRAPHIFY_RUNTIME_MODES,
+  createGraphifySourceFilter,
   GraphifyBuildModeSchema,
   GraphifyFreshnessStateSchema,
   GraphifyInstallProfileSchema,
@@ -468,6 +470,7 @@ export {
   markGraphifyProjectStale,
   markGraphifyProjectStaleForMemoryChange,
   shouldMarkGraphifyStaleForMemoryChange,
+  shouldTriggerGraphifyBuildForWatchEvent,
 } from './services/graphify-build-queue.service.js';
 
 export type {

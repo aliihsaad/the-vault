@@ -1,3 +1,5 @@
+import { statSync } from 'node:fs';
+import { join } from 'node:path';
 import { slugify } from '../rules/naming.js';
 import type { MemoryItem } from '../types/index.js';
 import type {
@@ -459,6 +461,47 @@ export class GraphifyBuildQueue {
     this.buildSequence += 1;
     return `gb_${slugify(project)}_${this.clock.now().toString(36)}_${this.buildSequence}`;
   }
+}
+
+/**
+ * Decide whether a recursive fs.watch event on a project's source root should
+ * queue an auto-build. On Windows, reading a file whose last-access time is older
+ * than about an hour updates that time and fires a "change" event, so agents,
+ * editors, git and the builds themselves (which read every file) would otherwise
+ * keep re-triggering full rebuilds. A "change" only counts when the file's content
+ * was written after the last build started. Creates, deletes and renames always
+ * count, and paths the build excludes never do.
+ */
+export function shouldTriggerGraphifyBuildForWatchEvent(input: {
+  sourceRoot: string;
+  eventType: string;
+  filename: string | null;
+  lastBuildStartedAt: string | null;
+  isExcluded: (relativePath: string) => boolean;
+}): boolean {
+  if (!input.filename) {
+    return true; // The watcher could not say what changed (e.g. its buffer overflowed).
+  }
+  const relativePath = input.filename.replace(/\\/g, '/');
+  if (input.isExcluded(relativePath)) {
+    return false;
+  }
+  if (input.eventType !== 'change') {
+    return true;
+  }
+
+  let stats;
+  try {
+    stats = statSync(join(input.sourceRoot, relativePath));
+  } catch {
+    return true; // Gone or unreadable: treat as a real change.
+  }
+  if (stats.isDirectory()) {
+    return false; // Entry creates/deletes inside a folder report their own events.
+  }
+
+  const lastBuildStartedMs = input.lastBuildStartedAt ? Date.parse(input.lastBuildStartedAt) : Number.NaN;
+  return Number.isNaN(lastBuildStartedMs) || stats.mtimeMs > lastBuildStartedMs;
 }
 
 export function shouldMarkGraphifyStaleForMemoryChange(

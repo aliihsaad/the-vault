@@ -40,6 +40,9 @@ import {
   resolveVaultCollabCliPath,
   resolveVaultCollabMcpServerPath,
   Vault,
+  GRAPHIFY_IGNORE_FILENAME,
+  createGraphifySourceFilter,
+  shouldTriggerGraphifyBuildForWatchEvent,
 } from '@the-vault/core';
 import type { MemoryItemDetail, MemoryPack, ModelRoutingTable, RecallQuery } from '@the-vault/core';
 import {
@@ -373,9 +376,11 @@ const taskExecutor = new TaskExecutor({
 });
 
 // --- Graphify auto-build: debounced queue + per-project source watchers ---
-// Source changes for an enabled, source-rooted project queue a debounced fast build.
-// Builds write to managed app data (not the source root), so they never re-trigger the
-// watcher. All of this is best-effort and must never crash the main process.
+// Source changes for an enabled, source-rooted project queue a debounced build.
+// Builds write to managed app data (not the source root), but on Windows merely
+// reading a file can fire a watcher "change" event (last-access time update), so
+// every event is checked with shouldTriggerGraphifyBuildForWatchEvent before it
+// queues a build. All of this is best-effort and must never crash the main process.
 const graphifyBuildQueue = new GraphifyBuildQueue({
   projectStore: {
     getProjectStatus: (project) => vault.getGraphifyProjectStatus(project),
@@ -398,13 +403,6 @@ const graphifyBuildQueue = new GraphifyBuildQueue({
 });
 
 const graphifyWatchers = new Map<string, FSWatcher>();
-const GRAPHIFY_WATCH_IGNORED = new Set([
-  'node_modules', '.git', 'dist', 'dist-electron', 'coverage', '.next', '.turbo', 'graphify-out',
-]);
-
-function graphifyWatchPathIsIgnored(filename: string): boolean {
-  return filename.split(/[\\/]/).some((segment) => GRAPHIFY_WATCH_IGNORED.has(segment));
-}
 
 // Reconcile watchers with the set of enabled, build-eligible projects. Called at
 // startup and whenever a project's source root or enabled state changes.
@@ -434,11 +432,23 @@ function syncGraphifyAutoBuildWatchers(): void {
         continue;
       }
       try {
-        const watcher = fsWatch(sourceRoot, { recursive: true }, (_event, filename) => {
-          if (filename && graphifyWatchPathIsIgnored(String(filename))) {
-            return;
-          }
+        // Same exclusions as the build itself (built-ins plus .graphifyignore).
+        let isExcluded = createGraphifySourceFilter(sourceRoot);
+        const watcher = fsWatch(sourceRoot, { recursive: true }, (eventType, filename) => {
           try {
+            const changed = filename ? String(filename) : null;
+            if (changed === GRAPHIFY_IGNORE_FILENAME) {
+              isExcluded = createGraphifySourceFilter(sourceRoot);
+            }
+            if (!shouldTriggerGraphifyBuildForWatchEvent({
+              sourceRoot,
+              eventType,
+              filename: changed,
+              lastBuildStartedAt: vault.getGraphifyProjectState(name)?.lastBuildStartedAt ?? null,
+              isExcluded,
+            })) {
+              return;
+            }
             graphifyBuildQueue.triggerAutoBuild(name, { reason: 'sourceChanged' });
           } catch {
             // Auto-build is optional; swallow so a noisy watcher can't crash the app.
