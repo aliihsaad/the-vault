@@ -1,5 +1,13 @@
 # Changelog
 
+## v0.6.7 - 2026-10-10
+
+Stops Graphify from rebuilding graphs whenever source files are read.
+
+- Graphify: on Windows, reading a file whose last-access time is over an hour old fires a file-watcher change event, so agents, editors, git, Vault reading memory files, and the builds themselves kept queueing full rebuilds (311 builds across 31 projects in about a day). A change event now only queues a build when the file was written after the last build started; creates, deletes and renames still do.
+- Graphify: the file watcher uses the build's own exclusions, including `.graphifyignore`, instead of a shorter separate list.
+- MCP: saves from Claude desktop Code-tab sessions (MCP client `local-agent-mode-<server>`) are recorded as `claude` instead of `other`.
+
 ## v0.6.6 - 2026-10-09
 
 Follow-up fixes found while verifying v0.6.5 against a live install.
